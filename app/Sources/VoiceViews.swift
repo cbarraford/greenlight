@@ -982,6 +982,41 @@ func grounded(_ reply: String, _ p: [String: Any]) -> Bool {
     return !name.isEmpty && has(name) || !num.isEmpty && has(num) || Set(words.filter(has)).count >= 2
 }
 
+/// Each MR the snapshot knows, by its ref (!12, #34), as the stage's status chip (#208): a tone the page has a glyph for and a
+/// short label. The tone reads as dwim.py's tables do: failed CI, conflicts or a crash are bad, CI on its way is now, merged or
+/// approved with CI passing is ok. Facts only, from the snapshot: no model call.
+func refStatus(_ pucks: [[String: Any]]) -> [String: [String: String]] {
+    var out = [String: [String: String]](), torn = Set<String>(), quiet = Set<String>()
+    for p in pucks {
+        guard let mr = p["mr"] as? [String: Any], let ref = mr["ref"] as? String, !ref.isEmpty else { continue }
+        let ci = mr["pipeline"] as? String ?? "", state = mr["state"] as? String ?? ""
+        let got = mr["approvals"] as? Int ?? 0, need = mr["approvals_required"] as? Int ?? 0
+        let chip: (String, String)
+        if state == "merged" { chip = ("ok", "Merged") }
+        else if state == "closed" { chip = ("", "Closed") }
+        else if ci == "failed" || p["state"] as? String == "crashed" { chip = ("bad", ci == "failed" ? "CI failed" : "Crashed") }
+        else if mr["conflicts"] as? Bool == true { chip = ("bad", "Conflicts") }
+        else if ["running", "pending", "created", "preparing", "waiting_for_resource", "scheduled"].contains(ci) { chip = ("now", "CI running") }
+        else if ci == "success" && need > 0 && got >= need { chip = ("ok", "Approved") }
+        else if ci == "success" { chip = ("ok", need > 0 ? "CI passed, \(got) of \(need) approvals" : "CI passed") }
+        else if ["canceled", "cancelled", "skipped", "manual"].contains(ci) { chip = ("", "CI " + (ci == "cancelled" ? "canceled" : ci)) }
+        else if mr["draft"] as? Bool == true { chip = ("", "Draft") }
+        else { quiet.insert(ref); continue }  // no pipeline yet: nothing to say (and no guess from another project's !12)
+        let v = ["tone": chip.0, "label": chip.1]
+        if let was = out[ref], was != v { torn.insert(ref) }  // !12 in two projects, saying different things: no chip, not a guess
+        out[ref] = v
+    }
+    torn.union(quiet).forEach { out[$0] = nil }
+    return out
+}
+/// What changed between two maps of chips: the new or different ones, and a removed ref as NSNull (its chip goes).
+func refPatch(_ old: [String: [String: String]], _ new: [String: [String: String]]) -> [String: Any] {
+    var out = [String: Any]()
+    for (k, v) in new where old[k] != v { out[k] = v }
+    for k in old.keys where new[k] == nil { out[k] = NSNull() }
+    return out
+}
+
 /// Workspaces a reply names outright: its MR/PR ref (!5339, #18) or a distinctive name (mr-5339, lifecycle-advice; not a plain word).
 func namedHexes(_ reply: String, _ pucks: [[String: Any]]) -> [String] {
     let low = reply.lowercased()

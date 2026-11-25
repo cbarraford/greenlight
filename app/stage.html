@@ -36,7 +36,7 @@
 :root[data-look=phosphor]{
   --bg:var(--ds-neutral-1); --card:var(--ds-signal-3); --well:var(--ds-signal-2); --line:var(--ds-signal-6); --track:var(--ds-signal-4);
   --text:var(--ds-signal-11); --text2:var(--ds-signal-11); --dim:var(--ds-signal-10); --faint:var(--ds-signal-8);
-  --accent:var(--ds-signal-12); --accent-fg:var(--ds-signal-12); --font:var(--ds-type-family-mono);
+  --accent:var(--ds-signal-12); --accent-fg:var(--ds-signal-12); --font:var(--ds-type-family-mono); --ok:var(--ds-signal-10);
   --c1:var(--ds-signal-11); --c2:var(--ds-signal-8); --c3:var(--ds-signal-12); --c4:var(--ds-signal-6); --c-rest:var(--ds-signal-5); --bar:var(--ds-signal-8);
 }
 *{box-sizing:border-box}
@@ -147,11 +147,22 @@ ol.life li span{color:var(--dim)}
 [data-look=phosphor] #s.held{--text:var(--faint);--dim:var(--faint)}
 #s.held .track i.peak{background:var(--bar)}  /* a held chart steps down too: its accent goes neutral */
 #s.held svg.chart,#s.held .legend i,#s.held svg.tone,#s.held .diff,#s.held pre.hunk,#s.held ol.life{filter:grayscale(1)}
+#s.held .chip{color:var(--dim)}  /* a held chip steps down with the card (and Phosphor's faint green) */
+#s.held .chip svg.tone{color:inherit;filter:none}  /* overrides .bad/.now/.needs svg.tone so the glyph steps down too */
 #s.held iframe{filter:grayscale(1);opacity:.6}
 #s.frame.held::before{padding:var(--ds-space-8) var(--ds-space-24) 0}  /* a frame has no padding: the label keeps the gutter */  /* Chief's own page can't take the muted colour: it's dimmed instead */
 .skel{display:flex;flex-direction:column;gap:var(--ds-space-12);max-width:var(--ds-layout-measure)}
 .skel i{display:block;height:var(--ds-space-8);border-radius:var(--ds-radius-xs);background:var(--track)}  /* a step above element.rest, to read on the stage */
 .skel i.lead{height:var(--ds-space-12);margin-bottom:var(--ds-space-4)}  /* 16 to the first line, as the lead to the body */
+/* An MR's live status beside its ref (issue 208): the tone's glyph and a short label, from the snapshot, updated in place. */
+.chip{display:inline-flex;align-items:baseline;gap:var(--ds-space-4);margin-left:var(--ds-space-8);font:var(--ds-type-label-sm);font-family:var(--font);
+  color:var(--dim);white-space:nowrap;vertical-align:baseline;font-variant-numeric:tabular-nums;margin-right:var(--ds-space-4)}  /* with the space after it, 8 to the next word */
+.chip svg.tone{margin:0;align-self:center}  /* the label sits on the text's baseline; only the glyph is centred */
+table.grid:has(> colgroup){table-layout:fixed}  /* freeze()'s columns: a chip that comes, changes or goes moves nothing else */
+table.grid td .chip{max-width:calc(100% - var(--ds-space-12));white-space:normal;align-items:flex-start;overflow-wrap:break-word}  /* a long chip wraps inside its cell instead of bleeding into the next column */
+table.grid:has(tr > :nth-child(3)) td .chip{display:flex;margin:var(--ds-space-2) 0 0;max-width:100%}  /* dense tables stack the chip flush-left under its ref */
+table.grid td .chip svg.tone{flex:none;margin-top:1px}
+.chip.bad{color:var(--bad)} .chip.now{color:var(--now)} .chip.ok{color:var(--ok)} .chip.needs{color:var(--needs)}
 /* Phosphor's hand: shell marks in place of the dots and numbers, dashed rules, everything in mono. */
 [data-look=phosphor]{
   h1::before{content:"> ";color:var(--dim)}
@@ -358,6 +369,7 @@ function settled(md){
     else if (link && !/^\[[^\]]*\]\([^)]*\)/.test(link) && !/^\[[^\]]*\][^(]/.test(link)) cut(open);  // [x, [x], [x](u
   } while (l !== was);
   if (/^\s*([-*+]|\d+[.)]?|#{1,6}|>|`{1,2}|[-*_]{1,2})?\s*$/.test(l)) l = "";  // "1" may be a list's number before its dot
+  l = l.replace(/(^|[^\w!#\/-])[!#]\d*$/, "$1");  // a ref still being written (!1 of !12) waits: no other MR's chip flashes
   return lines.concat(l.trimEnd() ? [l] : []).join("\n");
 }
 const bare = e => e.className.replace(/\bfresh\b/, "").trim();
@@ -484,6 +496,67 @@ const fx = (() => {
   addEventListener("resize", () => { if (mode === "think") { size(); clear(); } else if (mode === "reveal") stop(); });
   return {think, reveal, stop};
 })();
+// The snapshot's MR chips by ref ({"!12": {tone, label}}), and where a ref sits in text: not inside a word, a path or code.
+let REFS = {};
+const REF_RE = /(^|[^\w!#\/-])([!#]\d+)(?![\w\/-])/g;
+function chipFor(ref, v){
+  const c = $("span", "chip" + (Object.hasOwn(TONE, v.tone) ? " " + v.tone : "")); c.dataset.ref = ref;
+  if (Object.hasOwn(TONE, v.tone)) c.append(toneGlyph(v.tone));
+  c.append($("span", null, str(v.label))); return c;
+}
+// Chips beside the first mention of each known ref in `nodes` (not the lead: it's the spoken gist). Done before a stream's
+// patch compares its blocks, so a settled block that has its chip isn't redrawn for it. Refs already chipped are skipped.
+function chipify(nodes, seen = new Set()){
+  for (const root of nodes) if (root.nodeType === 1) root.querySelectorAll(".chip").forEach(c => seen.add(c.dataset.ref));
+  for (const root of nodes) {
+    if (root.nodeType !== 1 || root.classList.contains("lead")) continue;
+    const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode: t =>
+      t.parentElement.closest("code, pre, svg, .chip, .lead") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT }), texts = [];
+    while (w.nextNode()) texts.push(w.currentNode);
+    for (let t of texts) {
+      for (let m; (REF_RE.lastIndex = 0, m = REF_RE.exec(t.nodeValue));) {
+        const ref = m[2], end = m.index + m[0].length;
+        if (!Object.hasOwn(REFS, ref) || seen.has(ref)) { if (end >= t.nodeValue.length) break; t = t.splitText(end); continue; }
+        seen.add(ref); const rest = t.splitText(end); rest.before(chipFor(ref, REFS[ref])); t = rest;
+      }
+    }
+  }
+  return nodes;
+}
+// A table's columns held where they are (issue 208): before a chip is added, changed or dropped, each column keeps its share
+// of the width, so a status change moves nothing else. Not while text streams: its last table is still growing.
+function freeze(s){
+  if (s.classList.contains("streaming")) return;
+  s.querySelectorAll("table.grid").forEach(t => {
+    if (t.querySelector(":scope > colgroup")) return;
+    const w = t.getBoundingClientRect().width, ths = [...(t.tHead?.rows[0]?.cells || [])];
+    if (!w || !ths.length) return;
+    const cg = $("colgroup"); ths.forEach(th => { const c = $("col"); c.style.width = (th.getBoundingClientRect().width / w * 100).toFixed(3) + "%"; cg.append(c); });
+    t.prepend(cg);  // the table's own attributes stay as drawn: morph() still knows it
+  });
+}
+// A card brought up to date in place (issue 208): the same element keeps its place and only what differs changes, so a card
+// that comes again with the same kind and title doesn't redraw or move.
+const sameNode = (a, b) => a.nodeType === b.nodeType && (a.nodeType !== 1 || (a.tagName === b.tagName && a.attributes.length === b.attributes.length
+  && [...a.attributes].every(x => b.getAttribute(x.name) === x.value)));
+function morph(old, kids){
+  const have = [...old.childNodes];
+  kids.forEach((n, i) => { const o = have[i];
+    if (!o) old.append(n);
+    else if (!sameNode(o, n)) o.replaceWith(n);
+    else if (o.nodeType === 3) { if (o.nodeValue !== n.nodeValue) o.nodeValue = n.nodeValue; }
+    else if (!o.isEqualNode(n)) morph(o, [...n.childNodes]); });
+  have.slice(kids.length).forEach(o => o.remove());
+}
+// A card's nodes from its spec: a native template, else Haiku's old shape (a list, steps, a stat…). Text only, never markup.
+function specNodes(o){
+  if (Object.prototype.hasOwnProperty.call(TEMPLATES, o.kind)) return head(o).concat(TEMPLATES[o.kind](o) || []);
+  const kind = ["list", "steps", "stat", "flow", "compare", "quote"].includes(o.kind) ? o.kind : "list";
+  const ul = $(kind === "steps" ? "ol" : "ul", "items " + kind);
+  for (const it of arr(o.items).filter(x => x && typeof x === "object").slice(0, 8)) { const li = $("li"), b = $("b", null, str(it.label)); li.append(b);
+    if (Object.hasOwn(TONE, it.tone)) { li.classList.add(it.tone); b.prepend(toneGlyph(it.tone)); } if (it.detail) li.append($("span", null, str(it.detail))); ul.append(li); }
+  return (o.eyebrow ? [$("div", "eyebrow", str(o.eyebrow))] : []).concat([$("h1", null, str(o.title))], o.stat ? [$("div", "stat", str(o.stat))] : [], ul.children.length ? [ul] : []);
+}
 window.stage = {
   // The always-on placeholder: "One minute" while Chief works, with what it's doing.
   wait(title, sub){ const h = $("h1", null, title || "One minute"); h.append($("span", "cursor")); show([h, $("div", "sub", sub || "")], (title || "") === "Listening" ? "wait listening" : "wait"); },
@@ -501,14 +574,18 @@ window.stage = {
     if (line != null) stage.status(line);
   },
   // Haiku's (or the local fallback's) drawing: {eyebrow, title, kind, stat, items:[{label, detail}]}; text only, never markup.
+  // A card: a native template or the list shapes. The same kind and title as the card up (the snapshot moved) changes in place.
   spec(o){
     o = o && typeof o === "object" ? o : {};
-    if (Object.prototype.hasOwnProperty.call(TEMPLATES, o.kind)) return show(head(o).concat(TEMPLATES[o.kind](o) || []));
-    const kind = ["list", "steps", "stat", "flow", "compare", "quote"].includes(o.kind) ? o.kind : "list";
-    const ul = $(kind === "steps" ? "ol" : "ul", "items " + kind);
-    for (const it of arr(o.items).filter(x => x && typeof x === "object").slice(0, 8)) { const li = $("li"), b = $("b", null, str(it.label)); li.append(b);
-      if (Object.hasOwn(TONE, it.tone)) { li.classList.add(it.tone); b.prepend(toneGlyph(it.tone)); } if (it.detail) li.append($("span", null, str(it.detail))); ul.append(li); }
-    show((o.eyebrow ? [$("div", "eyebrow", str(o.eyebrow))] : []).concat([$("h1", null, str(o.title))], o.stat ? [$("div", "stat", str(o.stat))] : [], ul.children.length ? [ul] : []));
+    const key = str(o.kind) + "\u0000" + str(o.title), s = document.getElementById("s"), nodes = chipify(specNodes(o));
+    if (s.dataset.card === key && !s.classList.contains("skeleton")) {
+      freeze(s); const cg = [...s.querySelectorAll("table.grid > colgroup")].map(c => [c.parentElement, c]); cg.forEach(([, c]) => c.remove());
+      morph(s, nodes); s.classList.remove("held");
+      cg.forEach(([t, c]) => { if (t.isConnected) t.prepend(c); });  // the new rows, the same columns
+      if (document.body.dataset.fx === "think") fx.reveal(s);  // it was held while Chief thought: the field lands on it as on any card
+      return;
+    }
+    show(nodes); document.getElementById("s").dataset.card = key;
   },
   // Chief's chart (a ```stage block of JSON): {chart: bar|line|pie, title, sub, labels, series: [{name, values, color}], stacked, note}.
   // Drawn here so Chief sends numbers, not markup: a few hundred tokens instead of a hand-written SVG. Text only, like spec.
@@ -565,14 +642,29 @@ window.stage = {
   text(o){
     o = o && typeof o === "object" ? o : {};
     const lead = str(o.lead).trim(), live = o.live === true, md = live ? settled(o.md) : o.md, s = document.getElementById("s");
-    if (s.classList.contains("streaming")) { caret(s, false); patchDoc(s, lead, blocks(md)); }
+    if (s.classList.contains("streaming")) { caret(s, false); patchDoc(s, lead, chipify(blocks(md))); }
     else {
       if (live) fx.stop();
-      show((lead ? [$("p", "lead", lead)] : []).concat(blocks(md)), "doc");
+      show((lead ? [$("p", "lead", lead)] : []).concat(chipify(blocks(md))), "doc");
     }
     const now = document.getElementById("s");
     now.classList.toggle("streaming", live);
     caret(now, live);
+  },
+  // The snapshot's MR chips (issue 208): the whole map, then patch() with what changed ({ref: {tone, label}} or null to drop).
+  // A chip on the card that's up changes in place: no redraw, and nothing else on the card moves.
+  refs(map){
+    REFS = map && typeof map === "object" ? map : {};
+    const s = document.getElementById("s"); freeze(s); s.querySelectorAll(".chip").forEach(c => c.remove()); s.normalize(); chipify([...s.children]);
+  },
+  patch(changed){
+    if (!changed || typeof changed !== "object") return;
+    const s = document.getElementById("s"); freeze(s);
+    for (const [ref, v] of Object.entries(changed)) {
+      if (v && typeof v === "object") REFS[ref] = v; else delete REFS[ref];
+      s.querySelectorAll(".chip").forEach(c => { if (c.dataset.ref === ref) Object.hasOwn(REFS, ref) ? c.replaceWith(chipFor(ref, REFS[ref])) : c.remove(); });
+    }
+    chipify([...s.children]);  // a ref the snapshot only now knows gets its chip
   },
   // The status line under the stage (issue 176): one short line of what Chief is doing, text only, updated in place; "" clears it.
   status(line){

@@ -1035,6 +1035,29 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
         check("voice: after a replaced note, a watch turn, a fence label: the gist still draws, nothing stray shows (issue 208)",
               gistAfterReset && watchGist && instantKept && watchAfterFail && noLabel && notesLead)
         c.run = nil; v.hush(); v.endStream()
+        // issue 208 phase 4: the snapshot's MRs as status chips by ref, sent whole and then as just what changed
+        let pk = { (ref: String, mr: [String: Any], st: String) -> [String: Any] in ["name": "w" + ref, "state": st, "mr": mr.merging(["ref": ref]) { a, _ in a }] }
+        let snap1 = [pk("!1", ["pipeline": "failed"], "working"), pk("!2", ["pipeline": "running"], "working"), pk("!3", ["pipeline": "success", "approvals": 2, "approvals_required": 2], "quiet"),
+                     pk("!4", ["pipeline": "success", "approvals": 0, "approvals_required": 1], "quiet"), pk("!5", ["state": "merged"], "done"), pk("!6", ["conflicts": true, "pipeline": "success"], "needs"),
+                     pk("#7", ["draft": true], "working"), pk("!8", [:], "working"), ["name": "no-mr", "state": "quiet"],
+                     pk("!9", ["pipeline": "canceled"], "working"), pk("!10", ["pipeline": "failed"], "working"), pk("!10", ["pipeline": "success"], "quiet"),
+                     pk("!11", ["pipeline": "success"], "quiet"), pk("!11", ["pipeline": "success"], "quiet"),
+                     pk("!13", ["pipeline": "failed"], "working"), pk("!13", [:], "working")]
+        let st1 = refStatus(snap1)
+        check("voice: the snapshot's MRs become status chips: failed, running, approved, approvals to go, merged, conflicts, draft, canceled; a ref two projects disagree on gets none (issue 208)",
+              st1["!1"] == ["tone": "bad", "label": "CI failed"] && st1["!2"] == ["tone": "now", "label": "CI running"]
+              && st1["!3"] == ["tone": "ok", "label": "Approved"] && st1["!4"] == ["tone": "ok", "label": "CI passed, 0 of 1 approvals"]
+              && st1["!5"] == ["tone": "ok", "label": "Merged"] && st1["!6"] == ["tone": "bad", "label": "Conflicts"]
+              && st1["#7"] == ["tone": "", "label": "Draft"] && st1["!8"] == nil && st1["!9"] == ["tone": "", "label": "CI canceled"]
+              && st1["!10"] == nil && st1["!11"] == ["tone": "ok", "label": "CI passed"] && st1["!13"] == nil && st1.count == 9)  // !10, !13: two projects
+        var snap2 = snap1; snap2[1] = pk("!2", ["pipeline": "success"], "working"); snap2.remove(at: 0)
+        let d = refPatch(st1, refStatus(snap2))
+        check("voice: a snapshot change patches only what changed, and a ref that's gone is dropped (issue 208)",
+              d.count == 2 && (d["!2"] as? [String: String]) == ["tone": "ok", "label": "CI passed"] && d["!1"] is NSNull && refPatch(st1, st1).isEmpty)
+        v.on = true; v.refsSent = nil; v.refs(snap1); let sentWhole = v.refsSent == st1 && (v.stageQueued ?? "").contains("stage.refs(")
+        v.refs(snap2); let sentPatch = (v.stageQueued ?? "").contains("stage.patch(") && v.stageQueued?.components(separatedBy: "stage.patch(").last?.contains("\"!3\"") == false
+        v.on = false; v.refs(snap1); let offForgets = v.refsSent == nil; v.on = true
+        check("voice: the stage gets the whole map first, then patches; voice mode off forgets what it sent (issue 208)", sentWhole && sentPatch && offForgets)
         try? FileManager.default.removeItem(at: Diag.url)  // the folder is the test run's support folder too
         // the status line (issue 176): after a quiet stretch of a running turn, a line on the strip (the fallback without a key);
         // the same work again shows nothing new; a clear (speech, the turn's end) takes it down and drops a line on its way
