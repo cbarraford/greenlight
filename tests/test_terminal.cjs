@@ -79,6 +79,10 @@ test("the Basement's footer: the usage meters and their popover; the Pipe has no
   assert.match(await page.textContent("#umpop .urow[data-id=pi] .unote"), /signed out/);
   await page.keyboard.press("Escape"); assert.equal(await page.$("#umpop"), null);
   await page.click("#bfoot .um[data-id=claude]");
+  await page.click("#shead [aria-label='Customize look']");
+  assert.equal(await page.$("#umpop"), null, "clicking a stopPropagation toolbar button dismisses #umpop");
+  await page.keyboard.press("Escape");
+  await page.click("#bfoot .um[data-id=claude]");
   await page.evaluate(() => toggleSide()); await page.waitForTimeout(450);
   assert.equal(await page.$("#umpop"), null, "switching to the Pipe closes an open popover");
   assert.equal(await page.$eval("#bfoot", f => getComputedStyle(f).display), "none", "the Pipe: no footer");

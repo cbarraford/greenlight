@@ -1946,6 +1946,19 @@ test("usage meters: a window whose reset has passed reads — (no new reading) a
   await page.click("#foot .um[data-id=claude]"); await page.click("#umpop .useg [data-view=detailed]");
   assert.equal(await page.textContent("#umpop .urow[data-id=claude] .urr"), "Resets in <1m");
   assert.equal(await page.textContent("#umpop .urow[data-id=claude] .unote"), "Refresh failed: timeout");
+  // Fresh state:"ok" rollout fallback still surfaces its note; umTone rounds with umPctText; stale near-limit keeps amber in Compact
+  const f = USAGE();
+  f[0] = {...f[0], at: NOW_S(), note: "rate limited; from the last session instead", windows: [{label: "5h", pct: 99.6, resets: NOW_S() + 3600}]};
+  f[1] = {...f[1], at: NOW_S() - 7200, windows: [{label: "5h", pct: 79.6, resets: NOW_S() + 3600}]};
+  await page.evaluate(u => mc.update({ts: Date.now() / 1000, scanned: 1, pucks: [], usage: u}), f);
+  const mf = await meters(page);
+  assert.equal(mf[0].tone, "full", "99.6 rounds to 100% and uses full tone");
+  assert.equal(mf[1].tone, "near", "79.6 rounds to 80% and uses near tone");
+  assert.match(mf[0].title, /from the last session instead/, "fresh ok fallback note shows in tooltip");
+  assert.match(await page.textContent("#umpop .urow[data-id=claude] .unote"), /from the last session instead/, "fresh ok fallback note shows in Detailed popover");
+  await page.click("#umpop .useg [data-view=compact]");
+  assert.equal(await page.$eval("#umpop .urow.c[data-id=codex] .upct", e => getComputedStyle(e).color),
+    await page.$eval("#foot .um[data-id=codex] .upct", e => getComputedStyle(e).color), "stale near-limit compact row keeps amber color matching footer");
 });
 
 test("usage popover: Detailed lists every window with its reset, Compact one line each; it remembers, Escape and a click outside close it", async page => {

@@ -60,7 +60,7 @@ const XSS_URL = 'javascript:window.__pwned=6';
         }],
       }));
       const rawSnap = execFileSync("python3", [path.join(ROOT, "scripts/dash.py"), "snapshot"], {
-        env: {...process.env, GREENLIGHT_HOME: home, GREENLIGHT_ADE: "orca", ORCA_CLI_COMMAND: orcaBin, PATH: `${bindir}:${process.env.PATH || ""}`}, encoding: "utf8",
+        env: {...process.env, GREENLIGHT_HOME: home, GREENLIGHT_ADE: "orca", GREENLIGHT_USAGE: "off", ORCA_CLI_COMMAND: orcaBin, PATH: `${bindir}:${process.env.PATH || ""}`}, encoding: "utf8",
       });
       const snap = JSON.parse(rawSnap);
       await page.evaluate(s => window.mc.update(s), snap);

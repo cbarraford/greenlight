@@ -156,7 +156,7 @@ with tempfile.TemporaryDirectory() as tmp:
     }
     (home / "last.json").write_text(json.dumps(last))
     env = {**os.environ, "GREENLIGHT_HOME": str(home), "GREENLIGHT_ADE": "orca", "GREENLIGHT_TMUX_SOCKET": f"gl-sec-{os.getpid()}",
-           "ORCA_CLI_COMMAND": str(orca), "PATH": f"{bindir}:{os.environ.get('PATH', '')}"}  # the socket: never the real Basement's
+           "GREENLIGHT_USAGE": "off", "ORCA_CLI_COMMAND": str(orca), "PATH": f"{bindir}:{os.environ.get('PATH', '')}"}  # the socket: never the real Basement's
     p = subprocess.run([sys.executable, str(ROOT / "scripts" / "dash.py"), "snapshot"],
                        capture_output=True, text=True, env=env, timeout=20)
     assert p.returncode == 0, f"dash.py snapshot failed: {p.stderr}"

@@ -492,6 +492,7 @@ class UITestSession:
             "GREENLIGHT_WEB_DIR": str(webdir),
             "GREENLIGHT_TMUX_SOCKET": self.tmux_socket,
             "GREENLIGHT_ADE": "orca",
+            "GREENLIGHT_USAGE": os.environ.get("GREENLIGHT_USAGE", "off"),
             "ORCA_CLI_COMMAND": str(bindir / "orca"),
             "PATH": f"{bindir}:{os.environ.get('PATH', '')}",
         }
