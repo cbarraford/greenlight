@@ -352,7 +352,7 @@ def test_place_here_old_orca_and_other_ades(monkeypatch):
     calls = cli_with(monkeypatch, fail=True)
     assert greenlight.place_here(["worktree", "create", "--name", "x"]) == (["worktree", "create", "--name", "x"], None)
     monkeypatch.setenv("GREENLIGHT_ADE", "basement")
-    monkeypatch.setattr(greenlight.importlib, "import_module", lambda n: type("M", (), {"call": staticmethod(lambda *a: {"via": n})}))
+    monkeypatch.setattr(greenlight.ade.importlib, "import_module", lambda n: type("M", (), {"call": staticmethod(lambda *a: {"via": n})}))
     calls.clear()
     assert greenlight.orca("worktree", "create", "--project", "p") == {"via": "ade_basement"}
     assert calls == []  # another ADE runs where greenlight does: no Orca call to place it

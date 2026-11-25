@@ -241,6 +241,11 @@ out, calls = task({"text": "Fix it"}, fail={lambda a: is_create(a) and "claude" 
 assert "bad repo" in out["error"] and len([a for a in calls if is_create(a)]) == 1
 out, calls = task({"text": "Fix them"}, fail={lambda a: a[:2] == ("worktree", "set"): "busy"})  # the rename is cosmetic
 assert out["ok"]
+with mock.patch.object(dash.greenlight, "orca", side_effect=lambda *a: {"worktree": {"id": "/w/x", "path": "/w/x"}, "error": "claude didn't start: no tmux"}), \
+        mock.patch.object(dash, "repos", return_value=REPO), mock.patch.object(dash, "live_agents", return_value={}):
+    out = dash.task("new", "widgets", json.dumps({"text": "Fix the native one"}))  # native: made, its agent didn't start
+assert "didn't start" in out["error"] and (dash.TASKS / out["name"] / "request.md").exists()  # the brief it points at stays
+assert dash.lifestage._file("preflight", out["name"]).exists() and dash.lifestage._file("preflight", "/w/x").exists()  # its goal passed preflight
 for bad, why in (({"text": " \n "}, "describe"), ({"text": "x", "files": [{"name": "a", "data": "javascript:1"}]}, "didn't come through"),
                  ({"text": "x", "files": [{"name": "a", "data": B64}] * 2 + [{"name": "big", "data": "data:application/octet-stream;base64," + "A" * (21 << 20)}]}, "15 MB")):
     out, calls = task(bad)

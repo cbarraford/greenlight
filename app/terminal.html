@@ -1437,7 +1437,7 @@ function renderSide(){
     const n = el("span", "wn"); n.textContent = wsName(ws); l1.append(n);
     if (!bd && w?.state === "quiet" && w.why) { const y = el("span", "wy"); y.textContent = w.why.replace(/^waiting on /, ""); l1.append(y) }
     if (bd) { l1.insertAdjacentHTML("beforeend", pillHTML(bd)); l1.lastChild.title = w.why || bd[0] }
-    if (ades && w?.ade) { const g = el("span", "tag"); g.textContent = {orca: "Orca", cmux: "cmux", herdr: "herdr", t3: "T3", basement: "Basement"}[w.ade] || w.ade; l1.append(g) }
+    if (ades && w?.ade) { const g = el("span", "tag"); g.textContent = {orca: "Orca", cmux: "cmux", herdr: "herdr", t3: "T3", basement: "Basement", native: "Basement"}[w.ade] || w.ade; l1.append(g) }
     if (wsTabs(ws).some(x => x !== cur && paneOf(x).some(p => p.bell))) l1.insertAdjacentHTML("beforeend", I.bell(12));
     l1.append(iconBtn("ib", I.plus(13), "New set of tabs here", () => newTab(ws, undefined, true)));
     r.append(l1);
@@ -2249,7 +2249,7 @@ function newWsDialog(){
     const w = repo(), c = w?.cfg?.setup, b = br();
     sl.hidden = typeof c !== "string" || !c; none.hidden = !sl.hidden; sc.textContent = c || "";
     name.placeholder = slug(goal.value) || "feat/short-name"; sb.textContent = b;
-    where.hidden = w?.ade !== "basement" || !b; where.textContent = `${tilde(sel.value)}-${b.replace(/\//g, "-")}, beside the repo`;  // dash.py tree_new's spot
+    where.hidden = !["native", "basement"].includes(w?.ade) || !b; where.textContent = `${tilde(sel.value)}-${b.replace(/\//g, "-")}, beside the repo`;  // dash.py tree_new's spot
     foot.innerHTML = b ? `Creates <code>${esc(b)}</code> in <b>${esc(w?.project || "the repo")}</b> from ${esc(base.value.trim() || "the default branch")}` : "Write a goal, or name the branch";
   };
   sel.onchange = goal.oninput = name.oninput = base.oninput = sync; sync();

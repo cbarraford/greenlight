@@ -1,4 +1,4 @@
-"""Basement backend: answers the `orca ...` calls greenlight makes, in Orca's JSON shape (GREENLIGHT_ADE=basement).
+"""Native backend (GREENLIGHT_ADE=native; `basement` is its old name): greenlight's own engine, ade.py's contract.
 
 No ADE app at all: worktrees are git's, terminals are the Greenlight app's own tmux server (`tmux -L greenlight`), and an
 agent is a pane whose title Claude sets (braille spinner = working, ✳ = idle). Repos are the main checkouts of every pane's
@@ -17,11 +17,14 @@ from pathlib import Path
 
 import harness
 import last_agent
-from ade_common import MENU_ITEM_RE, default_agent, draft, flags, git, git_info, goals, plain, repo_list, screen_state, set_goal, worktree_add, worktree_remove
+import ade
+import ade_common
+from ade_common import MENU_ITEM_RE, draft, git, git_info, goals, plain, repo_list, screen_state, worktree_add, worktree_remove
 
 HOME = Path(os.environ.get("GREENLIGHT_HOME") or Path.home() / ".greenlight")
 REPOS, BRIEFS = HOME / "repos.json", HOME / "briefs"
 SEP = "\t"
+NAME = "native"
 
 
 TMUX_SOCKET = os.environ.get("GREENLIGHT_TMUX_SOCKET") or "greenlight"
@@ -123,12 +126,39 @@ def saved():
         return []
 
 
+def _save_repos(repos):
+    REPOS.parent.mkdir(parents=True, exist_ok=True)
+    tmp = REPOS.with_name(f".{REPOS.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(repos, indent=1))
+    os.replace(tmp, REPOS)
+
+
 def remember(repo):
     if repo not in (have := saved()):
-        REPOS.parent.mkdir(parents=True, exist_ok=True)
-        tmp = REPOS.with_name(f".{REPOS.name}.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps([*have, repo], indent=1))
-        os.replace(tmp, REPOS)
+        _save_repos([*have, repo])
+
+
+def forget(repo):
+    if repo in (have := saved()):
+        _save_repos([r for r in have if r != repo])
+
+
+def main_checkout(path):
+    """The main checkout of the git repo path is in (absolute), else None: what repos.json holds."""
+    p = Path(path).expanduser()
+    if not p.is_dir():
+        return None
+    info = git_info(str(p.resolve()))
+    return info["repoId"] or None
+
+
+def register(path):
+    """Add the repo path is in to repos.json (its main checkout); the path stored. RuntimeError when it isn't a git repo."""
+    repo = main_checkout(path)
+    if not repo:
+        raise RuntimeError(f"not a git checkout: {path}")
+    remember(repo)
+    return repo
 
 
 def agent_worktree(path):
@@ -215,42 +245,59 @@ def launch(path, agent, prompt):
     return {"terminal": {"handle": tmux("display-message", "-p", "-t", s, "#{pane_id}").strip(), "session": s}}
 
 
+def terminals():
+    trees = sorted(worktrees(), key=lambda w: -len(w["path"]))
+    return [{"handle": p["handle"], "title": p["title"], "lastOutputAt": int(p["at"] or 0) * 1000,
+             "agentIdentity": agent_type(p["title"], p.get("cmd", "")),
+             "worktreeId": next((w["path"] for w in trees if p["cwd"] == w["path"] or p["cwd"].startswith(w["path"] + "/")), None)}
+            for p in panes()]
+
+
+def set_goal(worktree_id, goal):
+    ade_common.set_goal(worktree_id, goal)
+
+
+def remove(worktree_id, force=False):
+    ws = next((w for w in worktrees() if w["id"] == worktree_id), None)
+    if ws is None:
+        raise RuntimeError(f"no native workspace {worktree_id}")
+    if ws["isMainWorktree"]:
+        raise RuntimeError(f"{worktree_id} is a repo's main checkout: it is never removed")
+    worktree_remove(ws, force=force)
+    ade_common.set_goal(ws["path"], "")
+
+
+def create(repo, name, base=None, comment="", agent=None, prompt=""):
+    """A new worktree of repo (its path, or a known repo's folder name) on branch name; its goal; and, when agent is
+    named (as Orca's `worktree create --agent`), that agent launched in it on prompt. A launch that fails leaves the
+    workspace and its goal (greenlight dispatches to it later) and says why in `error`."""
+    if not Path(repo).is_absolute():
+        named = [r for r in saved() if Path(r).name == repo]
+        if len(named) != 1:  # never a folder relative to wherever this runs
+            raise RuntimeError(f"repo {repo!r} names {len(named) or 'no'} registered repo{'s' * (len(named) != 1)}: pass its path"
+                               + (" (greenlight.py repos add <path> registers one)" if not named else ""))
+        repo = named[0]
+    if not (main := main_checkout(repo)):
+        raise RuntimeError(f"not a git checkout: {repo}")
+    path = worktree_add(main, name, base)
+    remember(main)
+    if comment:
+        ade_common.set_goal(path, comment)
+    out: dict = {"worktree": {"id": path, "path": path}}
+    if agent:
+        try:
+            out["terminal"] = launch(path, agent, prompt)["terminal"]
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as e:  # ValueError: a harness name harness.py lacks
+            out["error"] = f"the workspace was made, but {agent} didn't start: {str(e)[:300]}"
+    return out
+
+
+def repos():
+    return repo_list(worktrees())
+
+
 def call(*args):
-    noun, verb, f = *args[:2], flags(args[2:])
-    wid = str(f.get("worktree", "")).removeprefix("id:")
-    if noun == "worktree" and verb in ("ps", "list"):
-        return {"worktrees": worktrees()}
-    if noun == "terminal" and verb == "list":
-        trees = worktrees()
-        return {"terminals": [{"handle": p["handle"], "title": p["title"], "lastOutputAt": int(p["at"] or 0) * 1000,
-                               "agentIdentity": agent_type(p["title"], p.get("cmd", "")),
-                               "worktreeId": next((w["path"] for w in sorted(trees, key=lambda w: -len(w["path"]))
-                                                   if p["cwd"] == w["path"] or p["cwd"].startswith(w["path"] + "/")), None)}
-                              for p in panes()]}
-    if noun == "terminal" and verb == "read":
-        return read(f["terminal"], f.get("limit", 200))
-    if noun == "terminal" and verb == "send":
-        send(f["terminal"], f.get("text", ""), "enter" in f)
-        return {}
-    if noun == "agent" and verb == "launch":
-        return launch(wid, f.get("agent") or default_agent(), f.get("prompt", ""))
-    if noun == "worktree" and verb == "set":
-        if "comment" in f:
-            set_goal(wid, f["comment"] if isinstance(f["comment"], str) else "")
-        return {}
-    if noun == "worktree" and verb == "rm":
-        worktree_remove(next(w for w in worktrees() if w["id"] == wid), force="force" in f)
-        return {"removed": wid}
-    if noun == "worktree" and verb == "create":
-        repo = f["repo"].removeprefix("id:")
-        path = worktree_add(repo, f["name"], f.get("base-branch") or f.get("base"))
-        remember(repo)
-        if f.get("comment"):
-            set_goal(path, f["comment"])
-        return {"worktree": {"id": path, "path": path}}
-    if noun == "repo" and verb == "list":
-        return repo_list(worktrees())
-    raise RuntimeError(f"orca {noun} {verb} has no Basement equivalent")
+    return ade.dispatch(sys.modules[__name__], *args)
 
 
 if __name__ == "__main__":  # the parsers: python3 ade_basement.py

@@ -49,6 +49,7 @@ import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ade  # noqa: E402
 import ade_common  # noqa: E402
 import audit  # noqa: E402
 import blocking  # noqa: E402
@@ -757,7 +758,26 @@ def scan_error(scanned, scan_started=None):
     return {k: str(e.get(k) or "") for k in ("msg", "fix")} | {"ts": ts}
 
 
-ADES = ("orca", "cmux", "herdr", "t3", *(["basement"] if os.environ.get("GREENLIGHT_ADE") == "basement" else []))  # basement: opt-in
+ADES = None  # a fixed list in place of ades() (tests)
+
+
+def ades():
+    """The backends dash.py lists worktrees from, first wins a shared path: the other installed ADEs first, so a
+    workspace one of them knows is changed and deleted through it, then the native engine when it's in use (it lists
+    every registered repo's worktrees, whichever ADE made them)."""
+    if ADES:
+        return tuple(ADES)
+    try:
+        native = ade.is_native()
+    except RuntimeError:  # a GREENLIGHT_ADE naming no backend: list the ones there are
+        native = False
+    return ("orca", "cmux", "herdr", "t3", *(["native"] if native else []))
+
+
+def ade_call(n):
+    """The `orca …`-shaped call for backend n: the Orca CLI itself for orca (tree_new places an Orca create its own
+    way, as the user's pick: `call is greenlight.orca_cli`), else n's dispatch."""
+    return greenlight.orca_cli if n == "orca" else ade.get(n).call
 
 
 def trees():
@@ -770,9 +790,9 @@ def trees():
         blk = blocking.cached()
     except (OSError, ValueError, KeyError, AttributeError):
         scan, blk = {}, None
-    for ade in ADES:
+    for name in ades():
         try:
-            call = greenlight.orca_cli if ade == "orca" else importlib.import_module(f"ade_{ade}").call
+            call = ade_call(name)
             ws = call("worktree", "ps", "--limit", "10000")["worktrees"]
         except Exception:
             continue
@@ -781,7 +801,7 @@ def trees():
                 continue
             seen.add(w["path"])
             ag = greenlight.primary_agent(w.get("agents"))
-            out.append({"ade": ade, "project": w.get("repo") or "", "name": w.get("displayName") or Path(w["path"]).name,
+            out.append({"ade": name, "project": w.get("repo") or "", "name": w.get("displayName") or Path(w["path"]).name,
                         "path": w["path"], "branch": (w.get("branch") or "").removeprefix("refs/heads/"),
                         "main": bool(w.get("isMainWorktree")), "agent": ag.get("state") or "none",
                         "goal": w.get("comment") or "", "pinned": bool(w.get("isPinned")), "active": w.get("lastOutputAt"),
@@ -861,9 +881,9 @@ def created(path):
 def tree(path, every=False):
     """(ade, worktree) for a path, re-listed now so a stale id from the page can't name another tree. every: also every
     live row at that path (two hosts can share one)."""
-    for ade in ADES:
+    for name in ades():
         try:
-            call = greenlight.orca_cli if ade == "orca" else importlib.import_module(f"ade_{ade}").call
+            call = ade_call(name)
             ws = call("worktree", "ps", "--limit", "10000")["worktrees"]
         except Exception:
             continue
@@ -2104,15 +2124,18 @@ def task_new(repo_name, payload):
             if a == agents[-1] or not greenlight.LIMIT_RE.search(str(e)):
                 shutil.rmtree(d, ignore_errors=True)
                 return {"error": f"couldn't start the workspace: {str(e)[:300]}"}
+    lifestage.save("preflight", name, gate["record"])  # the goal passed preflight, whether or not its agent started
+    if path := (res.get("worktree") or {}).get("path"):
+        lifestage.save("preflight", path, gate["record"])
+    if res.get("error"):  # the workspace and its goal stand (and the request it points at): its agent didn't start
+        _note(name, f"task workspace made, agent didn't start ({a}): {title}")
+        return {"error": res["error"], "name": name}
     wid = (res.get("worktree") or {}).get("id")
     if wid:  # keep Orca from prefixing the name; cosmetic, so a failure here doesn't fail the task
         try:
             greenlight.orca("worktree", "set", "--worktree", f"id:{wid}", "--display-name", name)
         except RuntimeError:
             pass
-    lifestage.save("preflight", name, gate["record"])
-    if path := (res.get("worktree") or {}).get("path"):
-        lifestage.save("preflight", path, gate["record"])
     _note(name, f"task started ({a}, {len(files)} file{'s' * (len(files) != 1)}): {title} [preflight: {gate['why']}]")
     return {"ok": True, "name": name, "repo": repo["name"]}
 

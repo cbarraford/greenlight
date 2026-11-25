@@ -14,7 +14,8 @@
                                        you: it prints `auto: <option>`. --proactive (or kind check-in/watch): sent only when
                                        autonomy.py's anti-slop gate passes, else it prints `held: ...` and sends nothing
     greenlight.py resolve <key> <why>       close that question in the app
-    greenlight.py ade <orca args>           an `orca` call routed to the ADE in use (GREENLIGHT_ADE=orca|cmux|herdr|t3), JSON out;
+    greenlight.py repos [list|add|rm <path>...]  the native engine's repos (repos.json): every worktree of each is a workspace
+    greenlight.py ade <orca args>           an `orca`-shaped call answered by the backend in use (ade.py: native|orca|cmux|herdr|t3), JSON out;
                                             `worktree create` stays on this machine (place_here; placement.py lists strays)
 
 Read-only: it never changes anything. The greenlight skill acts on `next.cmd` / `next.owner`.
@@ -30,7 +31,6 @@ State and config live in $GREENLIGHT_HOME (default ~/.greenlight). config.json t
 
 import fcntl
 import html
-import importlib
 import json
 import contextlib
 import hashlib
@@ -48,6 +48,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ade  # noqa: E402
 import ade_common  # noqa: E402
 import diag  # noqa: E402
 import decide  # noqa: E402
@@ -172,10 +173,16 @@ ME = os.environ.get("GREENLIGHT_ME") or CONFIG["me"] or whoami()
 
 
 def orca(*args, timeout=120):
-    """An Orca CLI call. Any other GREENLIGHT_ADE answers the same calls from another ADE, in Orca's shape (ade_<GREENLIGHT_ADE>.py).
-    A `worktree create` goes through place_here first, so adopt.py's and dash.py's workspaces stay on this machine too."""
-    if os.environ.get("GREENLIGHT_ADE", "orca") != "orca":
-        return importlib.import_module(f"ade_{os.environ['GREENLIGHT_ADE']}").call(*args)
+    """An `orca …`-shaped call, answered by the backend in use (ade.name(): native, orca, or a legacy driver) through
+    ade.py's contract, in Orca's shape. Under Orca, a `worktree create` goes through place_here first, so adopt.py's
+    and dash.py's workspaces stay on this machine too."""
+    if not ade.is_orca():
+        return ade.call(*args)
+    return orca_placed(*args, timeout=timeout)
+
+
+def orca_placed(*args, timeout=120):
+    """The Orca CLI, with a `worktree create` placed on this machine first (place_here)."""
     args, why = place_here(args)
     if why:
         raise PlacementRefused(why)
@@ -357,7 +364,7 @@ def local_first(repos):
     """repos (`orca repo list` rows, which carry no host) with this machine's checkouts first, so a pick by name or by
     project (dash.py's New task, adopt.py) lands here when it can (#160). Unchanged under other ADEs (no hosts), and
     when Orca can't say."""
-    if os.environ.get("GREENLIGHT_ADE", "orca") != "orca":
+    if not ade.is_orca():
         return list(repos)
     here_ = {(s.get("repoId"), s.get("path")) for s in project_setups(tries=1) or [] if is_local(s)}
     return sorted(repos, key=lambda r: (r.get("id"), r.get("path")) not in here_) if here_ else list(repos)
@@ -2110,6 +2117,33 @@ def scan_failed(e, started_ns=None):
             os.replace(tmp, f)
 
 
+def repos_cli(argv):
+    """The native engine's repo registry (repos.json): list it, or add/rm repos by any path inside them. Exit code."""
+    import ade_basement
+    op, paths = (argv[0] if argv else "list"), argv[1:]
+    if op == "list":
+        print(json.dumps([{"path": r, "exists": Path(r).is_dir()} for r in ade_basement.saved()], indent=1))
+        return 0
+    if op not in ("add", "rm") or not paths:
+        print("usage: greenlight.py repos [list | add <path>... | rm <path>...]", file=sys.stderr)
+        return 2
+    rc = 0
+    for p in paths:
+        try:
+            if op == "add":
+                print(f"added {ade_basement.register(p)}")
+            else:
+                repo = ade_basement.main_checkout(p) or str(Path(p).expanduser().resolve())
+                if repo not in ade_basement.saved():
+                    raise RuntimeError(f"not registered: {repo}")
+                ade_basement.forget(repo)
+                print(f"removed {repo}")
+        except RuntimeError as e:
+            print(e, file=sys.stderr)
+            rc = 1
+    return rc
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "scan"
     if cmd == "note":  # greenlight.py note <workspace> "<what happened>"
@@ -2132,7 +2166,11 @@ def main():
             print(e, file=sys.stderr)
             sys.exit(3)
         print(json.dumps(out, indent=1))
+        if isinstance(out, dict) and out.get("error"):  # done in part (native: made, but its agent didn't start)
+            sys.exit(1)
         return
+    if cmd == "repos":  # greenlight.py repos [list | add <path>... | rm <path>...]: the native engine's repos.json
+        sys.exit(repos_cli(sys.argv[2:]))
     if cmd == "signoff":  # greenlight.py signoff <project> <iid|@branch> <stage>: the user signed off a custom stage
         STATE.mkdir(parents=True, exist_ok=True)
         with (STATE / "signoffs.lock").open("a+") as lock:
