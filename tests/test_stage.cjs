@@ -184,9 +184,9 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.equal(await p.isVisible("#status svg.tone"), false);  // Phosphor: a $ prompt instead of the glyph
   assert.equal(await p.$eval("#status span", e => getComputedStyle(e, "::before").content), '"$ "');
   await p.evaluate(() => { stage.html("<p>page</p>"); });  // Chief's own page ends above the strip, in every look
-  assert.ok(await p.evaluate(() => document.getElementById("s").getBoundingClientRect().bottom <= document.getElementById("status").getBoundingClientRect().top + 0.5));
+  assert.ok(await p.evaluate(() => (s => s.offsetTop + s.offsetHeight)(document.getElementById("s")) <= document.getElementById("status").offsetTop + 0.5));
   await p.evaluate(() => { delete document.documentElement.dataset.look; });
-  assert.ok(await p.evaluate(() => document.getElementById("s").getBoundingClientRect().bottom <= document.getElementById("status").getBoundingClientRect().top + 0.5));
+  assert.ok(await p.evaluate(() => (s => s.offsetTop + s.offsetHeight)(document.getElementById("s")) <= document.getElementById("status").offsetTop + 0.5));
   await p.evaluate(() => stage.status(""));
   assert.ok(await p.evaluate(() => document.getElementById("s").getBoundingClientRect().bottom >= innerHeight - 0.5));  // and fills it again without one
   // narrow stage wraps long inline code paths/hashes without horizontal overflow, and replacing a scrolled doc resets scroll to top
