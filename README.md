@@ -22,7 +22,7 @@ asks you what only you can answer.
   - **Greenlight Center** (⌘⇧G): the dashboard of every workspace and its lifecycle stage, plus a chat (text or voice)
     with **Chief**, Greenlight's own agent, which can answer questions about the board and act on it.
 - **Replyable notifications**: when Greenlight needs you, answer from the banner.
-- **Pluggable everything**: forges (`glab`, `gh`), agent CLIs, and workspace managers (Orca, cmux, herdr, T3 Code).
+- **Pluggable everything**: forges (`glab`, `gh`), agent CLIs, and workspace managers (Greenlight's own `native` engine, Orca; cmux, herdr and T3 Code deprecated).
 
 ## How it works
 
@@ -45,8 +45,8 @@ milestones, required approvals) is a config change, not a code change.
 - Python 3.10+ (stdlib only).
 - `glab` (GitLab) and/or `gh` (GitHub), authenticated.
 - At least one coding agent CLI: `claude`, `codex`, `agy` (Antigravity), `opencode`, `pi` or `gemini` (Gemini CLI).
-- No other app needed: Greenlight's own `native` engine is the default on macOS and Linux. Workspaces are git worktrees of the repos in `~/.greenlight/repos.json` (`greenlight.py repos add <path>`), agents run in `tmux -L greenlight` (`tmux -L greenlight attach` works from any terminal), and goals live in `~/.greenlight/goals.json`.
-- Coming from another ADE: `greenlight.py import` (or Settings → Import, offered on first launch) copies Orca's, T3 Code's, cmux's or herdr's repos and workspace goals in, read-only on their side; `--path DIR` adds the git repos under a folder (Rex, plain terminals). The first native listing runs it once by itself. While you still use that ADE, Greenlight sees the agents it runs (`scripts/external.py`) and keeps off those worktrees: no dispatch, no merge, no cleanup under them.
+- No other workspace app needed (just `git` and `tmux`; `diag.py doctor` checks both): Greenlight's own `native` engine is a new install's default on macOS and Linux. An install that already ran Greenlight (on Orca, the old default) keeps Orca: the first run after updating writes `"ade": "orca"` into `config.json`. To move it, set `"ade": "native"` and run `greenlight.py import`. Workspaces are git worktrees of the repos in `~/.greenlight/repos.json` (`greenlight.py repos add <path>`), agents run in `tmux -L greenlight` (`tmux -L greenlight attach` works from any terminal), and goals live in `~/.greenlight/goals.json`.
+- Coming from another ADE: `greenlight.py import` (or Settings → Import, offered on first launch) copies Orca's, T3 Code's, cmux's or herdr's repos and workspace goals in, read-only on their side; `--path DIR` adds the git repos under a folder (Rex, plain terminals). The first native listing runs it once by itself (not when `repos.json` already exists; a source that wasn't up is tried again later). While you still use that ADE, Greenlight sees the agents it runs (`scripts/external.py`) and keeps off those worktrees while they run: no dispatch, no merge, no delete under them; one open for over 6 h becomes yours to close. A worktree whose agent has quit is Greenlight's: cleanup removes it with git, not through that ADE.
 - `GREENLIGHT_ADE=orca` (or `"ade": "orca"` in `config.json`) keeps driving Orca two-way. `cmux`, `herdr` and `t3` still answer but are deprecated (`diag.py doctor` flags them): import once and use the native engine instead.
 - The menubar app: macOS with the Command Line Tools (`swiftc`). The backend also runs on Linux.
 

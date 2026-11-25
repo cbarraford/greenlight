@@ -176,13 +176,30 @@ def test_first_run_imports_once_on_native(home, monkeypatch):
     monkeypatch.setenv("GREENLIGHT_ADE", "orca")
     assert importers.first_run() is None and calls == []  # Orca in use: nothing to import into
     monkeypatch.setenv("GREENLIGHT_ADE", "native")
-    assert importers.first_run() == {"repos": 1, "goals": 1, "sources": {"orca": {"repos": 1, "goals": 1}}}
+    assert importers.first_run() == {"repos": 1, "goals": 1, "sources": {"orca": {"repos": 1, "goals": 1}}, "pending": [], "attempts": 1}
     assert calls == ["orca", "orca"] and ade_basement.saved() == [str(r.resolve())] and ade_common.goals() == {str(r): "Main goal"}
     assert json.loads((home / "home" / importers.FIRST_RUN).read_text())["repos"] == 1
     assert importers.first_run() is None and calls == ["orca", "orca"]  # once
     (home / "home" / importers.FIRST_RUN).unlink()
-    monkeypatch.setattr(importers, "gather", lambda *a: 1 / 0)  # a failing import still marks it done, and never raises
-    assert importers.first_run() == {"error": "ZeroDivisionError"} and (home / "home" / importers.FIRST_RUN).exists()
+    assert importers.first_run()["pending"] == [] and calls == ["orca", "orca"]  # repos.json exists: already native, nothing re-added
+    (home / "home" / importers.FIRST_RUN).unlink()
+    ade_basement.REPOS.unlink()
+    monkeypatch.setattr(importers, "gather", lambda *a: 1 / 0)  # a failing import never raises, and is tried again later
+    assert importers.first_run() == {"error": "ZeroDivisionError", "pending": ["orca"], "attempts": 1}
+    assert importers.first_run() is None  # not before RETRY_SECS
+    mk = home / "home" / importers.FIRST_RUN
+    old = json.loads(mk.read_text())
+    mk.write_text(json.dumps({**old, "ts": 0}))
+    monkeypatch.setattr(importers, "gather", lambda s: calls.append(tuple(s)) or {"orca": {"repos": [], "goals": {}}})
+    assert importers.first_run()["pending"] == [] and calls[-1] == ("orca",)  # only the source that failed is tried again
+    assert importers.first_run() is None  # nothing pending: done
+    lock = (home / "home" / importers.FIRST_RUN).with_suffix(".lock")
+    mk.write_text(json.dumps({"ts": 0, "pending": ["orca"], "attempts": 1}))
+    lock.write_text("")  # another listing is importing right now
+    assert importers.first_run() is None and json.loads(mk.read_text())["attempts"] == 1
+    lock.unlink()
+    mk.write_text(json.dumps({"ts": 0, "pending": ["orca"], "attempts": importers.RETRIES}))
+    assert importers.first_run() is None  # gave up after a few tries (Settings → Import is still there)
 
 
 def test_doctor_flags_a_deprecated_driver(home, monkeypatch):

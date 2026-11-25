@@ -811,8 +811,9 @@ def ades():
         cur = ade.name()
     except RuntimeError:  # a GREENLIGHT_ADE naming no backend: Orca's, if it's there
         cur = "orca"
-    # the legacy live drivers are listed only while one is in use: the native engine finds their worktrees through git
-    return ("orca", *([cur] if cur in ade.LEGACY else []), *(["native"] if cur == "native" else []))
+    if cur == "native":  # the legacy live drivers aren't merged: the native engine finds their worktrees through git
+        return ("orca", "native")
+    return ("orca", "cmux", "herdr", "t3")  # Orca (or a legacy driver) in use: every installed ADE, as before
 
 
 def ade_call(n):
@@ -1055,8 +1056,18 @@ def tree_rm(path, force=False, teardown=""):
 
 def tree_goal(path, goal):
     call, w = tree(path)
-    call("worktree", "set", "--worktree", f"id:{w.get('worktreeId') or w['id']}", "--comment", " ".join(goal.split())[:500])
+    goal = " ".join(goal.split())[:500]
+    call("worktree", "set", "--worktree", f"id:{w.get('worktreeId') or w['id']}", "--comment", goal)
+    if native_in_use() and call is not ade_call("native"):  # an Orca-listed row: the native scan reads goals.json
+        ade_common.set_goal(path, goal)
     return {"ok": True}
+
+
+def native_in_use():
+    try:
+        return ade.is_native()
+    except RuntimeError:
+        return False
 
 
 CFG = ".greenlight.json"  # in a repo's main checkout: {"name", "look", "host", "hosts"}, its project in the terminal (README)
@@ -1137,6 +1148,8 @@ def tree_new(path, o):
     if gate and gate["pause"]:  # 1.3: ask before anything is made, so a dismissed question leaves nothing behind
         return paused(gate)
     call, w, twins = tree(path, every=True)
+    if native_in_use() and call is not ade_call("native"):  # native: a new workspace is Greenlight's own, whoever lists the repo
+        call, w = ade_call("native"), {**w, "repoId": main_of(path)}
     if call is greenlight.orca_cli and len(twins) > 1:  # the page sends a path, not a host, and shows its first row (w):
         w = local_twin(w, twins)  # of several, this machine's checkout of that same project
     args = ["worktree", "create", "--repo", f"id:{w['repoId']}", "--name", name,

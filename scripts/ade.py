@@ -23,6 +23,7 @@ The contract (what core code may ask of a backend; rows are in Orca's worktree/t
 
 Stdlib only; no greenlight import at module level (greenlight imports this; ade_orca imports greenlight lazily).
 """
+import fcntl
 import importlib
 import json
 import os
@@ -30,17 +31,20 @@ from pathlib import Path
 
 import ade_common
 
-DEFAULT = "native"  # greenlight's own engine on macOS and Linux (#195); GREENLIGHT_ADE=orca (or "ade": "orca") opts into Orca
+DEFAULT = "native"  # a new install's engine on macOS and Linux (#195); one that ran on Orca keeps it (settle)
 ALIASES = {"basement": "native"}
 MODULES = {"native": "ade_basement", "orca": "ade_orca", "cmux": "ade_cmux", "herdr": "ade_herdr", "t3": "ade_t3"}
 NAMES = tuple(MODULES)
 LEGACY = ("cmux", "herdr", "t3")  # deprecated live drivers: still answer when set, but importers.py + external.py replace them
 
 
+def _home():
+    return Path(os.environ.get("GREENLIGHT_HOME") or Path.home() / ".greenlight")
+
+
 def _config_ade():
-    home = Path(os.environ.get("GREENLIGHT_HOME") or Path.home() / ".greenlight")
     try:
-        v = json.loads((home / "config.json").read_text()).get("ade")
+        v = json.loads((_home() / "config.json").read_text()).get("ade")
     except (OSError, ValueError, AttributeError):
         return None
     return v if isinstance(v, str) else None
@@ -61,7 +65,31 @@ def name():
         if not (n := canonical(env)):
             raise RuntimeError(f"GREENLIGHT_ADE={env!r}: not one of {', '.join(NAMES)}")
         return n
-    return canonical(_config_ade()) or DEFAULT
+    return canonical(_config_ade()) or settle()
+
+
+def settle():
+    """The backend for an install that never chose one, decided once and written into config.json ("ade") so it never
+    flips later. A new install gets DEFAULT (native). One that already ran greenlight (it has a scan, last.json) ran
+    on Orca, the old default, and keeps it: native is then an explicit switch (README: Moving to native)."""
+    home = _home()
+    n = "orca" if (home / "last.json").exists() else DEFAULT
+    f = home / "config.json"
+    why = "this install ran on Orca before native became the default" if n == "orca" else "a new install: native by default"
+    try:
+        home.mkdir(parents=True, exist_ok=True)
+        with open(f.with_suffix(".lock"), "w") as lock:  # decide.set_conf's lock: one writer at a time
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            cfg = json.loads(f.read_text()) if f.exists() else {}
+            if isinstance(cfg, dict) and not canonical(cfg.get("ade") if isinstance(cfg.get("ade"), str) else None):
+                tmp = f.with_name(f".{f.name}.{os.getpid()}.tmp")
+                tmp.write_text(json.dumps({**cfg, "ade": n, "ade_set_because": why}, indent=1))
+                os.replace(tmp, f)
+            elif isinstance(cfg, dict):
+                n = canonical(cfg["ade"]) or n  # another process settled it meanwhile
+    except (OSError, ValueError):
+        pass  # can't write it (or not settings we can add to): the same answer next time, from the same facts
+    return n
 
 
 def is_orca():
