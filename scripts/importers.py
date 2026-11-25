@@ -105,7 +105,7 @@ def gather(sources, paths=()):
         try:
             repos: list = []
             goals: dict = {}
-            bad = []
+            bad: list = []
             if s == "folder":
                 for p in paths:  # each on its own: a typo in one never drops the others
                     try:
