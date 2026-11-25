@@ -1971,7 +1971,8 @@ def log_extras(name):
     path = _ws_path(name)
     if not path:
         return {"error": f"no workspace {name}"}
-    out = {"usage": log_view.usage(transcript_files(path))}
+    subagents = (Path.home() / ".claude/projects" / re.sub(r"[^A-Za-z0-9]", "-", path)).glob("*/subagents/*.jsonl")  # their own usage
+    out = {"usage": log_view.usage(transcript_files(path) + [(f, "claude") for f in subagents])}
     try:
         d = tree_diff(path, "branch")
         if d.get("error"):  # no trunk to compare with: what's uncommitted

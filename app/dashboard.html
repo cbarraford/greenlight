@@ -2142,9 +2142,9 @@ const SAID_LINE = /^\s*[⏺●•]\s+\S/;  // the agent talking (not a tool call
 const ERR_LINE = /^\s*(?:⎿\s*)?(?:E\s{2,}\S|ERROR\b|FAILED\b|FAIL\b|Error\b|error(?:\[\w+\])?:|Traceback\b|fatal:|panic:|npm ERR!)|\b[1-9]\d* (?:failed|errors?)\b|\b\w*(?:Error|Exception):\s|[✗✘]/;
 const OUT_FILTERS = [["all", "All"], ["tool", "Tool calls"], ["err", "Errors"], ["prompt", "Prompts"]];
 const OUT_KEYS = {e: () => outJump("err", 1), E: () => outJump("err", -1), "]": () => outJump("tool", 1), "[": () => outJump("tool", -1),
-  p: () => outJump("prompt", 1), P: () => outJump("prompt", -1), l: () => outJump("looked"), "/": () => document.getElementById("aout-q").focus()};
+  p: () => outJump("prompt", 1), P: () => outJump("prompt", -1), f: () => outFoldHere(), l: () => outJump("looked"), "/": () => document.getElementById("aout-q").focus()};
 const OUT_JUMPS = [["looked", 0, "Since you last looked", "L"], ["err", 1, "Next error", "E"], ["err", -1, "Previous error", "⇧E"],
-  ["tool", 1, "Next tool call", "]"], ["tool", -1, "Previous tool call", "["], ["prompt", 1, "Next prompt", "P"], ["latest", 0, "Latest output", "End"]];
+  ["tool", 1, "Next tool call", "]"], ["tool", -1, "Previous tool call", "["], ["prompt", 1, "Next prompt", "P"], ["latest", 0, "Latest output", "End"], ["fold", 0, "Fold or unfold this call", "F"]];
 function outKind(e){
   if (e.role === "user") return "prompt";
   if (e.role === "tool") return "tool";
@@ -2247,6 +2247,15 @@ function outFold(id, fold){
   if (now) { o.folds.add(id); o.unfolds.delete(id) } else { o.folds.delete(id); o.unfolds.add(id) }
   outRefine(); outScrolled({currentTarget: document.getElementById("aout-log")});
 }
+function outFoldHere(){  // F: fold or unfold the call (else the turn) you jumped to, or the first one in view
+  const o = ui.out, list = document.getElementById("aout-list"), log = document.getElementById("aout-log"); if (!o || !list) return;
+  const lr = log.getBoundingClientRect();
+  const at = list.querySelector(":scope > [data-id].aoat:not([hidden])") || [...list.querySelectorAll(":scope > [data-id]:not([hidden])")].find(el => el.getBoundingClientRect().bottom > lr.top + 8);
+  const f = at && o.info.get(at.dataset.id); if (!f) return;
+  const id = [at.dataset.id, f.sec, f.turn].find(x => x && o.heads.has(x) && o.heads.get(x).n); if (!id) return;
+  outFold(id); const head = list.querySelector(`:scope > [data-id="${CSS.escape(id)}"]`);
+  if (head) { list.querySelectorAll(".aoat").forEach(x => x.classList.remove("aoat")); head.classList.add("aoat"); head.scrollIntoView({block: "nearest"}) }
+}
 function outFoldAll(){
   const o = ui.out; if (!o) return;
   const ids = [...o.heads].filter(([, x]) => x.n).map(([id]) => id), fold = ids.some(id => !o.folds.has(id));
@@ -2339,7 +2348,7 @@ function outJumpMenu(open){
   if (!open) { btn.focus(); return }
   const errs = [...o.info.values()].filter(f => f.k === "err").length;
   const items = OUT_JUMPS.filter(([k]) => k !== "looked" || document.getElementById("aout-looked")).map(([k, d, label, key]) =>
-    h("button", {role:"menuitem", class:"aomi", tabindex:"-1", onclick: () => { outJumpMenu(false); k === "latest" ? outBottom() : outJump(k, d) }},
+    h("button", {role:"menuitem", class:"aomi", tabindex:"-1", onclick: () => { outJumpMenu(false); k === "latest" ? outBottom() : k === "fold" ? outFoldHere() : outJump(k, d) }},
       h("span", {class:"l"}, label), k === "err" && d > 0 && errs ? h("span", {class:"count"}, String(errs)) : null, h("kbd", {class:"kbd"}, key)));
   const menu = h("div", {class:"aomenu", id:"aout-jump", role:"menu", "aria-label":"Jump to", onkeydown: e => {
     const f = [...menu.querySelectorAll("[role=menuitem]")], k = f.indexOf(document.activeElement);
@@ -2556,7 +2565,7 @@ function outShareRender(first){
       h("p", {}, sh.status === "error" ? `So nothing is shared: ${short(sh.err, 160)}.` : "Paths, hosts, URLs, emails, keys and tokens, and your private terms, become placeholders like [path]. Read the preview before you send it."))),
     cut ? h("p", {class:"aocut"}, `Too long to share whole: the newest ${cut.toLocaleString()} lines`) : null,
     sh.saved ? h("p", {class:"aocut", role:"status"}, sh.saved.ok ? "Saved" : `Couldn't save it: ${short(sh.saved.error || "unknown error", 140)}`) : null,
-    h("pre", {class:"aopv", tabindex:"0", "aria-label":"Preview"}, ready ? (sh.text.split("\n").slice(0, 14).join("\n") || "Nothing to share in this range") : sh.status === "checking" ? h("span", {class:"spin"}) : ""),
+    h("pre", {class:"aopv", tabindex:"0", "aria-label":"Preview"}, ready ? sh.text : sh.status === "ready" ? "Nothing to share in this range" : sh.status === "checking" ? h("span", {class:"spin"}) : ""),
     h("div", {class:"aosf"},
       sh.status === "error" ? h("button", {class:"btn", id:"aout-share-retry", onclick: () => { outShareAsk(); outShareRender() }}, "Try again") : null,
       h("button", {class:"btn", id:"aout-share-copy", disabled: !ready, onclick: () => { post({cmd: "copyText", text: sh.text}); sh.copied = true; outShareRender() }}, icon(sh.copied ? "check" : "copy", 12), sh.copied ? "Copied" : "Copy"),

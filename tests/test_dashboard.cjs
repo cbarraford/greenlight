@@ -1846,6 +1846,11 @@ test("log view: tool calls and prompts fold, a long finished call starts folded,
   await page.focus("#aout-list > .sec >> nth=1 >> .aofold"); await page.keyboard.press("Enter");
   assert.equal(await page.evaluate(() => document.activeElement.classList.contains("aofold")), true, "a fold toggled from the keyboard keeps it");
   await page.keyboard.press("Enter");
+  await page.focus("#aout-log"); await page.keyboard.press("Home"); await page.keyboard.press("]"); await page.keyboard.press("]");
+  await page.keyboard.press("f");
+  assert.equal(await page.getAttribute("#aout-list > .sec >> nth=1 >> .aofold", "aria-expanded"), "false", "F folds the call you jumped to");
+  await page.keyboard.press("f");
+  assert.equal(await page.getAttribute("#aout-list > .sec >> nth=1 >> .aofold", "aria-expanded"), "true", "and F again unfolds it");
   await page.focus("#aout-q");
   for (let k = 0; k < 12; k++) { await page.keyboard.press("Tab"); assert.equal(await page.evaluate(() => document.activeElement.classList.contains("aofold")), false, "Tab skips the fold buttons") }
   await page.click("#aout-foldall");
@@ -2090,7 +2095,7 @@ test("log view: Share log… sends nothing until the host has taken private deta
   assert.equal(await page.isDisabled("#aout-share-copy"), true, "an answer to another ask is dropped");
   await page.evaluate(req => mc.logshared({name: "plan-b", req, text: "12:00:00  ls [path]", removed: 4}), ask.req);
   assert.match(await page.textContent("#aout-share"), /Private details are taken out: 4 removed/);
-  assert.equal(await page.textContent("#aout-share .aopv"), "12:00:00  ls [path]");
+  assert.equal(await page.textContent("#aout-share .aopv"), "12:00:00  ls [path]", "the preview is the whole export");
   await page.click("#aout-share-copy");
   assert.deepEqual((await posts(page, "copyText")).pop(), {cmd: "copyText", text: "12:00:00  ls [path]"}, "Copy sends the redacted text only");
   assert.match(await page.textContent("#aout-share-copy"), /Copied/);

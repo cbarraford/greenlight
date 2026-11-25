@@ -13,12 +13,15 @@ Stdlib only.
 """
 from __future__ import annotations
 
+import contextlib
 import getpass
+import hashlib
 import json
 import os
 import re
 import socket
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -90,49 +93,50 @@ def _contrib(model: str, u: dict[str, Any]) -> tuple[int, int, int, int, float |
     return i + cr + cw, o, cr, cw, cost
 
 
-def _add(tot: dict[str, Any], model: str, u: dict[str, Any], sign: int) -> None:
-    tin, tout, cr, cw, cost = _contrib(model, u)
-    for k, v in (("in", tin), ("out", tout), ("cache_read", cr), ("cache_write", cw)):
-        tot[k] += sign * v
-    if cost is None:
-        tot["unpriced"] += sign * (1 if tin or tout else 0)
-    else:
-        tot["cost"] += sign * cost
-
-
 def claude_scan(path: Path, st: dict[str, Any] | None = None) -> dict[str, Any]:
-    """A Claude Code transcript's running totals, carried on from `st` (what an earlier read left). A streamed message
-    repeats its usage on consecutive lines: the fullest one counts, once."""
-    st = st or {"offset": 0, "tot": {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0, "cost": 0.0, "unpriced": 0, "models": []},
-                "last": None}
-    tot, last, models = st["tot"], st["last"], set(st["tot"]["models"])
+    """A Claude Code transcript's messages, {id: [model, in, out, cache read, cache write]}, carried on from `st` (what an
+    earlier read left). A streamed message repeats its usage: the fullest copy counts."""
+    st = st or {"offset": 0, "msgs": {}}
     objs, st["offset"] = _read(path, st["offset"])
+    msgs = st["msgs"]
     for d in objs:
         m = d.get("message")
         if not isinstance(m, dict) or not isinstance(m.get("usage"), dict):
             continue
-        mid, model, u = str(m.get("id") or d.get("uuid") or ""), str(m.get("model") or ""), m["usage"]
-        if last and mid and last["id"] == mid:
-            if _num(u.get("output_tokens")) < _num(last["usage"].get("output_tokens")):
-                continue
-            _add(tot, last["model"], last["usage"], -1)
-        _add(tot, model, u, 1)
-        last = {"id": mid, "model": model, "usage": u}
-        if model and not model.startswith("<"):
-            models.add(model)
-    tot["models"], st["last"] = sorted(models), last
+        mid = str(m.get("id") or d.get("uuid") or f"#{len(msgs)}")
+        tin, tout, cr, cw, _ = _contrib("", m["usage"])
+        if mid not in msgs or tout >= msgs[mid][2]:
+            msgs[mid] = [str(m.get("model") or ""), tin, tout, cr, cw]
     return st
 
 
-def _claude_out(st: dict[str, Any]) -> dict[str, Any]:
-    t = st["tot"]
-    return {"in": t["in"], "out": t["out"], "cache_read": t["cache_read"], "cache_write": t["cache_write"],
-            "cost_cents": None if t["unpriced"] else t["cost"], "models": set(t["models"])}
+def _claude_total(msgs: dict[str, list[Any]], seen: set[str] | None = None) -> dict[str, Any]:
+    """Totals over messages not already counted in `seen` (a resumed session's file carries the earlier messages again)."""
+    out: dict[str, Any] = {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0, "cost_cents": 0.0, "models": set()}
+    for mid, (model, tin, tout, cr, cw) in msgs.items():
+        if seen is not None:
+            if mid in seen:
+                continue
+            seen.add(mid)
+        out["in"] += tin
+        out["out"] += tout
+        out["cache_read"] += cr
+        out["cache_write"] += cw
+        if model and not model.startswith("<"):
+            out["models"].add(model)
+        p = price(model)
+        if p is None:
+            if tin or tout:
+                out["cost_cents"] = None
+        elif out["cost_cents"] is not None:
+            i = tin - cr - cw
+            out["cost_cents"] += (i * p[0] + cw * p[0] * CACHE_WRITE + cr * p[2] + tout * p[1]) / 1e6 * 100
+    return out
 
 
 def claude_usage(path: Path) -> dict[str, Any]:
     """One Claude Code transcript: {in, out, cache_read, cache_write, cost_cents|None, models}."""
-    return _claude_out(claude_scan(path))
+    return _claude_total(claude_scan(path)["msgs"])
 
 
 def codex_scan(path: Path, st: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -166,25 +170,38 @@ def _cache_file() -> Path:
     return diag.home() / "dash" / "usage-cache.json"
 
 
-def _session_usage(f: Path, kind: str, cache: dict[str, Any]) -> dict[str, Any] | None:
-    """One session's usage. The cache keeps each transcript's totals and how far it was read: a live session's new lines
-    are the only ones read on the next poll; a file that shrank (rewritten) is read again from the start."""
-    if kind not in ("claude", "codex"):
+def _identity(f: Path) -> list[Any] | None:
+    """What makes a transcript the same file next time: device, inode and its first line's hash (a file restored or
+    replaced at the same path is read from the start)."""
+    try:
+        st = f.stat()
+        with f.open("rb") as fh:
+            head = fh.readline(4096)
+    except OSError:
         return None
+    return [st.st_dev, st.st_ino, hashlib.sha256(head).hexdigest()[:16]]
+
+
+def _session_state(f: Path, kind: str, cache: dict[str, Any]) -> dict[str, Any] | None:
+    """One session's scan state. The cache keeps how far each transcript was read: a live session's poll reads only its
+    new lines; a file that shrank or isn't the same file any more is read again from the start."""
+    ident = _identity(f)
+    if ident is None:
+        return None
+    hit = cache.get(str(f))
+    st = hit.get("st") if isinstance(hit, dict) and hit.get("kind") == kind and hit.get("id") == ident and isinstance(hit.get("st"), dict) else None
     try:
         size = f.stat().st_size
     except OSError:
         return None
-    hit = cache.get(str(f))
-    st = hit.get("st") if isinstance(hit, dict) and hit.get("kind") == kind and isinstance(hit.get("st"), dict) else None
-    if st is None or not isinstance(st.get("offset"), int) or st["offset"] > size:
+    if st is not None and (not isinstance(st.get("offset"), int) or st["offset"] > size):
         st = None
     try:
         st = claude_scan(f, st) if kind == "claude" else codex_scan(f, st)
-    except (KeyError, TypeError, AttributeError):  # a cache from another shape: start over
+    except (KeyError, TypeError, AttributeError, ValueError):  # a cache from another shape: start over
         st = claude_scan(f) if kind == "claude" else codex_scan(f)
-    cache[str(f)] = {"kind": kind, "st": st}
-    return _claude_out(st) if kind == "claude" else _codex_out(st)
+    cache[str(f)] = {"kind": kind, "id": ident, "st": st}
+    return st
 
 
 def _load_cache() -> dict[str, Any]:
@@ -196,25 +213,34 @@ def _load_cache() -> dict[str, Any]:
         return {}
 
 
-def _save_cache(cache: dict[str, Any], keep: set[str]) -> None:
-    f = _cache_file()
+def _save_cache(cache: dict[str, Any]) -> None:
+    """Every workspace's entries, minus transcripts that are gone; written whole and atomically (two polls may race)."""
+    f, tmp = _cache_file(), ""
     try:
         f.parent.mkdir(parents=True, exist_ok=True)
-        tmp = f.with_suffix(".tmp")
-        with tmp.open("w") as fh:
-            json.dump({k: v for k, v in cache.items() if k in keep}, fh)
-        tmp.replace(f)
+        fd, tmp = tempfile.mkstemp(dir=f.parent, prefix=".usage-", suffix=".tmp")
+        with os.fdopen(fd, "w") as fh:
+            json.dump({k: v for k, v in cache.items() if Path(k).exists()}, fh)
+        os.replace(tmp, f)
     except OSError:
-        pass
+        if tmp:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
 
 
 def usage(files: list[tuple[Path, str]]) -> dict[str, Any]:
-    """The sessions' totals. cost_cents is None when any session with tokens has no price (Codex, an unknown model):
-    a partial sum would read as the whole cost."""
+    """The sessions' totals, oldest first so a resumed session's carried-over messages count once. cost_cents is None
+    when any session with tokens has no price (Codex, an unknown model) or can't be read (agy): a partial sum would read
+    as the whole cost."""
     tot: dict[str, Any] = {"in_tokens": 0, "out_tokens": 0, "cache_read": 0, "sessions": 0, "cost_cents": 0.0, "models": set()}
-    cache = _load_cache()
-    for f, kind in files:
-        u = _session_usage(f, kind, cache)
+    cache, seen = _load_cache(), set[str]()
+    for f, kind in sorted(files, key=lambda x: _mtime(x[0])):
+        if kind not in ("claude", "codex"):
+            if f.exists():
+                tot["cost_cents"] = None  # a session whose tokens it can't read
+            continue
+        st = _session_state(f, kind, cache)
+        u = None if st is None else _claude_total(st["msgs"], seen) if kind == "claude" else _codex_out(st)
         if not u or not (u["in"] or u["out"]):
             continue
         tot["sessions"] += 1
@@ -227,9 +253,16 @@ def usage(files: list[tuple[Path, str]]) -> dict[str, Any]:
         tot["cost_cents"] = round(tot["cost_cents"], 2) if tot["sessions"] else None
     tot["models"] = sorted(tot["models"])[:6]
     tot["estimated"] = tot["cost_cents"] is not None
-    if files:  # other workspaces' entries stay: the cache is shared
-        _save_cache(cache, set(cache) - {str(f) for f, _ in files if not f.exists()})
+    if files:
+        _save_cache(cache)
     return tot
+
+
+def _mtime(f: Path) -> float:
+    try:
+        return f.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 # ---------- sharing: a privacy-safe copy of the log ----------
@@ -238,7 +271,7 @@ SCP_RE = re.compile(r"\b[\w.-]+@[\w.-]+\.\w+:[\w./~-]+")  # git@host:owner/repo.
 USERHOST_RE = re.compile(r"\b[\w.-]+@[A-Za-z][\w-]*(?:\.[\w-]+)*\b")  # alice@buildbox, a shell prompt's user@host
 HOST_RE = re.compile(r"\b(?:[a-z0-9-]+\.)+(?:local|lan|internal|corp|home|ts\.net)\b", re.I)
 IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-PATH_RE = re.compile(r"(?<![\w.])(?:~(?=/)|/(?:home|Users|root|tmp|private|var|opt|srv|mnt|Volumes))(?:/[^\s'\"`:,;)\]]*)?")
+PATH_RE = re.compile(r"(?<![\w.~/-])(?:~(?=/)|/(?!(?:usr|bin|sbin|lib|lib64|dev|proc|sys)(?=/|\b))[\w.@+-]+)(?:/[^\s'\"`:,;)\]]*)?")  # any absolute path but the system's own
 # NAME=value / NAME: value where the name says it's a credential, whatever the value looks like
 ASSIGN_RE = re.compile(r"(?i)([\"']?)\b([A-Z0-9_.-]*(?:PASSWORD|PASSWD|PASSPHRASE|SECRET|TOKEN|[_-]KEY|API[_-]?KEY|"
                        r"CREDENTIALS?|AUTH)[A-Z0-9_.-]*)\1(\s*[=:]\s*)(?:\"[^\"\n]*\"|'[^'\n]*'|(?![\s\[])[^\n,;}]+)")  # the whole value: quoted, or to the line's end

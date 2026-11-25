@@ -128,6 +128,11 @@ def test_redact_takes_out_credential_assignments_whatever_the_value():
     assert out == "mysql --password [secret] -u root; gh --token [secret] --verbose", out
 
 
+def test_redact_takes_out_any_absolute_path_but_the_systems():
+    out, _ = log_view.redact("cat /workspace/acme/private/roadmap.md /etc/ssl/private/key.pem; /usr/bin/env python3 -c 1/2; and/or")
+    assert out == "cat [path] [path]; /usr/bin/env python3 -c 1/2; and/or", out
+
+
 def test_redact_takes_a_url_whole_brackets_included():
     out, _ = log_view.redact("see (https://ci.example.com/job/(internal)/artifact?signature=abc123def). Done")
     assert out == "see ([url]). Done", out
@@ -136,6 +141,31 @@ def test_redact_takes_a_url_whole_brackets_included():
 def test_redact_takes_out_the_workspaces_own_name_and_path():
     out, n = log_view.redact("On branch secret-proj-fix in /srv/w/secret-proj-fix", ("secret-proj-fix", "/srv/w/secret-proj-fix"))
     assert "secret-proj" not in out and n == 2, out
+
+
+def test_usage_counts_a_resumed_sessions_carried_messages_once_and_an_unreadable_session_drops_the_cost(tmp_path, monkeypatch):
+    monkeypatch.setattr(log_view, "_cache_file", lambda: tmp_path / "c.json")
+    old = _write(tmp_path / "a.jsonl", [_claude_msg("m1", "claude-opus-5-5", 100, 10)])
+    os.utime(old, (1, 1))
+    new = _write(tmp_path / "b.jsonl", [_claude_msg("m1", "claude-opus-5-5", 100, 10), _claude_msg("m2", "claude-opus-5-5", 5, 1)])
+    u = log_view.usage([(new, "claude"), (old, "claude")])
+    assert (u["in_tokens"], u["out_tokens"], u["sessions"]) == (105, 11, 2)
+    agy = _write(tmp_path / "transcript.jsonl", [{"x": 1}])
+    assert log_view.usage([(new, "claude"), (agy, "agy")])["cost_cents"] is None, "an agy session's tokens are unknown: no partial cost"
+
+
+def test_usage_starts_over_on_a_replaced_file_and_prunes_gone_ones(tmp_path, monkeypatch):
+    monkeypatch.setattr(log_view, "_cache_file", lambda: tmp_path / "c.json")
+    f = _write(tmp_path / "s.jsonl", [_claude_msg("a", "claude-opus-5-5", 10, 1)])
+    assert log_view.usage([(f, "claude")])["in_tokens"] == 10
+    f.unlink()
+    _write(f, [_claude_msg("z", "claude-opus-5-5", 3, 1), _claude_msg("y", "claude-opus-5-5", 4, 1), _claude_msg("x", "claude-opus-5-5", 5, 1)])
+    assert log_view.usage([(f, "claude")])["in_tokens"] == 12, "another file at the same path, longer: read from its start"
+    g = _write(tmp_path / "g.jsonl", [_claude_msg("g", "claude-opus-5-5", 1, 1)])
+    log_view.usage([(g, "claude")])
+    f.unlink()
+    log_view.usage([(g, "claude")])
+    assert set(json.loads((tmp_path / "c.json").read_text())) == {str(g)}, "a deleted transcript's entry goes"
 
 
 def test_redact_catches_prompts_env_paths_file_urls_and_windows_homes(monkeypatch):
