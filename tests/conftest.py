@@ -30,6 +30,8 @@ atexit.register(shutil.rmtree, _BOOT_DEV_HOME, True)
 os.environ["GREENLIGHT_HOME"] = str(_BOOT_HOME)
 os.environ["GREENLIGHT_DEV_HOME"] = str(_BOOT_DEV_HOME)
 os.environ.setdefault("GREENLIGHT_ME", "octo")
+os.environ.setdefault("GREENLIGHT_ADE", "orca")  # the suites predate the native default; tests of the default unset it
+(_BOOT_HOME / "imported.json").write_text("{}")  # never the first-run import of this machine's real ADEs (importers.first_run)
 os.environ["GREENLIGHT_TMUX_SOCKET"] = f"gl-pytest-{os.getpid()}"  # dash.snapshot lists the app's tmux panes: never the real Basement's
 os.environ.pop("GREENLIGHT_RUN", None)
 os.environ["GREENLIGHT_USAGE"] = "off"  # usage.py: never the agents' usage APIs with your real sign-ins

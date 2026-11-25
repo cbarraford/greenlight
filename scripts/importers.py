@@ -13,11 +13,13 @@ goal, only where greenlight has none yet: an import never overwrites a goal). No
 an import can run again any time (Settings → Import, `greenlight.py import`), and a source that fails to answer
 is reported and skipped.
 """
+import contextlib
 import json
 import os
 import re
 import shutil
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -114,7 +116,9 @@ def gather(sources, paths=()):
                         bad.append(str(e)[:200])
             else:
                 repos, goals = from_backend(s)
-            out[s] = {"repos": list(dict.fromkeys(repos)), "goals": goals, **({"error": "; ".join(bad)} if bad else {})}
+            bad = list(dict.fromkeys(bad))  # overlapping folders name a skipped one once; and only the first few
+            err = "; ".join(bad[:3]) + (f"; and {len(bad) - 3} more" if len(bad) > 3 else "")
+            out[s] = {"repos": list(dict.fromkeys(repos)), "goals": goals, **({"error": err} if bad else {})}
         except Exception as e:  # noqa: BLE001 - an ADE that isn't running, or changed its CLI: report it, import the rest
             out[s] = {"error": f"{type(e).__name__}: {str(e)[:200]}"}
             diag.event("import", source=s, err=type(e).__name__, msg_class=diag.classify(str(e)))
@@ -170,6 +174,81 @@ def apply(p):
             goals[path] = g
     diag.event("import", op="apply", n_repos=len(p["repos"]), n_goals=len(goals), n_kept=len(p["kept"]))
     return {**p, "goals": goals}
+
+
+FIRST_RUN = "imported.json"  # in GREENLIGHT_HOME: the one automatic import has happened (what it found)
+
+
+RETRY_SECS, RETRIES = 3600, 5  # a source that failed (its app not running) is tried again hourly, a few times
+
+
+def first_run():
+    """Once per install, the first time the native engine lists workspaces: import every detected ADE (not folders),
+    so someone moving from Orca, T3, cmux or herdr keeps their repos and goals. A source that couldn't be read is
+    tried again later (`pending`), a few times. Never raises; the marker (imported.json) makes it once."""
+    if not ade.is_native():
+        return None
+    marker = ade_basement.HOME / FIRST_RUN
+    if _due(marker) is None:
+        return None  # the cheap answer, most of the time: nothing to do
+    with _claimed(marker.with_suffix(".lock")) as mine:
+        if not mine:
+            return None  # another listing is importing right now
+        due = _due(marker)  # again, holding the claim: another listing may have just done it
+        return None if due is None else _first_import(marker, *due)
+
+
+def _due(marker):
+    """(marker contents or None, sources to import) when an import or a retry is due now, else None."""
+    try:
+        m = json.loads(marker.read_text()) if marker.exists() else None
+    except (OSError, ValueError):
+        return None  # unreadable: done (never import twice on a guess)
+    if m is None:
+        if ade_basement.REPOS.exists():  # already set up on native (repos added or removed by hand): never re-add them
+            return None, []
+        return None, [s for s, ok in detect().items() if ok and s != "folder"]
+    num = lambda k, d: v if isinstance(m, dict) and isinstance(v := m.get(k, d), (int, float)) else d  # noqa: E731
+    pending = m.get("pending") if isinstance(m, dict) and isinstance(m.get("pending"), list) else None
+    if not pending or num("attempts", RETRIES) >= RETRIES or time.time() - num("ts", time.time()) < RETRY_SECS:
+        return None
+    # the import writes its marker after its files: anything newer is the user's own work on native, which a retry
+    # would undo (re-adding a repo or goal they removed)
+    if any(f.exists() and f.stat().st_mtime > marker.stat().st_mtime for f in (ade_basement.REPOS, ade_common.GOALS)):
+        return None
+    return m, [s for s in pending if s in SOURCES and s != "folder"]
+
+
+@contextlib.contextmanager
+def _claimed(lock):
+    """Yield True when this process holds lock (an O_EXCL file; a stale one, over 15 min old, is taken over)."""
+    try:
+        if lock.exists() and time.time() - lock.stat().st_mtime > 900:
+            lock.unlink(missing_ok=True)
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+    except OSError:
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        lock.unlink(missing_ok=True)
+
+
+def _first_import(marker, m, sources):
+    try:
+        p = apply(plan(gather(sources)))
+        res = {"repos": len(p["repos"]), "goals": len(p["goals"]), "sources": p["sources"],
+               "pending": [s for s, v in p["sources"].items() if v.get("error")]}
+    except Exception as e:  # noqa: BLE001 - the import is a convenience: listing must go on
+        res = {"error": type(e).__name__, "pending": sources}
+    a = m.get("attempts") if isinstance(m, dict) else None
+    res["attempts"] = (a if isinstance(a, int) else 0) + 1
+    with contextlib.suppress(OSError):
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({"ts": int(time.time()), **res}, indent=1))
+    return res
 
 
 def run(argv):

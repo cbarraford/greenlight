@@ -56,10 +56,12 @@ def test_folder_scan(home):
         inner.mkdir(mode=0o000)  # a subfolder that can't be opened: named, and the rest still imports
         try:
             got = importers.gather(["folder"], [str(code)])["folder"]
-            assert "can't open" in got["error"] and str(a.resolve()) in got["repos"]
+            assert f"can't open: {inner}" in got["error"] and str(a.resolve()) in got["repos"]  # named, never silently missed
         finally:
             inner.chmod(0o700)
     shut.chmod(0o700)
+    many = importers.gather(["folder"], [str(home / f"no{i}") for i in range(5)] + [str(home / "no0")])["folder"]["error"]
+    assert many.count("not a folder") == 3 and many.endswith("and 2 more")  # capped, each named once
     got = importers.gather(["folder"], [str(code), str(home / "typo")])["folder"]  # one bad folder doesn't drop the rest
     assert str(a.resolve()) in got["repos"] and "not a folder" in got["error"]
 
@@ -163,3 +165,93 @@ def test_run_cli_and_dash_ops(home, monkeypatch):
     assert "no op" in ask("frob", {})["error"]
     out = ask("apply", {"from": ["folder"], "paths": [str(home / "code")]})
     assert out["repos"] == ade_basement.saved() == [str((home / "code" / "x").resolve())]
+
+
+def test_first_run_imports_once_on_native(home, monkeypatch):
+    import greenlight
+    monkeypatch.setattr(greenlight, "project_setups", lambda tries=2: None)  # never this machine's real Orca
+    monkeypatch.setattr(ade_basement, "HOME", home / "home")
+    r = git_init(home / "r")
+    monkeypatch.setattr(importers, "detect", lambda: {"orca": True, "t3": False, "cmux": False, "herdr": False, "folder": True})
+    calls = []
+    monkeypatch.setattr(importers.ade, "get", lambda n: calls.append(n) or fake_backend([{"path": str(r), "repoId": str(r), "comment": "Main goal"}]))
+    monkeypatch.setenv("GREENLIGHT_ADE", "orca")
+    assert importers.first_run() is None and calls == []  # Orca in use: nothing to import into
+    monkeypatch.setenv("GREENLIGHT_ADE", "native")
+    assert importers.first_run() == {"repos": 1, "goals": 1, "sources": {"orca": {"repos": 1, "goals": 1}}, "pending": [], "attempts": 1}
+    assert calls == ["orca", "orca"] and ade_basement.saved() == [str(r.resolve())] and ade_common.goals() == {str(r): "Main goal"}
+    assert json.loads((home / "home" / importers.FIRST_RUN).read_text())["repos"] == 1
+    assert importers.first_run() is None and calls == ["orca", "orca"]  # once
+    (home / "home" / importers.FIRST_RUN).unlink()
+    assert importers.first_run()["pending"] == [] and calls == ["orca", "orca"]  # repos.json exists: already native, nothing re-added
+    (home / "home" / importers.FIRST_RUN).unlink()
+    ade_basement.REPOS.unlink()
+    monkeypatch.setattr(importers, "gather", lambda *a: 1 / 0)  # a failing import never raises, and is tried again later
+    assert importers.first_run() == {"error": "ZeroDivisionError", "pending": ["orca"], "attempts": 1}
+    assert importers.first_run() is None  # not before RETRY_SECS
+    mk = home / "home" / importers.FIRST_RUN
+    old = json.loads(mk.read_text())
+    mk.write_text(json.dumps({**old, "ts": 0}))
+    monkeypatch.setattr(importers, "gather", lambda s: calls.append(tuple(s)) or {"orca": {"repos": [], "goals": {}}})
+    assert importers.first_run()["pending"] == [] and calls[-1] == ("orca",)  # only the source that failed is tried again
+    assert importers.first_run() is None  # nothing pending: done
+    lock = (home / "home" / importers.FIRST_RUN).with_suffix(".lock")
+    mk.write_text(json.dumps({"ts": 0, "pending": ["orca"], "attempts": 1}))
+    lock.write_text("")  # another listing is importing right now
+    assert importers.first_run() is None and json.loads(mk.read_text())["attempts"] == 1
+    lock.unlink()
+    mk.write_text(json.dumps({"ts": 0, "pending": ["orca"], "attempts": importers.RETRIES}))
+    assert importers.first_run() is None  # gave up after a few tries (Settings → Import is still there)
+    mk.write_text(json.dumps({"ts": "x", "pending": ["orca"], "attempts": "y"}))
+    assert importers.first_run() is None  # a hand-mangled marker never raises into a listing
+    mk.write_text(json.dumps({"ts": 0, "pending": ["orca"], "attempts": 1}))
+    ade_common.GOALS.unlink(missing_ok=True)  # only repos.json is in play below
+    ade_basement.remember("/srv/old")
+    os.utime(ade_basement.REPOS, (1, 1))
+    os.utime(mk, (2, 2))  # the marker is newer than every file: a retry is due (the control)
+    assert importers.first_run() is not None
+    mk.write_text(json.dumps({"ts": 0, "pending": ["orca"], "attempts": 1}))
+    os.utime(mk, (2, 2))
+    ade_basement.remember("/srv/x")  # the user edits repos.json after the marker
+    assert importers.first_run() is None  # a retry would re-add a repo or goal they removed: none
+
+
+def test_first_run_rechecks_under_the_claim(home, monkeypatch):
+    import contextlib
+    monkeypatch.setattr(ade_basement, "HOME", home / "home")
+    monkeypatch.setenv("GREENLIGHT_ADE", "native")
+    monkeypatch.setattr(importers, "detect", lambda: {"orca": True, "t3": False, "cmux": False, "herdr": False, "folder": True})
+    ran = []
+    monkeypatch.setattr(importers, "_first_import", lambda *a: ran.append(a))
+
+    @contextlib.contextmanager
+    def finished_meanwhile(lock):  # another listing finished its import while this one waited for the claim
+        (home / "home").mkdir(exist_ok=True)
+        (home / "home" / importers.FIRST_RUN).write_text(json.dumps({"ts": 1, "pending": []}))
+        yield True
+    monkeypatch.setattr(importers, "_claimed", finished_meanwhile)
+    assert importers.first_run() is None and ran == []  # decided again under the claim: nothing left to do
+
+
+def test_doctor_flags_a_deprecated_driver(home, monkeypatch):
+    import diag
+    monkeypatch.setenv("GREENLIGHT_ADE", "native")
+    checks = {c["check"]: c for c in diag.doctor(quick=True)["checks"]}
+    assert "tmux" in checks and "git" in checks  # native needs both
+    monkeypatch.setattr(diag.shutil, "which", lambda n: None if n == "tmux" else "/usr/bin/" + n)
+    checks = {c["check"]: c for c in diag.doctor(quick=True)["checks"]}
+    assert checks["tmux"]["ok"] is False and checks["tmux"]["state"] == "missing"
+    monkeypatch.undo()
+    monkeypatch.setenv("GREENLIGHT_ADE", "herdr")
+    chk = next(c for c in diag.doctor(quick=True)["checks"] if c["check"] == "ade")
+    assert chk["ok"] is False and chk["state"] == "deprecated"
+    monkeypatch.setenv("GREENLIGHT_ADE", "native")
+    chk = next(c for c in diag.doctor(quick=True)["checks"] if c["check"] == "ade")
+    assert chk["ok"] is True and chk["state"] == "native"
+    assert not any(c["check"] == "ade_config" for c in diag.doctor(quick=True)["checks"])  # no value: nothing to flag
+    monkeypatch.delenv("GREENLIGHT_ADE")
+    (home / "home").mkdir(exist_ok=True)
+    monkeypatch.setenv("GREENLIGHT_HOME", str(home / "home"))
+    (home / "home" / "config.json").write_text(json.dumps({"ade": "basment"}))
+    chk = next(c for c in diag.doctor(quick=True)["checks"] if c["check"] == "ade_config")
+    assert chk["ok"] is False and chk["state"] == "invalid"  # a typo the user should fix

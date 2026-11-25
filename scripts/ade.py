@@ -5,8 +5,9 @@
     dispatch(b, *args)  an `orca …`-shaped call (greenlight.py ade, and every core caller today) answered by b's contract
 
 `native` is greenlight's own engine: git worktrees, the app's tmux server (`tmux -L greenlight`), repos.json and
-goals.json (ade_basement.py; `basement` is its old name). `orca` drives the Orca app. cmux, herdr and t3 are the
-legacy live drivers.
+goals.json (ade_basement.py; `basement` is its old name), and the default. `orca` drives the Orca app (opt-in). cmux,
+herdr and t3 are the deprecated legacy live drivers: they still answer when set, but importers.py brings their repos
+and goals in once, and external.py sees the agents they run, so the native engine needs neither.
 
 The contract (what core code may ask of a backend; rows are in Orca's worktree/terminal shape, the one the scan reads):
 
@@ -22,6 +23,7 @@ The contract (what core code may ask of a backend; rows are in Orca's worktree/t
 
 Stdlib only; no greenlight import at module level (greenlight imports this; ade_orca imports greenlight lazily).
 """
+import fcntl
 import importlib
 import json
 import os
@@ -29,19 +31,23 @@ from pathlib import Path
 
 import ade_common
 
-DEFAULT = "orca"  # ponytail: #195 flips this to native once the importers and passive coexistence are in
+DEFAULT = "native"  # a new install's engine on macOS and Linux (#195); one that ran on Orca keeps it (settle)
 ALIASES = {"basement": "native"}
 MODULES = {"native": "ade_basement", "orca": "ade_orca", "cmux": "ade_cmux", "herdr": "ade_herdr", "t3": "ade_t3"}
 NAMES = tuple(MODULES)
+LEGACY = ("cmux", "herdr", "t3")  # deprecated live drivers: still answer when set, but importers.py + external.py replace them
 
 
-def _config_ade():
-    home = Path(os.environ.get("GREENLIGHT_HOME") or Path.home() / ".greenlight")
+def _home():
+    return Path(os.environ.get("GREENLIGHT_HOME") or Path.home() / ".greenlight")
+
+
+def _config_raw_ade():
     try:
-        v = json.loads((home / "config.json").read_text()).get("ade")
-    except (OSError, ValueError, AttributeError):
+        cfg = json.loads((_home() / "config.json").read_text())
+    except (OSError, ValueError):
         return None
-    return v if isinstance(v, str) else None
+    return cfg.get("ade") if isinstance(cfg, dict) else None
 
 
 def canonical(n):
@@ -52,14 +58,53 @@ def canonical(n):
 
 
 def name():
-    """The backend in use. An unknown GREENLIGHT_ADE is an error (it names a backend that isn't there), an unknown
-    config value falls through to the default."""
+    """The backend in use. An unknown GREENLIGHT_ADE is an error (it names a backend that isn't there); an unknown
+    config value is left alone and answered from the install's history (Orca if it ran before, else the default)."""
     env = os.environ.get("GREENLIGHT_ADE")
     if env:
         if not (n := canonical(env)):
             raise RuntimeError(f"GREENLIGHT_ADE={env!r}: not one of {', '.join(NAMES)}")
         return n
-    return canonical(_config_ade()) or DEFAULT
+    raw = _config_raw_ade()
+    if raw not in (None, ""):  # set: a backend, or a typo left for the user to fix (diag doctor flags it, ade_config)
+        return canonical(raw if isinstance(raw, str) else None) or ("orca" if ran_before() else DEFAULT)
+    return settle()
+
+
+def ran_before():
+    """This install already ran greenlight (on Orca, the old default): what only a past scan or run leaves. Not me.json
+    (importing greenlight writes it), state/ (update.py), auto/ (the timer's first tick) or diag/."""
+    return any((_home() / x).exists() for x in ("last.json", "log.jsonl", "decisions.jsonl", "history"))
+
+
+def config_ok():
+    """False when config.json sets an "ade" that names no backend (doctor says so)."""
+    raw = _config_raw_ade()
+    return raw in (None, "") or bool(canonical(raw if isinstance(raw, str) else None))
+
+
+def settle():
+    """The backend for an install that never chose one, decided once and written into config.json ("ade") so it never
+    flips later. A new install gets DEFAULT (native). One that already ran greenlight (a scan's last.json, log.jsonl,
+    decisions.jsonl or history/) ran on Orca, the old default, and keeps it: native is then an explicit switch (README, under Requirements)."""
+    home = _home()
+    n = "orca" if ran_before() else DEFAULT
+    f = home / "config.json"
+    why = "this install ran on Orca before native became the default" if n == "orca" else "a new install: native by default"
+    try:
+        home.mkdir(parents=True, exist_ok=True)
+        with open(f.with_suffix(".lock"), "w") as lock:  # decide.set_conf's lock: one writer at a time
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            cfg = json.loads(f.read_text()) if f.exists() else {}
+            if isinstance(cfg, dict) and not cfg.get("ade"):  # absent only: a typo stays the user's to fix
+                tmp = f.with_name(f".{f.name}.{os.getpid()}.tmp")
+                tmp.write_text(json.dumps({**cfg, "ade": n, "ade_set_because": why}, indent=1))
+                os.replace(tmp, f)
+            elif isinstance(cfg, dict) and isinstance(cfg["ade"], str):
+                n = canonical(cfg["ade"]) or n  # another process settled it meanwhile (or a typo: decided, left alone)
+    except (OSError, ValueError):
+        pass  # can't write it (or not settings we can add to): the same answer next time, from the same facts
+    return n
 
 
 def is_orca():
@@ -68,6 +113,15 @@ def is_orca():
 
 def is_native():
     return name() == "native"
+
+
+def deprecated():
+    """The legacy live driver in use (cmux, herdr, t3), else None: diag doctor says so."""
+    try:
+        n = name()
+    except RuntimeError:
+        return None
+    return n if n in LEGACY else None
 
 
 def get(n=None):

@@ -1,6 +1,8 @@
 """Helpers the non-Orca backends share: git facts Orca reports itself, orca flag parsing, what an agent's terminal shows
 (agent_state: one System One choice over its last lines, for any harness; draft: text typed but not sent), and goal
 storage for ADEs with no comment/description field."""
+import contextlib
+import fcntl
 import json
 import os
 import re
@@ -245,13 +247,22 @@ def goals():
         return {}
 
 
+@contextlib.contextmanager
+def locked(f):
+    """An exclusive lock beside f (f.lock) for one read-modify-write: two processes never drop each other's change."""
+    f.parent.mkdir(parents=True, exist_ok=True)
+    with open(f.with_name(f.name + ".lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
 def set_goal(path, goal):
-    g = goals()
-    g.pop(path, None) if not goal else g.update({path: goal})
-    GOALS.parent.mkdir(parents=True, exist_ok=True)
-    tmp = GOALS.with_name(f".{GOALS.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(g, indent=1))
-    os.replace(tmp, GOALS)
+    with locked(GOALS):
+        g = goals()
+        g.pop(path, None) if not goal else g.update({path: goal})
+        tmp = GOALS.with_name(f".{GOALS.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(g, indent=1))
+        os.replace(tmp, GOALS)
 
 
 def repo_list(worktrees):

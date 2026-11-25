@@ -33,8 +33,16 @@ NAME = "native"
 TMUX_SOCKET = os.environ.get("GREENLIGHT_TMUX_SOCKET") or "greenlight"
 
 
+READS = ("list-panes", "capture-pane", "display-message")
+
+
 def tmux(*args):
-    p = subprocess.run(["tmux", "-L", TMUX_SOCKET, *args], capture_output=True, text=True, timeout=20)
+    try:
+        p = subprocess.run(["tmux", "-L", TMUX_SOCKET, *args], capture_output=True, text=True, timeout=20)
+    except FileNotFoundError:  # no tmux: nothing of ours runs (a listing goes on); starting an agent can't
+        if args and args[0] in READS:
+            return ""
+        raise RuntimeError("tmux isn't installed: the native engine runs agents in `tmux -L greenlight`") from None
     if p.returncode and "no server running" not in p.stderr and "error connecting" not in p.stderr:
         raise RuntimeError(f"tmux {args[0]}: {p.stderr.strip()[:300]}")
     return p.stdout
@@ -137,13 +145,15 @@ def _save_repos(repos):
 
 
 def remember(repo):
-    if repo not in (have := saved()):
-        _save_repos([*have, repo])
+    with ade_common.locked(REPOS):
+        if repo not in (have := saved()):
+            _save_repos([*have, repo])
 
 
 def forget(repo):
-    if repo in (have := saved()):
-        _save_repos([r for r in have if r != repo])
+    with ade_common.locked(REPOS):
+        if repo in (have := saved()):
+            _save_repos([r for r in have if r != repo])
 
 
 def main_checkout(path):
@@ -170,6 +180,9 @@ def agent_worktree(path):
 
 
 def worktrees():
+    import importers  # here: importers imports this module
+    importers.first_run()  # the first listing on this install brings the other ADEs' repos and goals in (and retries a
+    # source that wasn't up, a few times); a no-op after that
     ps, g = panes(), goals()
     repos = dict.fromkeys([*saved(), *(git_info(p["cwd"])["repoId"] for p in {p["cwd"]: p for p in ps}.values())])
     paths = [l[9:] for repo in filter(None, repos)
@@ -222,8 +235,18 @@ def send(handle, text, enter):
         tmux("send-keys", "-t", handle, "-l", "--", text)
 
 
+def outside(path, paths=None):
+    """The agent another ADE or terminal runs in path (or a worktree nested in it), else None; a failed check says so.
+    cleanup.outside_agent's answer, against every worktree (paths, else listed now)."""
+    import cleanup  # here: cleanup imports greenlight, which imports ade and so this module
+    return cleanup.outside_agent(path, fresh=True, paths=[w["path"] for w in worktrees()] if paths is None else paths)
+
+
 def launch(path, agent, prompt):
-    """A detached tmux session in the worktree running the agent; the page attaches a tab to it (mc-… is the page's own naming)."""
+    """A detached tmux session in the worktree running the agent; the page attaches a tab to it (mc-… is the page's own naming).
+    Never beside an agent another ADE or terminal runs there (a second agent would fight it)."""
+    if out := outside(path):
+        raise RuntimeError(f"{out} runs in {path} outside Greenlight: no second agent beside it")
     if prompt and ("\n" in prompt or len(prompt.encode()) > 800):  # as herdr: a long brief goes by file
         BRIEFS.mkdir(mode=0o700, parents=True, exist_ok=True)
         brief = BRIEFS / f"{Path(path).name}-{int(time.time())}-{secrets.token_hex(4)}.md"
@@ -264,11 +287,14 @@ def set_goal(worktree_id, goal):
 
 
 def remove(worktree_id, force=False):
-    ws = next((w for w in worktrees() if w["id"] == worktree_id), None)
+    trees = worktrees()
+    ws = next((w for w in trees if w["id"] == worktree_id), None)
     if ws is None:
         raise RuntimeError(f"no native workspace {worktree_id}")
     if ws["isMainWorktree"]:
         raise RuntimeError(f"{worktree_id} is a repo's main checkout: it is never removed")
+    if out := outside(ws["path"], [w["path"] for w in trees]):
+        raise RuntimeError(f"{out} runs in {worktree_id} outside Greenlight: it isn't removed under it")
     worktree_remove(ws, force=force)
     ade_common.set_goal(ws["path"], "")
 

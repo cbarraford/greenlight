@@ -67,7 +67,8 @@ def _setup_stub_home(base: Path) -> dict[str, str]:
         encoding="utf-8",
     )
     stub.chmod(0o755)
-    (home / "config.json").write_text(json.dumps({"harnesses": {"claude": {"bin": str(stub)}}}) + "\n", encoding="utf-8")
+    # "ade": "orca": a scratch home must never run the native first-run import of this machine's real ADEs
+    (home / "config.json").write_text(json.dumps({"harnesses": {"claude": {"bin": str(stub)}}, "ade": "orca"}) + "\n", encoding="utf-8")
     return {
         **os.environ,
         "GREENLIGHT_HOST": "local",

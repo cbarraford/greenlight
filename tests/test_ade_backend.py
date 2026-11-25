@@ -20,20 +20,47 @@ def home(tmp_path, monkeypatch):
     return tmp_path
 
 
+def test_settle_new_and_existing_installs(home):
+    (home / "me.json").write_text('{"me": "x"}')  # importing greenlight writes it on a brand-new install too
+    (home / "state").mkdir()  # and update.py makes this one
+    (home / "auto").mkdir()  # and the timer's first tick this one
+    assert ade.name() == "native"  # a new install: native, written once
+    assert json.loads((home / "config.json").read_text())["ade"] == "native"
+    (home / "last.json").write_text("{}")  # its own scans later never flip it
+    assert ade.name() == "native"
+    (home / "config.json").write_text(json.dumps({"agents": ["codex"]}))  # an install that ran (on Orca) and never chose
+    assert ade.name() == "orca"
+    cfg = json.loads((home / "config.json").read_text())
+    assert cfg["ade"] == "orca" and cfg["agents"] == ["codex"] and "ade_set_because" in cfg  # its other settings stay
+    (home / "config.json").write_text("[1]")  # not settings: decided, nothing written
+    assert ade.name() == "orca" and (home / "config.json").read_text() == "[1]"
+    (home / "config.json").write_text(json.dumps({"ade": True}))  # not even a string: never a crash
+    assert ade.name() == "orca" and not ade.config_ok()  # an install that ran on Orca stays there (doctor flags the value)
+    (home / "config.json").write_text(json.dumps({"ade": "basment"}))  # a typo stays the user's to fix
+    assert ade.name() == "orca" and json.loads((home / "config.json").read_text())["ade"] == "basment"
+    (home / "last.json").unlink()
+    (home / "config.json").unlink()
+    (home / "history").mkdir()  # no scan ever finished (glab kept failing), but it ran: still an Orca install
+    assert ade.name() == "orca"
+
+
 def test_name_resolution(home, monkeypatch):
-    assert ade.name() == ade.DEFAULT == "orca" and ade.is_orca()
+    assert ade.name() == ade.DEFAULT == "native" and ade.is_native() and not ade.is_orca()  # a new install: native (#195)
+    (home / "config.json").write_text(json.dumps({"ade": "Orca"}))  # Orca: opt-in
+    assert ade.name() == "orca" and ade.is_orca()
     (home / "config.json").write_text(json.dumps({"ade": "Native"}))
     assert ade.name() == "native" and ade.is_native()
     (home / "config.json").write_text(json.dumps({"ade": "basement"}))  # the old name
     assert ade.name() == "native"
     (home / "config.json").write_text(json.dumps({"ade": "nope"}))  # an unknown config value: the default
-    assert ade.name() == "orca"
+    assert ade.name() == "native"
     (home / "config.json").write_text("{not json")
-    assert ade.name() == "orca"
+    assert ade.name() == "native" and ade.deprecated() is None
     (home / "config.json").write_text(json.dumps({"ade": "native"}))
     monkeypatch.setenv("GREENLIGHT_ADE", "t3")  # the env wins over a valid config
     assert ade.name() == "t3"
-    monkeypatch.setenv("GREENLIGHT_ADE", "rex")  # an env naming no backend is an error, not a silent Orca
+    assert ade.deprecated() == "t3"  # a legacy live driver still answers, flagged
+    monkeypatch.setenv("GREENLIGHT_ADE", "rex")  # an env naming no backend is an error, not a silent default
     with pytest.raises(RuntimeError, match="not one of"):
         ade.name()
 
@@ -202,6 +229,7 @@ def test_cli_ade_native_end_to_end(home, repo):
     """`greenlight.py ade` under GREENLIGHT_ADE=native: a real worktree, its goal, listed, removed. No tmux needed."""
     env = {"GREENLIGHT_HOME": str(home), "GREENLIGHT_ADE": "native", "GREENLIGHT_TMUX_SOCKET": "gl-test-none",
            "GREENLIGHT_ME": "tester", "PATH": "/usr/bin:/bin", "HOME": str(home)}
+    (home / "imported.json").write_text("{}")  # never this machine's real ADEs (the first-run import)
     run = lambda *a: subprocess.run([sys.executable, "scripts/greenlight.py", *a], capture_output=True, text=True, env=env, timeout=60)
     assert run("repos", "add", str(repo)).returncode == 0
     # --change: greenlight's own flag, the create's reason (a read-only GREENLIGHT_REQUEST would refuse it otherwise)
@@ -216,9 +244,11 @@ def test_cli_ade_native_end_to_end(home, repo):
 
 def test_dash_backend_order(home, monkeypatch):
     import dash
-    assert dash.ades() == ("orca", "cmux", "herdr", "t3")  # as before: an ADE's own workspace goes through that ADE
+    assert dash.ades() == ("orca", "native")  # the default: Orca's own workspaces still go through Orca, git finds the rest
     monkeypatch.setenv("GREENLIGHT_ADE", "basement")
-    assert dash.ades() == ("orca", "cmux", "herdr", "t3", "native")
+    assert dash.ades() == ("orca", "native")
+    monkeypatch.setenv("GREENLIGHT_ADE", "orca")
+    assert dash.ades() == ("orca", "cmux", "herdr", "t3")  # an Orca user's sidebar as before: every installed ADE
     monkeypatch.setenv("GREENLIGHT_ADE", "cmux")
     assert dash.ades() == ("orca", "cmux", "herdr", "t3")
     monkeypatch.setenv("GREENLIGHT_ADE", "bogus")
@@ -227,3 +257,78 @@ def test_dash_backend_order(home, monkeypatch):
     assert dash.ades() == ("orca",)
     assert dash.ade_call("orca") is greenlight.orca_cli  # tree_new knows an Orca create by it (placement as the user's pick)
     assert dash.ade_call("native") == ade_basement.call
+
+
+def test_native_without_tmux(home, monkeypatch):
+    def missing(*a, **k):
+        raise FileNotFoundError("tmux")
+    monkeypatch.setattr(ade_basement.subprocess, "run", missing)
+    assert ade_basement.panes() == []  # a listing goes on: nothing of ours runs
+    with pytest.raises(RuntimeError, match="tmux isn't installed"):
+        ade_basement.tmux("new-session", "-d")  # starting an agent says why it can't
+
+
+def test_dash_under_native_writes_goals_and_creates_natively(home, repo, monkeypatch):
+    import dash
+    monkeypatch.setattr(dash.greenlight, "project_setups", lambda tries=1: None)  # never this machine's real Orca
+    monkeypatch.setenv("GREENLIGHT_ADE", "native")
+    monkeypatch.setattr(ade_basement.ade_common, "GOALS", home / "goals.json")
+    orca_calls = []
+    monkeypatch.setattr(dash, "tree", lambda p, every=False: ((lambda *a: orca_calls.append(a) or {}), {"worktreeId": "o1", "repoId": "opaque"}, [{}])
+                        if every else ((lambda *a: orca_calls.append(a) or {}), {"worktreeId": "o1"}))
+    dash.tree_goal(str(repo), "  Ship   it ")
+    assert orca_calls[-1][-1] == "Ship it" and ade_basement.ade_common.goals()[str(repo)] == "Ship it"  # Orca's row, and the native scan's file
+    native = []
+    monkeypatch.setattr(dash, "ade_call", lambda n: (lambda *a: native.append(a) or {"worktree": {"path": "/srv/new", "id": "/srv/new"}}) if n == "native" else None)
+    monkeypatch.setattr(dash, "main_of", lambda p: str(repo))
+    monkeypatch.setattr(dash, "repo_cfg", lambda p: None)
+    n = len(orca_calls)
+    dash.tree_new(str(repo), {"name": "feat-n", "goal": "G"})
+    assert native and native[0][:4] == ("worktree", "create", "--repo", f"id:{repo}") and len(orca_calls) == n  # Greenlight's own
+    remote = {"worktreeId": "o2", "repoId": "opaque", "hostId": "laptop"}  # a row Orca lists for another host
+    orca = lambda *a: orca_calls.append(a) or ({"worktree": {"path": "/srv/remote/x-feat-r", "id": "o3"}} if a[1] == "create" else {})  # noqa: E731
+    monkeypatch.setattr(dash, "tree", lambda p, every=False: (orca, remote, [remote]) if every else (orca, remote))
+    monkeypatch.setattr(dash.greenlight, "orca_cli", lambda *a, **k: {})
+    native.clear()
+    dash.tree_goal("/srv/remote/x", "Remote goal")
+    assert "/srv/remote/x" not in ade_basement.ade_common.goals()  # not this machine's: no local goal
+    dash.tree_new("/srv/remote/x", {"name": "feat-r"})
+    assert not native and orca_calls[-1][:2] == ("worktree", "create")  # made by Orca on that host, as before
+    here_too = [remote, {"worktreeId": "o4", "hostId": "local", "repo": remote.get("repo")}]  # the same path on another host (listed first) and here
+    monkeypatch.setattr(dash, "tree", lambda p, every=False: (orca, remote, here_too) if every else (orca, remote))
+    dash.tree_goal(str(repo), "Both")
+    assert ade_basement.ade_common.goals()[str(repo)] == "Both"  # this machine has it too: the native scan's file
+    native.clear()
+    dash.tree_new(str(repo), {"name": "feat-b"})
+    assert native and native[0][:4] == ("worktree", "create", "--repo", f"id:{repo}")  # its same-project twin here: native
+    monkeypatch.setattr(dash.greenlight, "project_setups", lambda tries=1: [{"repoId": "opaque", "projectId": "p1"}, {"repoId": "other", "projectId": "p2"}])
+    unrelated = [remote, {"worktreeId": "o5", "hostId": "local", "repoId": "other"}]  # a different project at that path here
+    monkeypatch.setattr(dash, "tree", lambda p, every=False: (orca, remote, unrelated) if every else (orca, remote))
+    native.clear()
+    dash.tree_new(str(repo), {"name": "feat-u"})
+    assert not native  # never in an unrelated local repo: Orca makes it on the host the user picked
+    dash.tree_goal(str(repo), "Remote only")
+    assert ade_basement.ade_common.goals()[str(repo)] == "Both"  # nor its goal onto the unrelated local workspace
+
+
+def test_native_refuses_beside_an_outside_agent(home, monkeypatch):
+    import cleanup
+    asked = []
+    monkeypatch.setattr(cleanup, "outside_agent", lambda path, fresh=False, paths=None: asked.append((fresh, paths)) or "codex")
+    monkeypatch.setattr(ade_basement, "worktrees", lambda: [{"id": "/w/x", "path": "/w/x", "isMainWorktree": False},
+                                                            {"id": "/w/x/.wt/b", "path": "/w/x/.wt/b", "isMainWorktree": False}])
+    with pytest.raises(RuntimeError, match="codex runs in /w/x outside Greenlight"):
+        ade_basement.remove("/w/x")  # `greenlight.py ade worktree rm` never removes under it
+    with pytest.raises(RuntimeError, match="no second agent beside it"):
+        ade_basement.launch("/w/x", "claude", "go")  # nor starts a second agent beside it
+    assert asked == [(True, ["/w/x", "/w/x/.wt/b"])] * 2  # fresh, against every worktree (nested ones count)
+
+
+def test_native_listing_runs_the_first_run_import(home, monkeypatch):
+    import importers
+    calls = []
+    monkeypatch.setattr(importers, "first_run", lambda: calls.append(1))
+    monkeypatch.setattr(ade_basement, "panes", lambda cmd=False: [])
+    monkeypatch.setattr(ade_basement, "saved", list)
+    ade_basement.worktrees()
+    assert calls == [1]  # every native listing asks; first_run itself makes it once (its own tests)
