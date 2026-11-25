@@ -315,6 +315,14 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.equal(await p.locator("#s.skeleton").count(), 1);
   await p.evaluate(() => stage.text({ lead: "Gist.", md: "- a", live: true }));  // the stream replaces the skeleton
   assert.equal(await p.locator("#s.skeleton, .skel").count(), 0);
+  // holding mid-stream ends the old stream so the next turn's stream draws a fresh, unheld card with a visible caret
+  await p.evaluate(() => stage.hold("Next turn"));
+  assert.equal(await p.locator("#s.doc.held:not(.streaming)").count(), 1);
+  assert.equal(await p.locator(".caret").count(), 0);
+  await p.evaluate(() => stage.text({ lead: "Next.", md: "- b", live: true }));
+  assert.equal(await p.locator("#s.doc.streaming:not(.held)").count(), 1);
+  assert.equal(await p.locator(".caret").count(), 1);
+  assert.notEqual(await p.$eval(".caret", c => getComputedStyle(c).display), "none");
   for (const scheme of ["light", "dark"]) {  // the skeleton's bars show on the stage in both themes
     await p.emulateMedia({ colorScheme: scheme }); await p.evaluate(() => { stage.wait("Listening", ""); stage.hold("x"); });
     assert.notEqual(await p.$eval(".skel i", e => getComputedStyle(e).backgroundColor), await p.$eval("body", e => getComputedStyle(e).backgroundColor), scheme);

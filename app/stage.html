@@ -489,7 +489,7 @@ window.stage = {
   // listening card) a still skeleton of the answer stands in. The line goes on the status strip. Whatever comes next replaces it.
   hold(line){
     const s = document.getElementById("s"), card = s.childElementCount && !/\b(wait|skeleton)\b/.test(s.className);
-    if (card) s.classList.add("held");
+    if (card) { s.classList.remove("streaming"); caret(s, false); s.classList.add("held"); }
     else if (!s.classList.contains("skeleton")) {
       const k = $("div", "skel"); k.setAttribute("aria-hidden", "true");
       [["lead", 58], [null, 92], [null, 84], [null, 88], [null, 46]].forEach(([c, w]) => { const i = $("i", c); i.style.width = w + "%"; k.append(i); });
