@@ -114,6 +114,12 @@ def test_redact_takes_out_private_details():
     assert n >= 7
 
 
+def test_redact_takes_a_private_key_with_or_without_its_end():
+    key = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n"
+    assert "MIIEv" not in log_view.redact(key + "-----END PRIVATE KEY-----\nafter")[0]
+    assert "MIIEv" not in log_view.redact(key)[0]
+
+
 def test_redact_takes_out_credential_assignments_whatever_the_value():
     pw = "correct-horse-" + "battery-staple"
     out, n = log_view.redact(f"DATABASE_PASSWORD={pw}\nexport GH_TOKEN='{pw}'\napi_key: {pw}\nauth = [secret]\ntokens used: 40")
@@ -154,12 +160,20 @@ def test_redact_takes_paths_with_spaces_trailing_slashes_and_bracketed_secrets()
               "password: &p\n  hunter2", "password: |2\n  hunter2",
               "password: | # copied from vault\n  hunter2\n", "password: |\n\n  hunter2\n"):
         assert "hunter2" not in log_view.redact(v)[0], v
+    for diff in ("   database:\n     password: |\n-      hunter2a\n+      hunter2b\n     host: db", "   api_keys:\n-    - hunter2a\n+    - hunter2b",
+                 "   api_keys:\n+    - hunter2a\n+    - hunter2b"):
+        out = log_view.redact(diff)[0]
+        assert "hunter2" not in out, out
+    assert log_view.redact("   database:\n     password: |\n-      hunter2a\n     host: db")[0].endswith("     host: db")
+    out, _ = log_view.redact("x" * 7988 + " PASSWORD=hunter2-and-more")
+    assert "nter2" not in out, "a long line isn't cut through a secret"
     out = log_view.redact("db:\n  password: |\n    hunter2\n  port: 5432\nother: z")[0]
     assert out == "db:\n  password: [secret]\n  port: 5432\nother: z", "a block ends where its indent does"
     assert "# Next steps" in log_view.redact("Auth:\n- fixed login\n# Next steps\n- write docs\n")[0], "a heading ends a list"
-    for slow in ("token" * 20000 + ":", "a_token" * 14000 + "x\n", "x.token" * 14000 + ": |", "a.b" * 30000, "a@b" + ".c" * 40000):
+    for slow in ("token" * 20000 + ":", "a_token" * 14000 + "x\n", "x.token" * 14000 + ": |", "a.b" * 30000, "a@b" + ".c" * 40000,
+                 "-KEY" * 25000, "--api-key-" * 10000, "-----BEGIN PRIVATE KEY-----\n" * 3600):
         t = time.time(); log_view.redact(slow)
-        assert time.time() - t < 2, slow[:20]  # a line past 8000 characters is broken up first
+        assert time.time() - t < 1.5, slow[:20]  # bounded patterns: a pathological 100 KB line, about a second
     for kept in ("DB_PASSWORD=\nAPI_URL=x", "password:\nnext: 1", "$ export TOKEN=\n$ ls"):
         assert log_view.redact(kept)[0].split("\n")[1] == kept.split("\n")[1], kept
     out, _ = log_view.redact("password:\n  - hunter2\n  - swordfish\nnext: 1")
