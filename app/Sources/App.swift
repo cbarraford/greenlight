@@ -603,12 +603,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func revealOnPaint(_ w: NSWindow, _ web: WKWebView) {
         guard !uitest, !w.isVisible, !paintedWebs.contains(ObjectIdentifier(web)) else { return }
         w.alphaValue = 0
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak w] in w?.alphaValue = 1 }  // a page that never says ready still shows
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self, weak w] in if let w, w !== self?.rideTo { w.alphaValue = 1 } }  // a page that never says ready still shows; a ride shows its own level at its end
     }
     func painted(_ web: WKWebView) {
         paintedWebs.insert(ObjectIdentifier(web))
         DispatchQueue.main.async { [weak self] in self?.flushPaintWaits(ObjectIdentifier(web)) }
-        guard let w = web.window, w.alphaValue < 1 else { return }
+        guard let w = web.window, w.alphaValue < 1, w !== rideTo else { return }  // the level a ride is bringing in: the ride shows it, at its end
         DispatchQueue.main.async { [weak w] in w?.alphaValue = 1 }  // the next turn of the run loop: the page's first frame is up
     }
     /// `f` once `web` has drawn (now, if it has), or after `within` seconds: a ride's picture of a cold Basement waits for it.
@@ -733,7 +733,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         w.animationBehavior = greenlight.rideTime > 0 ? .default : .none
         l1Floor.at = "greenlight"; syncL1()
         let go: (String) -> Void = { [unowned self] f in  // down from Greenlight: the Basement or the Pipe
-            wantFloor = f; (termWindow.contentView as? WKWebView)?.callJS("window.term && term.opens", [f]); ride(up: false) }
+            wantFloor = f; (termWindow.contentView as? WKWebView)?.callJS("window.term && term.opens", [f, !termWindow.isVisible]); ride(up: false) }
         floorGo[ObjectIdentifier(w)] = (l1Floor, go)
         floorBar(w, Floors(s: l1Floor, c: greenlight, pick: { [unowned self] in l1Pick() }, go: go))
         let root = NSView()  // the dashboard and its overlays, left of the chat
@@ -1059,7 +1059,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     func userContentController(_ uc: WKUserContentController, didReceive m: WKScriptMessage) {
         guard m.frameInfo.isMainFrame, trustedOrigin(m.webView, for: m.name) else { return }
         if m.name == "term" {
-            if let b = m.body as? [String: Any] { if b["cmd"] as? String == "painted", let w = m.webView { painted(w) }; termMessage(b, from: m.webView) }
+            if let b = m.body as? [String: Any], let cmd = b["cmd"] as? String, let w = m.webView {
+                if cmd == "ready" { paintedWebs.remove(ObjectIdentifier(w)) }  // a (re)loaded page: nothing of it drawn yet
+                if cmd == "painted" { painted(w) }
+            }
+            if let b = m.body as? [String: Any] { termMessage(b, from: m.webView) }
             return
         }
         guard let b = m.body as? [String: Any], let cmd = b["cmd"] as? String, let from = m.webView else { return }
@@ -1114,7 +1118,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         if cmd == "pickNew" { l1Pick(here: false, in: l, on: from) }  // ⌘⇧N on L1 (a detached view: there)
         if cmd == "editProjects" {  // L1's Edit projects…: down to the Basement, where the editor lives
-            wantFloor = "basement"; (termWindow.contentView as? WKWebView)?.evaluateJavaScript("window.term && term.opens('basement'); window.editProjects && editProjects()"); ride(up: false)
+            wantFloor = "basement"; let tw = termWindow.contentView as? WKWebView
+            tw?.callJS("window.term && term.opens", ["basement", !termWindow.isVisible]); tw?.evaluateJavaScript("window.editProjects && editProjects()"); ride(up: false)  // safety-ok: a constant
         }
         // A click in one window that belongs to a view in another: forward it there and bring that window up.
         if cmd == "openPage", let name = b["name"] as? String, name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil {
@@ -1701,7 +1706,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         l.floor.at = "greenlight"
         let go: (String) -> Void = { [unowned self] f in  // ponytail: down to the Basement or the Pipe is a cut; the ride is the main window's
-            wantFloor = f; (termWindow.contentView as? WKWebView)?.callJS("window.term && term.opens", [f]); basement(from: l1s[id]?.w) }
+            wantFloor = f; (termWindow.contentView as? WKWebView)?.callJS("window.term && term.opens", [f, !termWindow.isVisible]); basement(from: l1s[id]?.w) }
         floorGo[ObjectIdentifier(w)] = (l.floor, go)
         floorBar(w, Floors(s: l.floor, c: greenlight, pick: { [weak self, weak l] in if let l { self?.l1Pick(in: l) } }, go: go))
         l1s[id] = l; syncL1()
@@ -1765,7 +1770,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         [l.c.transcriptFile, l.c.questionsURL].forEach { try? FileManager.default.removeItem(at: $0) }
         [l.c.meterKeys.context, l.c.meterKeys.window].forEach { ud.removeObject(forKey: $0) }  // no stale defaults (ids aren't reused)
-        let wid = ObjectIdentifier(l.web); readyDash.remove(wid); waitingDash.remove(wid)
+        let wid = ObjectIdentifier(l.web); readyDash.remove(wid); waitingDash.remove(wid); paintedWebs.remove(wid)  // a freed view's id comes back
         l.web.configuration.userContentController.removeScriptMessageHandler(forName: "mc")  // it retains self
         if hintCore === l.c { hintCore = nil; showTab("") }  // closed mid-hover: its hover-exit won't come
         dropShare(l.w); floorGo[ObjectIdentifier(l.w)] = nil; l.c.subs.removeAll(); l1s[l.id] = nil; saveL1s()
@@ -1887,7 +1892,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             }
             for k in self.ptys.keys where k.hasPrefix("\(wid):") { self.ptys.removeValue(forKey: k)?.stop(); self.ptySession[k] = nil }
             self.dropShare(w)
-            self.termWins[wid] = nil; self.floors[wid] = nil; self.floorGo[ObjectIdentifier(w)] = nil; self.termBadges[wid] = nil
+            self.paintedWebs.remove(ObjectIdentifier(web)); self.termWins[wid] = nil; self.floors[wid] = nil; self.floorGo[ObjectIdentifier(w)] = nil; self.termBadges[wid] = nil
             ud.set((ud.array(forKey: "termWindows") as? [[String: Any]] ?? []).filter { $0["id"] as? Int != wid }, forKey: "termWindows")
             try? FileManager.default.removeItem(at: self.termState(wid))
             web.configuration.userContentController.removeScriptMessageHandler(forName: "term")  // it holds the app, not the page, but the page would linger
@@ -1972,7 +1977,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// its last agent's live tmux session, else that agent continuing its last session there; else its latest tab or a new shell.
     func toWorkspace(_ path: String, resume: [String: String] = [:]) {
         wantFloor = "basement"; wantWs = path; wantResume = resume
-        (termWindow.contentView as? WKWebView)?.callJS("window.term && ((p, r) => (term.opens('basement'), term.ws(p, r), 1))", [path, resume]) { [weak self] r, _ in
+        (termWindow.contentView as? WKWebView)?.callJS("window.term && ((p, r, c) => (term.opens('basement', c), term.ws(p, r), 1))", [path, resume, !termWindow.isVisible]) { [weak self] r, _ in
             if r as? Int == 1 { self?.wantWs = nil; self?.wantResume = [:]; self?.wantFloor = nil }
         }
         upstairs ? ride(up: false) : basement()
@@ -2144,7 +2149,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         func js(_ o: Any) -> String { String(data: (try? JSONSerialization.data(withJSONObject: o, options: .fragmentsAllowed)) ?? Data(), encoding: .utf8) ?? "null" }
         // ids that reach a shell command: a tmux session name, a worktree path 
         let session = (b["session"] as? String).flatMap { $0.range(of: #"^mc-[\w-]{1,64}$"#, options: .regularExpression) != nil ? $0 : nil }
-        if let c = b["cmd"] as? String, !["in", "size", "badge", "band", "title", "notify", "ready", "painted", "error", "localName", "trees", "turn"].contains(c) {
+        if let c = b["cmd"] as? String, b["boot"] == nil, !["in", "size", "badge", "band", "title", "notify", "ready", "painted", "error", "localName", "trees", "turn"].contains(c) {
             Diag.event("action", ["cmd": c, "page": "terminal"])  // the command, never its payload; keystrokes and resizes aren't actions
         }
         switch b["cmd"] as? String {
@@ -2162,8 +2167,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             web?.evaluateJavaScript("term.slide(\(greenlight.sidebarSlide))")
             web?.callJS("window.term && term.opens", [wid != 0 || !opensBasement ? "pipe" : "basement"])  // New windows: always the Pipe
             if let obj = paneReplay.replay(lastTreesObj) { web?.callJS("window.term && term.workspaces", [obj]) }
-            web?.evaluateJavaScript("term.restore(\(file(termState(wid))))")
+            // a Basement button's worktree before the layout: restore opens it (pendingWs) in place of a first shell
             if wid == 0 { wantFloor = nil; if let p = wantWs { wantWs = nil; web?.callJS("term.ws", [p, wantResume]); wantResume = [:] } }
+            web?.evaluateJavaScript("term.restore(\(file(termState(wid))))")  // safety-ok: the file only if it parses as JSON
             if lastTreesObj == nil || Date().timeIntervalSince(treesAt) > 5 { pushTrees() }
         case "painted": break  // its restored layout has drawn: userContentController reveals the window
         case "open":
@@ -2449,6 +2455,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
 
     // MARK: Basement ↔ Greenlight Center: one level at a time, the orb rides between them
 
+    var rideTo: NSWindow?  // the level a ride is bringing in (it sets that one's alpha to 1 at its end)
     var upstairs = false, riding = false, termSide = false, rideWin: NSPanel?, keepAt: NSPoint?
     @objc func appGoUp() { if !upstairs { ride(up: true) } else { show() } }
     func ride(up: Bool) {
@@ -2459,7 +2466,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         hand(to, from: from)  // before the snapshots: the other level grows into this one's frame
         if termOrb.isVisible { keepAt = NSPoint(x: termOrb.frame.midX, y: termOrb.frame.midY) }  // the orb stays put on screen; syncOrbs lands it there
         guard greenlight.rideTime > 0 else { stepAside(from); hideFloaters(); return up ? show() : basement() }  // Settings → Terminal → Ride animation 0: a cut
-        riding = true
+        riding = true; rideTo = to
         let S = scr.frame, reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         let c = termOrb.isVisible ? NSPoint(x: termOrb.frame.midX, y: termOrb.frame.midY) : NSPoint(x: from.frame.maxX - 44, y: from.frame.minY + 44)
         let orb = CGPoint(x: c.x - S.minX, y: S.maxY - c.y)
@@ -2501,7 +2508,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                     // the backdrop lifts only once the level is in place, so what's behind the app never shows through mid-ride
                     later(reduce ? 0.22 : 0.3) { to.alphaValue = 1; if !reduce { at(0, 0.18) { s.veil = 0 } } }
                     later(reduce ? 0.22 : 0.5) { [self] in
-                        rideWin?.orderOut(nil); rideWin = nil; riding = false
+                        rideWin?.orderOut(nil); rideWin = nil; riding = false; rideTo = nil
                         keepAt = c; syncOrbs()  // the orb lands where you clicked it
                     }
                 } }
