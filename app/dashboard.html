@@ -1284,9 +1284,9 @@ function footer(){
     const sErr = ui.snap.scan_error, rErr = ui.rescanErr;  // the newest scan died (greenlight.py's scan_error.json, or SSH exit 255): pick whichever is newer
     const se = sErr && rErr ? (rErr.ts > sErr.ts ? rErr : sErr) : (sErr || rErr);
     if (se && !ui.rescan) {
-      const sa = ago((Date.now() / 1000 - se.ts) / 3600), when = sa === "now" ? "just now" : `${sa} ago`;
+      const sa = ago((hostNow() - se.ts) / 3600), when = sa === "now" ? "just now" : `${sa} ago`;
       const lead = ui.snap.scanned ? `The last scan stopped ${when}, so these facts are from the one before.` : `The scan stopped ${when}, so no workspaces have been scanned yet.`;
-      f.append(h("span", {class: "scanerr", role: "status", title: lead + (se.fix ? `\nFix: ${se.fix}.` : "")},
+      f.append(h("span", {class: "scanerr", title: lead + (se.fix ? `\nFix: ${se.fix}.` : "")},
         `Scan failed: ${se.msg || "unknown error"}`, se.fix ? h("span", {class: "scanfix"}, ` · ${se.fix}`) : null));
     }
   }
@@ -2831,7 +2831,7 @@ window.mc = {
       ui.rescan = 0; ui.rescanFail = Date.now();
       // only SSH failure (255) gets a local fallback: a script exit (1) writes scan_error.json for the next stream tick
       if (code === 255) ui.rescanErr = {msg: "host unreachable", fix: "check SSH connection, then ↻",
-        ts: Math.floor(Date.now() / 1000), prevScanned: ui.snap ? ui.snap.scanned : 0};
+        ts: Math.floor(hostNow()), prevScanned: ui.snap ? ui.snap.scanned : 0};
       console.log("dash: rescan failed, exit " + code);
     } else ui.rescanErr = null;
     footer();

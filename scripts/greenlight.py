@@ -2092,7 +2092,7 @@ def scan_failed(e, started_ns=None):
     why = SCAN_WHY.get(cls, "failed")
     if cls == "auth":
         fix = SCAN_FIX_AUTH.get(tool, "")
-    elif tool in ("orca", "orca-ide") and cls in ("network", "timeout", "other"):
+    elif tool in ("orca", "orca-ide") and cls in ("network", "timeout", "not_found", "other"):
         fix = "check Orca is running, then ↻"
     else:
         fix = SCAN_FIX_CLASS.get(cls, "")

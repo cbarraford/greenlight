@@ -244,8 +244,13 @@ def scan_dies(exc):
     return json.loads((greenlight.STATE / "scan_error.json").read_text())
 e = scan_dies(RuntimeError('glab api projects/acme%2Fsecret/merge_requests?state=opened: ERROR\n  Oauth2: "invalid_grant" "The provided authorization grant is invalid, expired"'))
 assert (e["msg"], e["class"], e["fix"]) == ("GitLab login expired", "auth", "run glab auth login --hostname gitlab.com, then ↻") and "secret" not in json.dumps(e)
-# _cmd_error carries tool + stderr class directly, so argv containing ": " or "login" (e.g. GraphQL queries) never misclassifies
-e = scan_dies(greenlight._cmd_error(f"gh api graphql -f query={greenlight.GH_PR_QUERY}: HTTP 502 Bad Gateway", tool="gh", msg_class="transient"))
+# run() attaches _gl_tool + _gl_class directly on RuntimeError, so argv containing ": " or "login" (GraphQL queries) never misclassifies
+with mock.patch.object(greenlight.subprocess, "run", return_value=subprocess.CompletedProcess(["gh"], 1, "", "HTTP 502 Bad Gateway")):
+    try:
+        greenlight.run(["gh", "api", "graphql", "-f", f"query={greenlight.GH_PR_QUERY}"])
+    except RuntimeError as _run_exc:
+        assert type(_run_exc).__name__ == "RuntimeError"
+        e = scan_dies(_run_exc)
 assert (e["msg"], e["class"], e["fix"]) == ("GitHub server error", "transient", "try ↻ again")
 # argv words like "token" or "login" must not misclassify a non-auth stderr failure as auth even for plain RuntimeError
 e = scan_dies(RuntimeError("glab api projects/acme%2Ftoken-login/merge_requests?state=opened: HTTP 502 Bad Gateway"))
@@ -256,8 +261,8 @@ e = scan_dies(subprocess.TimeoutExpired(["glab", "api", "x"], 45))
 assert (e["msg"], e["fix"]) == ("GitLab timed out", "try ↻ again")
 e = scan_dies(RuntimeError("/usr/local/bin/orca-ide worktree ps: connection refused"))
 assert (e["msg"], e["class"], e["fix"]) == ("Orca unreachable", "network", "check Orca is running, then ↻")
-e = scan_dies(RuntimeError("orca-ide worktree ps: daemon not running"))
-assert (e["msg"], e["fix"]) == ("Orca failed", "check Orca is running, then ↻")
+e = scan_dies(RuntimeError("orca-ide worktree ps: socket not found"))
+assert (e["msg"], e["class"], e["fix"]) == ("Orca failed", "not_found", "check Orca is running, then ↻")
 assert scan_dies(KeyError("rows"))["msg"] == "crashed"
 # overlapping scans: an older scan succeeding or failing must not clobber a newer scan's failure
 t0_ns = greenlight.time.time_ns() + 100_000_000_000
