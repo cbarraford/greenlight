@@ -134,7 +134,7 @@ def test_redact_takes_out_any_absolute_path_but_the_systems():
 
 
 def test_redact_leaves_slash_commands_and_endpoints():
-    out, _ = log_view.redact("> /goal fix the build; run /review now; GET /api/v1/users 200; /bin-x/home/alice")
+    out, _ = log_view.redact(f"> /goal fix the build; run /review now; GET /api/v1/users 200; /bin-x{HOME}/alice")
     assert out.startswith("> /goal fix the build; run /review now; GET [path] 200; [path]"), out
 
 
