@@ -1809,6 +1809,232 @@ test("Agent log view phase 1: status strip, per-line relative-time gutter, and '
   await page.click("#aout-back");
 });
 
+// ---------- the agent log view, phases 2-3 (issue 191) ----------
+const LOGNOW = Date.now();
+function paneLog(){  // a Claude Code pane: two prompts, tool calls with output, two failing lines
+  let i = 0; const L = (min, text) => ({id: `mc-s1.g0:${i++}`, role: "line", text, ts: LOGNOW - min * 60e3, kind: "pane"});
+  return [
+    L(22, "> Fix the flaky retry test"),
+    L(21, "⏺ Bash(pytest -q -k retry)"), ...Array.from({length: 34}, (_, k) => L(20.9, `  case_${k} PASSED`)),
+    L(20, "⏺ The test waits on a real clock."),
+    L(14, "> CI still fails on the retry path"),
+    L(13, "⏺ Read(scripts/queue.py)"), L(13, "  ⎿  Read 212 lines"),
+    L(3, "⏺ Bash(pytest -q tests/test_queue.py)"), L(3, "  ⎿  ....F...."),
+    L(3, "     FAILED tests/test_queue.py::test_retry_after_churn - AssertionError: 64 != 1"), L(3, "     1 failed, 8 passed in 2.41s"),
+    L(1, "⏺ Bash(pytest -q tests/test_queue.py)"), L(1, "  ⎿  9 passed in 2.10s"),
+  ];
+}
+async function openLog(page, entries = paneLog(), extra = {}){
+  await page.evaluate(() => openOut("plan-b"));
+  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: null, source: "pane", last_output_ts: Date.now() - 60e3, entries, ...extra});
+}
+const visibleTexts = page => page.$$eval("#aout-list > [data-id]:not([hidden]) .aotx", es => es.map(e => e.textContent));
+
+test("log view: tool calls and prompts fold, a long finished call starts folded, Fold all folds every section", async page => {
+  await openLog(page);
+  assert.equal(await page.locator("#aout-list > .sec").count(), 4, "each tool call is a section header");
+  assert.equal(await page.locator("#aout-list > .turn").count(), 2, "each prompt starts a turn");
+  assert.match(await page.textContent("#aout-list > .sec >> nth=0"), /34 lines/, "a header says how much it holds");
+  assert.match(await page.textContent("#aout-list > .turn >> nth=1"), /3 tool calls/);
+  assert.equal(await page.locator("#aout-list > .in:not([hidden])").count(), 1 + 3 + 1, "the 34-line call folded itself; the rest stay open");
+  await page.click("#aout-list > .sec >> nth=0 >> .aofold");
+  assert.equal(await page.locator("#aout-list > .in:not([hidden])").count(), 34 + 5, "unfolded by hand");
+  await page.click("#aout-list > .sec >> nth=0 >> .aofold");
+  await page.click("#aout-list > .turn >> nth=1 >> .aofold");
+  assert.deepEqual(await visibleTexts(page), ["> Fix the flaky retry test", "⏺ Bash(pytest -q -k retry)", "⏺ The test waits on a real clock.", "> CI still fails on the retry path"], "a folded turn hides its calls and their output");
+  assert.equal(await page.getAttribute("#aout-list > .turn >> nth=1 >> .aofold", "aria-expanded"), "false");
+  await page.click("#aout-foldall");
+  assert.equal(await page.locator("#aout-list > [data-id]:not([hidden])").count(), 2, "Fold all leaves the prompts");
+  assert.match(await page.textContent("#aout-foldall"), /Unfold all/);
+  await page.click("#aout-foldall");
+  assert.equal(await page.locator("#aout-list > [data-id][hidden]").count(), 0, "Unfold all shows everything");
+  // a refresh appends without undoing any of it
+  await page.click("#aout-list > .sec >> nth=1 >> .aofold");
+  const e = paneLog(); e.push({id: "mc-s1.g0:99", role: "line", text: "  ⎿  pushed", ts: Date.now(), kind: "pane"});
+  await nextPoll(page, 2);
+  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: null, source: "pane", last_output_ts: Date.now(), entries: e});
+  assert.equal(await page.locator("#aout-list > .sec >> nth=1 >> .aofold").getAttribute("aria-expanded"), "false", "a fold survives a refresh");
+  assert.match(await page.textContent("#aout-list > .sec >> nth=3"), /2 lines/, "new output joins its call");
+});
+
+test("log view: search marks every match, steps through them, finds them inside folds; Esc clears, then closes", async page => {
+  await openLog(page);
+  await page.click("#aout-foldall");
+  await page.click("#aout-q"); await page.keyboard.type("PASSED");
+  await page.waitForFunction(() => /of 36/.test(document.getElementById("aout-qn").textContent));
+  assert.equal(await page.textContent("#aout-qn"), "36 of 36", "the newest match first (case doesn't matter: \"9 passed\" too)");
+  assert.equal(await page.locator("#aout-list mark").count(), 36);
+  assert.equal(await page.locator("#aout-list mark.cur").count(), 1);
+  assert.equal(await page.locator("#aout-list > [data-id]:not([hidden]) mark").count(), 36, "matches show even in a folded call");
+  await page.keyboard.press("Enter");
+  assert.equal(await page.textContent("#aout-qn"), "1 of 36", "Return wraps to the first");
+  await page.keyboard.press("Shift+Enter");
+  assert.equal(await page.textContent("#aout-qn"), "36 of 36");
+  await page.click("#aout-qprev");
+  assert.equal(await page.textContent("#aout-qn"), "35 of 36");
+  assert.equal(await page.$eval("#aout-list mark.cur", m => m.textContent), "passed");
+  await page.fill("#aout-q", "nothing like it"); await page.waitForFunction(() => /No matches/.test(document.getElementById("aout-qn").textContent));
+  await page.focus("#aout-q");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.inputValue("#aout-q"), "", "Esc clears the search first");
+  assert.equal(await page.locator("#aout-list mark").count(), 0);
+  assert.ok(await page.isVisible("#aout"), "and keeps the view open");
+  await page.keyboard.press("Escape"); await page.keyboard.press("Escape");
+  assert.equal(await page.$("#aout"), null, "then Esc closes it");
+});
+
+test("log view: the kind filter counts and shows only that kind, with an empty state; Jump to and its keys", async page => {
+  await openLog(page);
+  assert.deepEqual(await page.$$eval("#aout-filter button", bs => bs.map(b => b.textContent)), ["All46", "Tool calls4", "Errors2", "Prompts2"]);
+  await page.click("#aout-filter [data-f=err]");
+  assert.deepEqual(await visibleTexts(page), ["     FAILED tests/test_queue.py::test_retry_after_churn - AssertionError: 64 != 1", "     1 failed, 8 passed in 2.41s"]);
+  assert.equal(await page.getAttribute("#aout-filter [data-f=err]", "aria-pressed"), "true");
+  assert.equal(await page.isDisabled("#aout-foldall"), true, "folding means nothing in a filtered view");
+  await page.click("#aout-filter [data-f=prompt]");
+  assert.equal((await visibleTexts(page)).length, 2);
+  // no errors at all: the empty state, and its way back
+  const clean = paneLog().filter(e => !/FAILED|failed/.test(e.text));
+  await page.evaluate(() => closeOut(false));
+  await openLog(page, clean);
+  await page.click("#aout-filter [data-f=err]");
+  assert.ok(await page.isVisible("#aout-empty"));
+  assert.match(await page.textContent("#aout-empty"), /No errors in what's loaded/);
+  await page.click("#aout-empty button");
+  assert.equal(await page.isVisible("#aout-empty"), false);
+  assert.equal(await page.getAttribute("#aout-filter [data-f=all]", "aria-pressed"), "true");
+  // Jump to
+  await page.evaluate(() => closeOut(false));
+  await openLog(page);
+  await page.$eval("#aout-log", e => { e.scrollTop = 0; e.dispatchEvent(new Event("scroll")) });
+  await page.click("#aout-jumpbtn");
+  assert.equal(await page.getAttribute("#aout-jumpbtn", "aria-expanded"), "true");
+  assert.equal(await page.evaluate(() => document.activeElement.getAttribute("role")), "menuitem", "the menu takes the keyboard");
+  await page.click("#aout-jump [role=menuitem]:has-text('Next error')");
+  assert.equal(await page.$("#aout-jump"), null);
+  assert.match(await page.textContent("#aout-list > .aoat"), /FAILED/, "it lands on the first error");
+  await page.focus("#aout-log");
+  await page.keyboard.press("e");
+  assert.match(await page.textContent("#aout-list > .aoat"), /1 failed/, "E: the next one");
+  await page.keyboard.press("e");
+  assert.match(await page.textContent("#aout-note"), /No later error/, "and says when there are no more");
+  await page.keyboard.press("Shift+E");
+  assert.match(await page.textContent("#aout-list > .aoat"), /FAILED/, "⇧E goes back");
+  await page.keyboard.press("[");
+  assert.match(await page.textContent("#aout-list > .aoat"), /Bash\(pytest -q tests/, "[ the call before");
+  await page.click("#aout-jumpbtn"); await page.keyboard.press("Escape");
+  assert.equal(await page.$("#aout-jump"), null, "Esc closes the menu, not the view");
+  assert.ok(await page.isVisible("#aout"));
+});
+
+test("log view: a working agent quiet for 10 min gets a stuck banner; a repeating block, a looping one; dismissed, it stays away", async page => {
+  const quiet = paneLog().map(e => ({...e, ts: e.ts - 15 * 60e3}));
+  await openLog(page, quiet, {last_output_ts: Date.now() - 37 * 60e3});
+  await page.waitForSelector("#aout-warn:not([hidden])");
+  assert.match(await page.textContent("#aout-warn"), /^No output for 1\dm while the agent is working/);
+  assert.ok(await page.$("#aout-warn button:has-text('Open in Basement')"), "the way to look at it");
+  await page.click("#aout-warn [aria-label=Dismiss]");
+  assert.equal(await page.isVisible("#aout-warn"), false);
+  await page.evaluate(() => outWarn());
+  assert.equal(await page.isVisible("#aout-warn"), false, "dismissed: stays away while nothing changes");
+  // looping: the same two lines, nine times (digits don't count)
+  await page.evaluate(() => closeOut(false));
+  const loop = paneLog(); let n = 100;
+  for (let r = 0; r < 9; r++) loop.push({id: `mc-s1.g0:${n++}`, role: "line", text: `⏺ Bash(curl localhost:80${r})`, ts: Date.now() - (9 - r) * 40e3, kind: "pane"},
+    {id: `mc-s1.g0:${n++}`, role: "line", text: "  ⎿  connection refused", ts: Date.now() - (9 - r) * 40e3 + 1000, kind: "pane"});
+  await openLog(page, loop, {last_output_ts: Date.now()});
+  await page.waitForSelector("#aout-warn:not([hidden])");
+  assert.match(await page.textContent("#aout-warn"), /The same 2 lines came back 9 times in 5m\. The agent may be looping\./);
+  await page.$eval("#aout-log", e => { e.scrollTop = 0 });
+  await page.click("#aout-warn button:has-text('Show the repeat')");
+  assert.ok(await page.$eval("#aout-list > [data-id='mc-s1.g0:100']", e => { const r = e.getBoundingClientRect(), l = document.getElementById("aout-log").getBoundingClientRect(); return r.top >= l.top - 1 && r.top < l.bottom }), "it scrolls to where the repeat starts");
+  // an agent that isn't working is never stuck
+  await page.evaluate(() => closeOut(false));
+  await page.evaluate(s => mc.update({...s, pucks: s.pucks.map(p => ({...p, agent: {...p.agent, state: "idle"}}))}), SNAP);
+  await openLog(page, quiet);
+  assert.equal(await page.isVisible("#aout-warn"), false);
+});
+
+const EXTRAS = {name: "plan-b", usage: {in_tokens: 1820400, out_tokens: 41200, cache_read: 1700000, sessions: 2, cost_cents: 142.3, models: ["claude-opus-5-5"], estimated: true},
+  files: {mode: "branch", base: "main", files: [["scripts/queue.py", "3", "1"], ["tests/new_test.py", "2", "0"], ["logo.png", "-", "-"]], status: ["M", "U", "A"], cut: false,
+    patch: "diff --git a/scripts/queue.py b/scripts/queue.py\nindex 1..2\n--- a/scripts/queue.py\n+++ b/scripts/queue.py\n@@ -1,3 +1,5 @@\n keep\n-old\n+new\n+newer\n+newest\ndiff --git a/tests/new_test.py b/tests/new_test.py\nnew file\n@@ -0,0 +1,2 @@\n+a\n+b\n"}};
+
+test("log view: the sessions' cost and tokens in the strip; Files shows what the branch changes, with each file's diff", async page => {
+  await openLog(page);
+  assert.ok((await posts(page, "logextras")).some(m => m.name === "plan-b"), "it asks for the extras on open");
+  assert.equal(await page.$("#aout-strip .aos-cost"), null, "nothing until they come");
+  await page.evaluate(r => mc.logextras(r), EXTRAS);
+  assert.equal(await page.textContent("#aout-strip .aos-cost"), "≈$1.42 · 1.86M tokens");
+  assert.match(await page.getAttribute("#aout-strip .aos-cost", "title"), /2 sessions · claude-opus-5-5\nEstimated from list prices/);
+  await page.evaluate(r => mc.logextras({...r, usage: {...r.usage, cost_cents: null, estimated: false}}), EXTRAS);
+  assert.equal(await page.textContent("#aout-strip .aos-cost"), "1.86M tokens", "no cost reported: tokens only, never a made-up one");
+  assert.equal(await page.textContent("#aout-files-n"), "3");
+  await page.click("#aout-files-btn");
+  assert.equal(await page.getAttribute("#aout-files-btn", "aria-pressed"), "true");
+  assert.deepEqual(await page.$$eval("#aout-files .aofrow", rs => rs.map(r => r.textContent)), ["Mscripts/queue.py+3 −1", "Utests/new_test.py+2 ", "Alogo.pngbinary"]);
+  assert.deepEqual(await page.$$eval("#aout-files .aodiff > *", ds => ds.map(d => d.className + ":" + d.textContent)),
+    ["dfn:scripts/queue.py", "dh:@@ -1,3 +1,5 @@", "dl: keep", "dl r:-old", "dl a:+new", "dl a:+newer", "dl a:+newest"]);
+  await page.click("#aout-files .aofrow:has-text('new_test.py')");
+  assert.deepEqual(await page.$$eval("#aout-files .aodiff .dl", ds => ds.map(d => d.textContent)), ["+a", "+b"]);
+  assert.match(await page.textContent("#aout-files .aoff"), /since this branch left main/);
+  await page.evaluate(r => mc.logextras({...r, files: {error: "not a git checkout"}}), EXTRAS);
+  assert.match(await page.textContent("#aout-files"), /Couldn't load the files/);
+  const before = (await posts(page, "logextras")).length;
+  await page.click("#aout-files button:has-text('Retry')");
+  assert.equal((await posts(page, "logextras")).length, before + 1, "Retry asks again");
+  await page.evaluate(r => mc.logextras({...r, files: {...r.files, files: [], status: [], patch: ""}}), EXTRAS);
+  assert.match(await page.textContent("#aout-files"), /No files changed yet/);
+  await page.click("#aout-files [aria-label='Close files']");
+  assert.equal(await page.isVisible("#aout-files"), false);
+  assert.equal(await page.evaluate(() => document.activeElement.id), "aout-files-btn");
+  await page.evaluate(r => mc.logextras({...r, name: "plan-a"}), EXTRAS);  // another workspace's answer is ignored
+  assert.equal(await page.textContent("#aout-files-n"), "0");
+});
+
+test("log view: Share log… sends nothing until the host has taken private details out; a failed check shares nothing", async page => {
+  await openLog(page);
+  await page.click("#aout-share-btn");
+  assert.ok(await page.isVisible("#aout-share [role=dialog]"));
+  assert.equal(await page.isDisabled("#aout-share-copy"), true, "nothing to copy before the check");
+  assert.equal(await page.isDisabled("#aout-share-save"), true);
+  const ask = (await posts(page, "logshare")).pop();
+  assert.equal(ask.name, "plan-b");
+  assert.match(ask.text, /^\d\d:\d\d:\d\d {2}> Fix the flaky retry test$/m, "times and lines, oldest first");
+  assert.equal(ask.text.split("\n").length, 46);
+  await page.evaluate(() => mc.logshared({name: "plan-b", text: "12:00:00  ls [path]", removed: 4}));
+  assert.match(await page.textContent("#aout-share"), /Private details are taken out: 4 removed/);
+  assert.equal(await page.textContent("#aout-share .aopv"), "12:00:00  ls [path]");
+  await page.click("#aout-share-copy");
+  assert.deepEqual((await posts(page, "copyText")).pop(), {cmd: "copyText", text: "12:00:00  ls [path]"}, "Copy sends the redacted text only");
+  assert.match(await page.textContent("#aout-share-copy"), /Copied/);
+  await page.click("#aout-share-save");
+  assert.deepEqual((await posts(page, "saveText")).pop(), {cmd: "saveText", text: "12:00:00  ls [path]", filename: "agent-log-plan-b.txt"});
+  // another range asks again; an error is a dead end, not a leak
+  await page.click("#aout-r-looked").catch(() => {});  // no last look in this boot: the option may be absent
+  await page.evaluate(() => { ui.out.share.range = "all"; outShareAsk(); outShareRender() });
+  await page.evaluate(() => mc.logshared({name: "plan-b", error: "leak.re: bad pattern"}));
+  assert.match(await page.textContent("#aout-share"), /Couldn't check it for private details/);
+  assert.match(await page.textContent("#aout-share"), /So nothing is shared: leak\.re: bad pattern/);
+  assert.equal(await page.isDisabled("#aout-share-copy"), true);
+  assert.equal(await page.isDisabled("#aout-share-save"), true);
+  await page.click("#aout-share-retry");
+  assert.equal(await page.isDisabled("#aout-share-copy"), true, "retrying: still nothing to share");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.$("#aout-share"), null, "Esc closes the sheet first");
+  assert.ok(await page.isVisible("#aout"));
+  assert.equal(await page.evaluate(() => document.activeElement.id), "aout-share-btn");
+  // a filtered view offers what it shows
+  await page.click("#aout-filter [data-f=err]");
+  await page.click("#aout-share-btn");
+  assert.match(await page.textContent("#aout-share fieldset"), /What the filter shows: Errors2 lines/);
+  await page.click("#aout-r-view");
+  const asked = (await posts(page, "logshare")).length;
+  await page.evaluate(() => mc.logshared({name: "plan-b", text: "the whole log", removed: 0}));  // the answer for the range it had asked about
+  assert.equal((await posts(page, "logshare")).length, asked + 1, "a range changed mid-check is asked again, not shown stale");
+  assert.equal(await page.isDisabled("#aout-share-copy"), true);
+  const v = (await posts(page, "logshare")).pop();
+  assert.equal(v.text.split("\n").length, 2, "only the two errors");
+});
+
 (async () => {
   const browser = await launchBrowser();
   let failed = 0;

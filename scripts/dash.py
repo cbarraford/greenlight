@@ -8,6 +8,9 @@
                                                     hover card's button); cached per state, and snapshots carry it as `suggestion`
     dash.py run <ws> < prompt                       launch an agent in that workspace with the prompt on stdin
     dash.py transcript <ws> [--before CURSOR]       one JSON line: the agents' conversation there, newest page first (the agent card's All output)
+    dash.py logextras <ws>                          one JSON line: All output's extras: the sessions' tokens and estimated cost
+                                                    (log_view.usage), and the files the branch touched (tree diff branch, else head)
+    dash.py logshare <ws> < text                    one JSON line: {text, removed}: the log text with private details taken out
     dash.py trees                                   one JSON line: every worktree of every installed ADE (orca, cmux, herdr, t3), for the terminal's sidebar
     dash.py turn <mc-session>                       one JSON line: how a Basement pane's agent ended its turn (ade_common.agent_state)
     dash.py tree info|rm|goal|cfg|new|diff <path> [--force]  the sidebar's workspace menu: git facts and listening ports; remove
@@ -1956,6 +1959,28 @@ def transcript(name, before=None, limit=60):
     return {"entries": page, "more": more, "before": before, "recent": recent, "source": "transcript", "last_output_ts": last_ts}
 
 
+def _ws_path(name):
+    return next((w.get("path") for w, _ in live_agents().values() if w["displayName"] == name), None)
+
+
+def log_extras(name):
+    """All output's side data: the sessions' usage and the files touched (what the branch changes, uncommitted included)."""
+    import log_view  # noqa: PLC0415
+
+    path = _ws_path(name)
+    if not path:
+        return {"error": f"no workspace {name}"}
+    out = {"usage": log_view.usage(transcript_files(path))}
+    try:
+        d = tree_diff(path, "branch")
+        if d.get("error"):  # no trunk to compare with: what's uncommitted
+            d = tree_diff(path, "head")
+    except (OSError, subprocess.SubprocessError) as e:
+        d = {"error": str(e)[:200]}
+    out["files"] = d
+    return out
+
+
 # ---------- New task: a request (+ files) becomes a workspace whose agent starts on it at once ----------
 TASKS = greenlight.STATE / "tasks"
 FILE_RE = re.compile(r"^data:[\w.+/-]*(?:;[\w=.-]+)*;base64,([A-Za-z0-9+/=\s]*)$")
@@ -2389,6 +2414,15 @@ def main():
         if before and not re.fullmatch(r"[\w.-]{1,200}:\d{1,9}", before):
             sys.exit("bad --before")
         print(json.dumps({"name": a[1], **transcript(a[1], before)}))
+    elif a[:1] in (["logextras"], ["logshare"]) and len(a) == 2 and NAME_RE.match(a[1]):
+        import log_view  # noqa: PLC0415
+
+        try:
+            out = log_extras(a[1]) if a[0] == "logextras" else dict(zip(("text", "removed"), log_view.redact(sys.stdin.read(4 << 20))))
+        except Exception as e:
+            oops(a, e)
+            out = {"error": str(e)[:200]}
+        print(json.dumps({"name": a[1], **out}))
     elif a[:1] == ["board"]:
         print(board())
     elif a[:1] == ["forge"] and (len(a) == 1 or len(a) == 2 and re.fullmatch(r"[\w.-]+(/[\w.-]+)+", a[1])):

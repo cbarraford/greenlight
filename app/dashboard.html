@@ -189,7 +189,7 @@ main.ov{background:var(--canvas)}
 button.aline{width:100%;border:0;font:inherit;color:inherit;text-align:left} button.aline:hover{background:var(--fill-hover)}
 button.aline .aexp{margin-left:auto;flex-shrink:0;display:flex;color:var(--text3);opacity:0} button.aline:hover .aexp,button.aline:focus-visible .aexp{opacity:1}
 /* All output: the agent's recorded log and conversation over the whole window */
-#aout{position:fixed;inset:0;z-index:70;display:flex;flex-direction:column;background:var(--bg);color:var(--text)} #aout [hidden]{display:none}
+#aout{position:fixed;inset:0;z-index:70;display:flex;flex-direction:column;background:var(--bg);color:var(--text)} #aout [hidden]{display:none !important}
 #aout .aohd,#aout .aoft{display:flex;align-items:center;gap:var(--sp-2);padding:var(--sp-2) var(--sp-4);background:var(--bar);flex-shrink:0}
 #aout .aohd{border-bottom:1px solid var(--hair)} #aout .aoft{border-top:1px solid var(--hair);min-height:44px}
 #aout .aot{display:flex;flex-direction:column;min-width:0;flex-grow:1} #aout .aot b{font-size:var(--fs-3);line-height:var(--lh-2);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -223,12 +223,85 @@ button.aline .aexp{margin-left:auto;flex-shrink:0;display:flex;color:var(--text3
 .aoe.tool.hasts .aotool{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
 .aoe.tool.hasts .aotool::before{content:"› "}
 .aoe.tool.hasts.open .aotool{display:block}
-.aoe.line{display:grid;grid-template-columns:68px minmax(0,1fr);gap:var(--sp-3);align-items:baseline;margin:0;padding:var(--sp-0) var(--sp-2);border-radius:var(--r-0);font:var(--ds-type-code)}
+.aoe.line{display:grid;grid-template-columns:68px 16px minmax(0,1fr) auto;gap:var(--sp-2);align-items:baseline;margin:0;padding:var(--sp-0) var(--sp-2);border-radius:var(--r-0);font:var(--ds-type-code)}
 .aoe.line:hover{background:var(--fill)}
 .aoe.line .aots{text-align:right}
 .aoe.line .aotx{max-width:none;font:inherit;color:var(--text)}
 .aosep{display:flex;align-items:center;gap:var(--sp-2);margin:var(--sp-4) 0 var(--sp-3);font-size:var(--fs-1);color:var(--text3)} .aosep::before,.aosep::after{content:"";flex:1;height:1px;background:var(--hair)}
 .aosep.aolook{margin:var(--sp-3) 0;color:var(--accent-fg);font-weight:500}
+/* All output, phases 2-3 (issue 191; DESIGN.md §10.16, the design canvas): sections, search, filter, jump, warnings, files, share */
+#aout .aobody{flex:1;min-height:0;display:flex}
+#aout .aobody .aolog{width:100%;min-width:0;border-top:1px solid var(--hair)}
+#aout .aotb{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-2) var(--sp-3);padding:var(--sp-2) var(--sp-4);flex-shrink:0}
+#aout .aotb .aosp,#aout .aofh .aosp{flex:1 1 auto}
+#aout .aoq{display:flex;align-items:center;gap:var(--sp-1);width:300px;max-width:100%;height:28px;padding:0 var(--sp-1) 0 var(--sp-2);border:1px solid var(--line);border-radius:var(--r-1);background:var(--ds-bg-sunken);color:var(--faint)}
+#aout .aoq:hover{border-color:var(--line-hover)} #aout .aoq:focus-within{border-color:var(--ds-accent-ring);box-shadow:var(--ring)}
+#aout .aoq input{flex:1;min-width:0;height:24px;border:0;outline:0;background:none;color:var(--text);font:var(--ds-type-body);box-shadow:none}
+#aout .aoq input::placeholder{color:var(--faint)} #aout .aoq input::-webkit-search-cancel-button{display:none}
+#aout .aoqn{font:var(--ds-type-label);color:var(--text3);white-space:nowrap;font-variant-numeric:tabular-nums}
+#aout .btn.ico.sm{width:24px;height:24px}
+#aout .kbd{display:inline-flex;align-items:center;height:16px;padding:0 var(--sp-1);border:1px solid var(--line);border-radius:var(--r-0);font:var(--ds-type-caption);color:var(--text3)}
+#aout .seg button{display:inline-flex;align-items:center;gap:6px}
+#aout .seg .segn{font-weight:400;color:var(--text3);font-variant-numeric:tabular-nums}
+#aout .btn.quiet{background:none;color:var(--text2)} #aout .btn.quiet:hover:not(:disabled){background:var(--fill);color:var(--text)}
+#aout .btn.on{background:var(--fill-active)}
+#aout .count{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 var(--sp-1);border-radius:var(--r-full);background:var(--fill-active);color:var(--text);font:var(--ds-type-label-sm);font-variant-numeric:tabular-nums}
+#aout .aomenu{position:absolute;top:calc(100% - var(--sp-1));right:var(--sp-4);z-index:3;width:260px;padding:var(--sp-1);border-radius:var(--r-2);background:var(--sheet);box-shadow:var(--elev);display:flex;flex-direction:column;animation:hcin var(--t-fast) var(--ease)}
+#aout .aomi{display:flex;align-items:center;gap:var(--sp-2);height:28px;padding:0 var(--sp-2);border:0;border-radius:var(--r-1);background:none;color:var(--text);font:var(--ds-type-body);text-align:left}
+#aout .aomi:hover,#aout .aomi:focus-visible{background:var(--fill-hover);box-shadow:none} #aout .aomi .l{flex:1}
+#aout .aostrip .aos-cost{color:var(--text3)} #aout .aostrip .aos-cost b{color:var(--text);font-weight:500}
+#aout .aowarn{display:flex;align-items:center;gap:var(--sp-2);margin:var(--sp-3) var(--sp-4) 0;padding:var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-3);border-radius:var(--r-2);background:var(--orange-tint);color:var(--orange-ink);font:var(--ds-type-body);flex-shrink:0}
+#aout .aowarn .msg{flex:1;min-width:0} #aout .aowarn b{font-weight:600}
+#aout .aowarn .btn{background:none;color:inherit} #aout .aowarn .btn:hover:not(:disabled){background:var(--fill)}
+.aoe.line .aog{display:flex;align-items:center;justify-content:center;align-self:start;height:var(--lh-3);color:var(--faint)}
+.aoe.line .aomt,.aoe.you .aomt{font:var(--ds-type-caption);color:var(--text3);white-space:nowrap;align-self:center}
+.aoe.you .aow[data-meta]::after{content:attr(data-meta);margin-left:var(--sp-2);font:var(--ds-type-caption);color:var(--text3)}
+.aofold{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;padding:0;border:0;border-radius:var(--r-0);background:none;color:var(--text3)}
+.aofold:hover{background:var(--fill-hover);color:var(--text)}
+.aoe.line.sec{margin-top:var(--sp-1)} .aoe.line.sec .aotx{font-weight:600}
+.aoe.line.in .aotx{padding-left:var(--sp-4)} .aolog.filtered .aoe.line.in .aotx{padding-left:0}
+.aoe.line.turn{margin:var(--sp-4) 0 var(--sp-1);padding:6px var(--sp-2);background:var(--card);border-radius:var(--r-1);box-shadow:var(--shadow-sm)}
+.aoe.line.turn .aotx{font:var(--ds-type-strong);color:var(--text)} .aoe.line.turn:hover{background:var(--card)}
+.aoe.line.err .aog,.aoe.line.err .aotx{color:var(--red-ink)}
+.aoe.aoat{background:var(--fill)} .aoe.line.turn.aoat{box-shadow:var(--shadow-sm),inset 0 0 0 1px var(--ds-accent-ring)}
+#aout mark{background:var(--accent-subtle);color:inherit;border-radius:var(--r-0)} #aout mark.cur{box-shadow:0 0 0 1px var(--ds-accent-ring)}
+#aout-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--sp-2);min-height:60%;text-align:center;font:var(--ds-type-body)}
+#aout-empty[hidden]{display:none} #aout-empty .ic{color:var(--faint)} #aout-empty h3{margin:0;font:var(--ds-type-title-sm)} #aout-empty p{margin:0;color:var(--text3)}
+#aout .aojn{font:var(--ds-type-caption);color:var(--text3);white-space:nowrap}
+#aout .aofiles{width:340px;flex-shrink:0;display:flex;flex-direction:column;min-height:0;background:var(--card);border-left:1px solid var(--hair);border-top:1px solid var(--hair)}
+#aout .aofh{display:flex;align-items:center;gap:var(--sp-2);height:40px;padding:0 var(--sp-2) 0 var(--sp-4);flex-shrink:0}
+#aout .aofh b{font:var(--ds-type-title-sm)}
+#aout .aofn{font:var(--ds-type-caption);white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--text3)}
+#aout .add{color:var(--ds-diff-add-fg)} #aout .rem{color:var(--ds-diff-remove-fg)}
+#aout .aoflist{display:flex;flex-direction:column;max-height:40%;overflow:auto;flex-shrink:0}
+#aout .aofrow{display:flex;align-items:center;gap:var(--sp-2);height:28px;margin:0 var(--sp-1);padding:0 var(--sp-2);border:0;border-radius:var(--r-1);background:none;color:var(--text);font:var(--ds-type-label);text-align:left;flex-shrink:0}
+#aout .aofrow:hover{background:var(--fill)} #aout .aofrow.sel{background:var(--fill-active)}
+#aout .aofrow.skel i{display:block;height:10px;border-radius:var(--r-0);background:var(--fill)}
+#aout .aost{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:var(--r-0);background:var(--fill);color:var(--text3);font:var(--ds-type-label-sm)}
+#aout .aop{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;font-family:var(--mono)} #aout .aop span{color:var(--text3)}
+#aout .aodiff{flex:1;min-height:0;overflow:auto;margin:var(--sp-2);padding:var(--sp-1) 0;border-radius:var(--r-2);background:var(--ds-bg-sunken);font:var(--ds-type-code);outline:0;-webkit-user-select:text;user-select:text}
+#aout .aodiff:focus-visible{box-shadow:var(--ring)}
+#aout .aodiff .dfn{position:sticky;top:calc(-1 * var(--sp-1));padding:var(--sp-1) var(--sp-3);background:var(--ds-bg-sunken);font:var(--ds-type-label);color:var(--text);font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#aout .aodiff .dh{padding:var(--sp-1) var(--sp-3);font:var(--ds-type-label);color:var(--text3)}
+#aout .aodiff .dl{display:grid;grid-template-columns:16px max-content;padding:0 var(--sp-3);white-space:pre}
+#aout .aodiff .dl.a{background:var(--ds-diff-add-bg);color:var(--ds-diff-add-fg)} #aout .aodiff .dl.r{background:var(--ds-diff-remove-bg);color:var(--ds-diff-remove-fg)}
+#aout .aoff{padding:0 var(--sp-4) var(--sp-2);font:var(--ds-type-caption);color:var(--text3)}
+#aout .aofe{display:flex;flex-direction:column;align-items:flex-start;gap:var(--sp-1);padding:var(--sp-2) var(--sp-4);font:var(--ds-type-body);color:var(--text3)} #aout .aofe b{color:var(--text);font-weight:500}
+#aout-share{z-index:80;position:absolute}
+.aoshare{width:min(540px,100%)}
+.aorange{margin:0;padding:0;border:0;display:flex;flex-direction:column}
+.aorange legend{padding:0;margin-bottom:var(--sp-1);font:var(--ds-type-label)}
+.aoopt{display:flex;align-items:center;gap:var(--sp-2);height:28px;font:var(--ds-type-body)} .aoopt input{margin:0;accent-color:var(--accent-solid)}
+.aooptn{margin-left:auto;font:var(--ds-type-label);color:var(--text3);font-variant-numeric:tabular-nums}
+.aosafe{display:flex;gap:var(--sp-2);padding:var(--sp-3);border-radius:var(--r-2);background:var(--fill);font:var(--ds-type-body)}
+.aosafe b{font-weight:500} .aosafe p{margin:2px 0 0;font:var(--ds-type-caption);color:var(--text3)}
+.aopv{margin:0;min-height:72px;max-height:220px;overflow:auto;padding:var(--sp-2) var(--sp-3);border-radius:var(--r-2);background:var(--ds-bg-sunken);font:var(--ds-type-code);white-space:pre;outline:0;-webkit-user-select:text;user-select:text}
+.aopv:focus-visible{box-shadow:var(--ring)} .aopv .spin{width:12px;height:12px;display:inline-block}
+.aosf{display:flex;justify-content:flex-end;gap:var(--sp-2)}
+#aout .aofiles[hidden],#aout .aowarn[hidden]{display:none}
+@media (max-width:900px){#aout .aofiles{width:280px} #aout .aoq{width:220px}}
+@media (max-width:720px){#aout .aohd .lbl{display:none}}
+@media (max-width:640px){#aout .aobody{flex-direction:column} #aout .aofiles{width:auto;height:45%;border-left:0}}
 .aosep.aolook::before,.aosep.aolook::after{background:var(--accent)}
 .aosep.aolook .aots{color:var(--text3);font-weight:400}
 .aomore{display:flex;justify-content:center;min-height:28px;margin-bottom:var(--sp-3);font-size:var(--fs-2);color:var(--text3)} .aonote{margin:var(--sp-6) 0;text-align:center;font-size:var(--fs-3);color:var(--text3)}
@@ -1745,28 +1818,37 @@ function openOut(name){
   closeOut(false);
   ui.out = {name, entries: [], ids: new Set(), tip: {}, main: null, more: null, loaded: false, older: false, olderErr: null, err: null,
     unseen: 0, follow: true, inflight: false, timer: 0, source: null, lastOutputTs: null, tool: "", toolInput: "",
-    lastLooked: getLastLooked(name), seenTs: null, tail: null};
+    lastLooked: getLastLooked(name), seenTs: null, tail: null,
+    q: "", hits: [], hitSet: null, hit: -1, filter: "all", folds: new Set(), unfolds: new Set(), info: new Map(), heads: new Map(),
+    extras: null, xtimer: 0, filesOpen: false, file: null, share: null, dismissed: "", warnKey: ""};
   const p = puckOf(name) || {name, agent: {}};
   const el = h("div", {id:"aout", role:"dialog", "aria-modal":"true", "aria-labelledby":"aout-t", onkeydown: outKeys},
     h("header", {class:"aohd"},
       h("button", {class:"btn back", id:"aout-back", title:"Back to the agents (Esc)", onclick: () => closeOut(true)}, icon("chevron-left"), "Back"),
       agentAv(p.agent.type, 12, "av sm"),
       h("div", {class:"aot"}, h("b", {id:"aout-t", title: mrTitle(p)}, `All output · ${mrTitle(p)}`), h("span", {id:"aout-sub"})),
-      p.path ? h("button", {class:"btn sm", id:"aout-basement", title:"Open this workspace's live terminal in the Basement", onclick: () => toBasement(name)}, icon("terminal", 12), "Basement") : null,
+      h("button", {class:"btn sm", id:"aout-files-btn", "aria-label":"Files touched", "aria-pressed":"false", "aria-controls":"aout-files", title:"What this branch changes, beside the log", onclick: () => outFiles(!ui.out.filesOpen)},
+        icon("panel", 12), h("span", {class:"lbl"}, "Files"), h("span", {class:"count", id:"aout-files-n", hidden: true})),
+      h("button", {class:"btn sm", id:"aout-share-btn", title:"A copy of this log with private details taken out", onclick: () => outShare(true), "aria-label":"Share log…"}, icon("download", 12), h("span", {class:"lbl"}, "Share log…")),
+      p.path ? h("button", {class:"btn sm", id:"aout-basement", title:"Open this workspace's live terminal in the Basement", onclick: () => toBasement(name), "aria-label":"Basement"}, icon("terminal", 12), h("span", {class:"lbl"}, "Basement")) : null,
       h("button", {class:"btn sm", onclick: () => { closeOut(false); openPage(name) }}, "Open workspace")),
     h("div", {class:"aostrip", id:"aout-strip", role:"region", "aria-label":"Agent status"}),
-    h("div", {class:"aolog", id:"aout-log", tabindex:"0", role:"log", "aria-label":"Agent output", onscroll: outScrolled},
-      h("div", {class:"aomore", id:"aout-more"}), h("div", {id:"aout-list"})),
-    h("footer", {class:"aoft"}, h("div", {class:"aline", id:"aout-now"}),
+    h("div", {id:"aout-warn", hidden: true}),
+    outToolbar(),
+    h("div", {class:"aobody"},
+      h("div", {class:"aolog", id:"aout-log", tabindex:"0", role:"log", "aria-label":"Agent output", onscroll: outScrolled},
+        h("div", {class:"aomore", id:"aout-more"}), h("div", {id:"aout-list"}), h("div", {id:"aout-empty", hidden: true})),
+      h("aside", {class:"aofiles", id:"aout-files", "aria-label":"Files touched", hidden: true})),
+    h("footer", {class:"aoft"}, h("div", {class:"aline", id:"aout-now"}), h("span", {class:"aojn", id:"aout-note", role:"status"}),
       h("button", {class:"btn sm", id:"aout-new", hidden: true, onclick: () => outBottom()})));
   document.body.append(el);
-  outHead(); outPaint(); pollOut();
+  outHead(); outPaint(); pollOut(); pollExtras();
   document.getElementById("aout-log").focus();  // the keys scroll it at once: arrows, Page Up/Down, Home, End
 }
 function closeOut(refocus){
   const o = ui.out; if (!o) return;
   saveOutLooked(o);
-  clearTimeout(o.timer); ui.out = null;
+  clearTimeout(o.timer); clearTimeout(o.xtimer); ui.out = null;
   const el = document.getElementById("aout"); if (el) el.remove();
   const card = `.acard[data-name="${CSS.escape(o.name)}"]`;  // back where you clicked; the card's Answer/Open if its output line went (it asked, say)
   const back = refocus && (document.querySelector(`${card} button.aline`) || document.querySelector(`${card} button.open`) || document.querySelector("#main section.agents h2") || document.getElementById("main"));
@@ -1774,9 +1856,24 @@ function closeOut(refocus){
   if (back) back.focus();
 }
 function outKeys(e){
-  if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeOut(true); return }
+  const o = ui.out, t = e.target, typing = t && /INPUT|TEXTAREA|SELECT/.test(t.tagName);
+  if (e.key === "Escape") {  // the innermost thing first: the share sheet, the Jump menu, the search, then the view
+    e.preventDefault(); e.stopPropagation();
+    if (o && o.share) outShare(false);
+    else if (document.getElementById("aout-jump")) outJumpMenu(false);
+    else if (t && t.id === "aout-q" && t.value) outSearch("");
+    else if (t && t.id === "aout-q") document.getElementById("aout-log").focus();
+    else closeOut(true);
+    return;
+  }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") { e.preventDefault(); const q = document.getElementById("aout-q"); q.focus(); q.select(); return }
+  if (o && !typing && !e.metaKey && !e.ctrlKey && !e.altKey && !o.share) {  // the log's own keys (Jump to lists them)
+    const k = OUT_KEYS[e.key];
+    if (k) { e.preventDefault(); k(); return }
+  }
   if (e.key !== "Tab") return;  // a modal: Tab cycles inside it (also WebKit, where native Tab skips buttons)
-  const f = [...document.querySelectorAll("#aout button:not([hidden]):not([disabled]), #aout a[href]:not([hidden]), #aout [tabindex='0']")], k = f.indexOf(document.activeElement);
+  const scope = o && o.share ? "#aout-share" : "#aout";
+  const f = [...document.querySelectorAll(`${scope} button:not([disabled]), ${scope} a[href], ${scope} input, ${scope} [tabindex='0']`)].filter(x => x.getClientRects().length), k = f.indexOf(document.activeElement);
   if (!f.length) return;
   e.preventDefault();
   f[k < 0 ? (e.shiftKey ? f.length - 1 : 0) : (k + (e.shiftKey ? -1 : 1) + f.length) % f.length].focus();
@@ -1807,7 +1904,7 @@ function lookedDivider(ts){
 function syncEntryDom(node, e){
   if (!node) return;
   const tx = node.querySelector(".aotx");
-  if (tx) { const t = e.text || " "; if (tx.textContent !== t) tx.textContent = t }
+  if (tx) { const t = e.text || " "; if (tx.textContent !== t) { tx.textContent = t; if (ui.out && ui.out.q) outMarkEl(node, e) } }
   const ts = node.querySelector(".aots");
   if (ts && typeof e.ts === "number" && isFinite(e.ts)) {
     ts.dataset.ts = String(e.ts); ts.title = new Date(e.ts).toLocaleString();
@@ -1844,7 +1941,7 @@ function gotOut(r){  // mc.transcript: a refresh (no before) or an earlier page 
     const add = arr(r.entries).filter(e => !e.partial && !o.ids.has(e.id));
     add.forEach(e => { o.ids.add(e.id); if (!(stemOf(e) in o.tip) || idxOf(e) > o.tip[stemOf(e)]) o.tip[stemOf(e)] = idxOf(e) }); o.entries = add.concat(o.entries); o.more = r.more || null;
     document.getElementById("aout-list").prepend(...add.map(e => outEntry(e)));
-    syncLookedDivider();
+    syncLookedDivider(); outRefine();
     log.scrollTop = t0 + log.scrollHeight - h0;  // what you were reading stays put
     outMore(); return;
   }
@@ -1912,7 +2009,7 @@ function gotOut(r){  // mc.transcript: a refresh (no before) or an earlier page 
         }
       }
       syncOutTail(list, o.tail);
-      syncLookedDivider();
+      syncLookedDivider(); outRefine();
       if (o.follow) outBottom(); else if (add.length) { o.unseen += add.length; outNew() }  // scrolled up: what you're reading stays put
     }
     outMore();
@@ -1928,7 +2025,7 @@ function outEntry(e, other){  // other: a line of another session running alongs
   const stamp = tsEl(e.ts);
   if (e.role === "sep") return h("div", {class:"aosep", "data-id": e.id}, e.text);
   if (e.role === "line") return h("div", {class:"aoe line", "data-id": e.id},
-    stamp || h("span", {class:"aots", "aria-hidden":"true"}), h("span", {class:"aotx"}, e.text || " "));
+    stamp || h("span", {class:"aots", "aria-hidden":"true"}), h("span", {class:"aog"}), h("span", {class:"aotx"}, e.text || " "), h("span", {class:"aomt"}));
   if (e.role === "tool" && other) e = {...e, text: e.text + "  (another session)"};
   if (e.role === "tool") { const long = e.text.length > 240, open = el => { const had = el === document.activeElement; el.classList.add("open");
       ["tabindex", "role", "aria-expanded", "title"].forEach(a => el.removeAttribute(a)); if (had) document.getElementById("aout-log").focus();
@@ -1951,7 +2048,7 @@ function outPaint(){  // the first page
   list.replaceChildren(...o.entries.map(e => outEntry(e, e.other)));
   syncOutTail(list, o.tail);
   if (o.loaded && !o.entries.length && !o.tail) list.append(h("div", {class:"aonote"}, "No output from this workspace's agents yet."));
-  syncLookedDivider();
+  syncLookedDivider(); outRefine();
   outMore(); outBottom();
 }
 function outMore(){  // the top of the log: Load earlier, or where the sessions start
@@ -1997,29 +2094,31 @@ function outStrip(o, p){
   const ciGlyph = ciTone ? ciIcon : "ci";
   const ciCol = {ok:"--green", bad:"--red", run:"--blue"}[ciTone];
   const {n, i} = p ? stepsOf(p) : {n: 0, i: 0}, stepLabel = p && p.step ? (STEP_GOALS[p.step] || STEP_NAMES[p.step] || cap(String(p.step).replace(/_/g, " "))) : "";
-  const key = [st[0], st[1], lastTs ? Math.floor(lastTs / 1000) : "", toolText, mr.iid || "", mr.ref || "", mr.web_url || "", mr.draft || "", ciLabel, ciGlyph || "", i, n, stepLabel, p && p.state || ""].join("\u0000");
+  const cost = outCost(o);
+  const key = [st[0], st[1], lastTs ? Math.floor(lastTs / 1000) : "", toolText, cost ? cost.join() : "", mr.iid || "", mr.ref || "", mr.web_url || "", mr.draft || "", ciLabel, ciGlyph || "", i, n, stepLabel, p && p.state || ""].join("\u0000");
   if (strip.dataset.key === key) return;
   const hadPrFocus = !!(document.activeElement && strip.contains(document.activeElement) && document.activeElement.classList.contains("aos-pr"));
   strip.dataset.key = key;
-  strip.replaceChildren(
+  strip.replaceChildren(...[
     statusPill(st[0], st[1]),
     h("span", {class:"aos-item aos-out"}, lastTs ? ["Last output ", h("b", {"data-ts": String(lastTs), title: new Date(lastTs).toLocaleString()}, relTime(lastTs))] : "No output yet"),
     toolText ? h("span", {class:"aos-item aos-tool", title: toolText}, h("span", {class:"mono"}, short(toolText, 80))) : null,
     h("span", {class:"aos-sp"}),
+    cost ? h("span", {class:"aos-item aos-cost", title: cost[2]}, cost[0] ? [h("b", {}, cost[0]), " · "] : null, cost[1]) : null,
     mr.iid ? (safeHttpUrl(mr.web_url)
       ? h("a", {class:"aos-pr", href: mr.web_url, title: mr.title || mrRef(mr)}, icon("mr", 12), mrRef(mr), mr.draft ? h("span", {class:"ltag"}, "Draft") : null)
       : h("span", {class:"aos-pr"}, icon("mr", 12), mrRef(mr), mr.draft ? h("span", {class:"ltag"}, "Draft") : null))
       : h("span", {class:"aos-item muted"}, "No PR"),
     ciLabel ? h("span", {class:"aos-ci", style: ciCol ? `color:${ink(ciCol)}` : null}, icon(ciGlyph, 12), ciLabel) : null,
     n ? h("span", {class:"aos-item aos-step"}, `Step ${Math.min(i + 1, n)} of ${n}`, stepLabel ? [" · ", h("b", {}, p && p.state === "done" ? "Done" : stepLabel)] : null)
-      : stepLabel ? h("span", {class:"aos-item aos-step"}, h("b", {}, stepLabel)) : null);
+      : stepLabel ? h("span", {class:"aos-item aos-step"}, h("b", {}, stepLabel)) : null].filter(Boolean));
   if (hadPrFocus) strip.querySelector("a.aos-pr")?.focus();
 }
 function outHead(){  // who and what it's doing now, from the 5s snapshot; any refresh error
   const o = ui.out; if (!o) return;
   const p = puckOf(o.name), a = p ? p.agent : {}, sub = document.getElementById("aout-sub"), now = document.getElementById("aout-now");
   if (!sub || !now) return;
-  outStrip(o, p);
+  outStrip(o, p); outWarn();
   const who = agentMeta(a.type).name, t0 = since(a.since);
   sub.replaceChildren(...[!p ? "This workspace is gone" : `${who} ${{working:"is working", waiting:"is waiting on you"}[a.state] || "is idle"}`,
     ...(p && t0 ? [" · ", h("span", {"data-since": t0}, clock(t0))] : []), " · updates live"]);
@@ -2030,6 +2129,384 @@ function outHead(){  // who and what it's doing now, from the 5s snapshot; any r
   now.replaceChildren(...(o.err ? [h("span", {class:"aerr", role:"alert"}, `Couldn't refresh: ${short(o.err, 160)}. Retrying.`)]
     : a.state === "working" ? [h("span", {class:"adot", "aria-hidden":"true"}), h("span", {class:"mono", title: toolName ? `${toolName}: ${toolIn}` : ""}, toolName ? `${toolName}${toolIn ? ": " + toolIn : ""}` : "Working")]
     : a.state === "waiting" ? [h("span", {class:"mono"}, "Waiting on your answer")] : [h("span", {class:"mono"}, "Not working right now")]));
+}
+/* ---------- All output, phases 2-3 (issue 191): turns and tool calls fold, search, filter and jump, stuck and looping warnings,
+   the sessions' cost, the files the branch touched, and a copy of the log to share with private details taken out.
+   The log stays one flat list (what a refresh appends to): outRefine() works out each entry's kind and section and only
+   toggles classes and `hidden`, so a refresh, a page of earlier output or a fold never rebuilds what you're reading. */
+const OUT_STUCK = 10 * 60e3, OUT_EXTRAS = 30000, OUT_FOLD = 30;  // working with no output this long: stuck; extras refresh; a call longer than this folds once it's done
+const TOOL_LINE = /^\s*[●⏺•▸▹▶*]\s*(?:Bash|Read|Edit|Write|MultiEdit|Update|Grep|Glob|Search|WebFetch|Fetch|WebSearch|Agent|Task|NotebookEdit|TodoWrite|Skill)\s*\(|^\s*[•●]\s*(?:Ran|Running|Explored|Edited|Exploring)\s+\S/;
+const PROMPT_LINE = /^\s*[>›❯]\s+\S/;  // Claude Code and Codex echo your prompt this way
+const SAID_LINE = /^\s*[⏺●•]\s+\S/;  // the agent talking (not a tool call): it ends the call before it
+const ERR_LINE = /^\s*(?:⎿\s*)?(?:E\s{2,}\S|ERROR\b|FAILED\b|FAIL\b|Error\b|error(?:\[\w+\])?:|Traceback\b|fatal:|panic:|npm ERR!)|\b[1-9]\d* (?:failed|errors?)\b|\b\w*(?:Error|Exception):\s|[✗✘]/;
+const OUT_FILTERS = [["all", "All"], ["tool", "Tool calls"], ["err", "Errors"], ["prompt", "Prompts"]];
+const OUT_KEYS = {e: () => outJump("err", 1), E: () => outJump("err", -1), "]": () => outJump("tool", 1), "[": () => outJump("tool", -1),
+  p: () => outJump("prompt", 1), P: () => outJump("prompt", -1), l: () => outJump("looked"), "/": () => document.getElementById("aout-q").focus()};
+const OUT_JUMPS = [["looked", 0, "Since you last looked", "L"], ["err", 1, "Next error", "E"], ["err", -1, "Previous error", "⇧E"],
+  ["tool", 1, "Next tool call", "]"], ["tool", -1, "Previous tool call", "["], ["prompt", 1, "Next prompt", "P"], ["latest", 0, "Latest output", "End"]];
+function outKind(e){
+  if (e.role === "user") return "prompt";
+  if (e.role === "tool") return "tool";
+  if (e.role === "sep") return "sep";
+  const t = e.text || "";
+  if (e.role === "line" && TOOL_LINE.test(t)) return "tool";
+  if (e.role === "line" && PROMPT_LINE.test(t)) return "prompt";
+  if (e.role === "line" && SAID_LINE.test(t)) return "said";
+  return e.role === "line" && ERR_LINE.test(t) ? "err" : "out";
+}
+function outAll(o){ return o.tail ? o.entries.concat(o.tail) : o.entries }
+function outSections(o){  // id → {k, turn, sec}; header id → {k, n, tools}. Pane logs fold by tool call too; transcripts by turn only
+  const info = new Map(), heads = new Map();
+  let turn = null, sec = null, stem = null;
+  for (const e of outAll(o)) {
+    const k = outKind(e), st = stemOf(e);
+    if (st !== stem) { stem = st; turn = sec = null }  // a new session starts its own sections
+    if (k === "sep") { turn = sec = null; info.set(e.id, {k}); continue }
+    if (k === "prompt") { turn = e.id; sec = null; heads.set(e.id, {k, n: 0, tools: 0}); info.set(e.id, {k}); continue }
+    if (turn) heads.get(turn).n++;
+    if (k === "tool") {
+      if (turn) heads.get(turn).tools++;
+      sec = o.source === "pane" ? e.id : null;
+      if (sec) heads.set(e.id, {k, n: 0});
+      info.set(e.id, {k, turn}); continue;
+    }
+    if (k === "said") sec = null;
+    if (sec) heads.get(sec).n++;
+    info.set(e.id, {k, turn, sec});
+  }
+  return {info, heads};
+}
+function outVisible(o, id, f){
+  if (o.filter !== "all") return f.k === o.filter;
+  if (o.hitSet && o.hitSet.has(id)) return true;  // a match always shows, folded or not
+  if (f.turn && o.folds.has(f.turn)) return false;
+  return !(f.sec && o.folds.has(f.sec));
+}
+function outRefine(){
+  const o = ui.out, list = document.getElementById("aout-list"); if (!o || !list) return;
+  const {info, heads} = outSections(o); o.info = info; o.heads = heads;
+  const calls = [...heads].filter(([, x]) => x.k === "tool"), newest = calls.length ? calls[calls.length - 1][0] : null;
+  if (o.follow) for (const [id, x] of calls) if (x.n > OUT_FOLD && id !== newest && !o.unfolds.has(id)) o.folds.add(id);  // a long call folds once the next one starts (never under you)
+  let shown = 0;
+  for (const el of list.querySelectorAll(":scope > [data-id]")) {
+    const id = el.dataset.id, f = info.get(id); if (!f) continue;
+    if (el.dataset.k !== f.k) {
+      el.dataset.k = f.k;
+      el.classList.toggle("err", f.k === "err"); el.classList.toggle("sec", heads.has(id) && f.k === "tool"); el.classList.toggle("turn", f.k === "prompt");
+      const g = el.querySelector(".aog"); if (g && f.k === "err") g.replaceChildren(icon("crashed-fill", 12));
+    }
+    el.classList.toggle("in", !!f.sec);
+    if (heads.has(id)) outHeadRow(el, id, heads.get(id), o);
+    const vis = outVisible(o, id, f);
+    if (el.hidden === vis) el.hidden = !vis;
+    if (vis) shown++;
+  }
+  outFilterBar(o, info);
+  document.getElementById("aout-log").classList.toggle("filtered", o.filter !== "all");
+  const empty = document.getElementById("aout-empty"), none = o.loaded && o.filter !== "all" && !shown;
+  empty.hidden = !none;
+  if (none) { const what = {tool: "tool calls", err: "errors", prompt: "prompts"}[o.filter];
+    const isErr = o.filter === "err";
+    empty.replaceChildren(icon(isErr ? "done" : "search", 20), h("h3", {}, `No ${what} in what's loaded`),
+      h("p", {}, o.filter === "err" ? "Lines that look like a failure (a traceback, FAILED, error:) show here." : `${cap(what)} show here as the agent makes them.`),
+      h("button", {class:"btn", onclick: () => outFilter("all")}, "Show everything")) }
+  if (o.q) outMarks();
+}
+function outHeadRow(el, id, x, o){  // a tool call's or a prompt's row: its fold button and what it holds
+  const folded = o.folds.has(id), meta = x.k === "tool" ? (x.n ? `${x.n} line${x.n === 1 ? "" : "s"}` : "")
+    : x.tools ? `${x.tools} tool call${x.tools === 1 ? "" : "s"}` : "";
+  const key = `${folded}|${meta}`; if (el.dataset.hk === key) return; el.dataset.hk = key;
+  const slot = el.querySelector(".aog") || el.querySelector(".aow"), mt = el.querySelector(".aomt");
+  const btn = x.n ? h("button", {class:"aofold", tabindex:"-1", "aria-expanded": String(!folded), "aria-label": folded ? "Unfold" : "Fold",
+    title: folded ? "Show what's in it" : "Fold it", onclick: ev => { ev.stopPropagation(); outFold(id) }}, icon(folded ? "chevron-right" : "chevron-down", 12)) : null;
+  el.querySelector(".aofold")?.remove();
+  if (btn) slot.prepend(btn);
+  if (mt) mt.textContent = meta; else if (meta) slot.dataset.meta = meta; else delete slot.dataset.meta;  // a transcript's prompt: its label stays the label
+}
+function outFold(id, fold){
+  const o = ui.out; if (!o) return;
+  const now = fold ?? !o.folds.has(id);
+  if (now) { o.folds.add(id); o.unfolds.delete(id) } else { o.folds.delete(id); o.unfolds.add(id) }
+  outRefine(); outScrolled({currentTarget: document.getElementById("aout-log")});
+}
+function outFoldAll(){
+  const o = ui.out; if (!o) return;
+  const ids = [...o.heads].filter(([, x]) => x.n).map(([id]) => id), fold = ids.some(id => !o.folds.has(id));
+  ids.forEach(id => { if (fold) { o.folds.add(id); o.unfolds.delete(id) } else { o.folds.delete(id); o.unfolds.add(id) } });
+  outRefine(); if (o.follow) outBottom();
+}
+/* the toolbar: search, the kind filter, Fold all, Jump to */
+function outToolbar(){
+  return h("div", {class:"aotb", id:"aout-tb"},
+    h("div", {class:"aoq"}, icon("search", 14),
+      h("input", {id:"aout-q", type:"search", placeholder:"Search the log", "aria-label":"Search the log", autocomplete:"off", spellcheck:"false",
+        oninput: e => { clearTimeout(outSearch.t); const v = e.currentTarget.value; outSearch.t = setTimeout(() => outSearch(v, true), 120) },
+        onkeydown: e => { if (e.key === "Enter") { e.preventDefault(); outStep(e.shiftKey ? -1 : 1) } }}),
+      h("span", {class:"aoqn", id:"aout-qn"}), h("kbd", {class:"kbd", id:"aout-qk", "aria-hidden":"true"}, "⌘F"),
+      h("button", {class:"btn ico sm", id:"aout-qprev", "aria-label":"Previous match", title:"Previous match (⇧Return)", hidden: true, onclick: () => outStep(-1)}, icon("chevron-up", 12)),
+      h("button", {class:"btn ico sm", id:"aout-qnext", "aria-label":"Next match", title:"Next match (Return)", hidden: true, onclick: () => outStep(1)}, icon("chevron-down", 12)),
+      h("button", {class:"btn ico sm", id:"aout-qclear", "aria-label":"Clear search", hidden: true, onclick: () => { outSearch(""); document.getElementById("aout-q").focus() }}, icon("clear", 12))),
+    h("div", {class:"seg", id:"aout-filter", role:"group", "aria-label":"Show"}),
+    h("span", {class:"aosp"}),
+    h("button", {class:"btn sm quiet", id:"aout-foldall", title:"Fold or unfold every turn and tool call", onclick: outFoldAll}, icon("collapse", 12), "Fold all"),
+    h("button", {class:"btn sm quiet", id:"aout-jumpbtn", "aria-haspopup":"menu", "aria-expanded":"false", onclick: () => outJumpMenu(!document.getElementById("aout-jump"))}, "Jump to", icon("chevron-down", 12)));
+}
+function outFilterBar(o, info){
+  const fa = document.getElementById("aout-foldall");
+  if (fa) { const ids = [...o.heads].filter(([, x]) => x.n).map(([id]) => id), all = ids.length > 0 && ids.every(id => o.folds.has(id));
+    fa.disabled = !ids.length || o.filter !== "all";
+    if (fa.dataset.all !== String(all)) { fa.dataset.all = String(all); fa.replaceChildren(icon(all ? "expand" : "collapse", 12), all ? "Unfold all" : "Fold all") } }
+  const bar = document.getElementById("aout-filter"); if (!bar) return;
+  const n = {all: 0, tool: 0, err: 0, prompt: 0}; for (const f of info.values()) { if (f.k !== "sep") n.all++; if (f.k in n) n[f.k]++ }
+  const key = OUT_FILTERS.map(([k]) => n[k]).join() + o.filter + o.loaded; if (bar.dataset.key === key) return; bar.dataset.key = key;
+  const had = bar.contains(document.activeElement) && document.activeElement.dataset.f;
+  bar.replaceChildren(...OUT_FILTERS.map(([k, label]) => h("button", {"data-f": k, "aria-pressed": String(o.filter === k), onclick: () => outFilter(k)},
+    label, o.loaded ? h("span", {class:"segn"}, n[k].toLocaleString()) : null)));  // no counts until there's something counted
+  if (had) bar.querySelector(`[data-f="${had}"]`)?.focus();
+}
+function outFilter(k){
+  const o = ui.out; if (!o || o.filter === k) return;
+  o.filter = k; outRefine();
+  const log = document.getElementById("aout-log"); log.scrollTop = log.scrollHeight; outScrolled({currentTarget: log});
+}
+/* search: every loaded line, case-insensitive; matches show even inside a folded section */
+function outSearch(q, keepFocus){
+  const o = ui.out; if (!o) return;
+  q = String(q || ""); o.q = q.trim().toLowerCase();
+  const input = document.getElementById("aout-q"); if (input && input.value !== q && !keepFocus) input.value = q;
+  o.hits = o.q ? outAll(o).filter(e => e.role !== "sep" && String(e.text || "").toLowerCase().includes(o.q)).map(e => e.id) : [];
+  o.hitSet = o.q ? new Set(o.hits) : null;
+  o.hit = o.hits.length ? o.hits.length - 1 : -1;  // the newest match first: a log is read from the bottom
+  outRefine();
+  if (!o.q) outMarks();
+  outSearchUI(o); if (o.hit >= 0) outShowHit(o);
+}
+function outStep(d){
+  const o = ui.out; if (!o || !o.hits.length) return;
+  o.hit = (o.hit + d + o.hits.length) % o.hits.length; outMarks(); outSearchUI(o); outShowHit(o);
+}
+function outSearchUI(o){
+  const n = document.getElementById("aout-qn"), on = !!o.q;
+  n.textContent = !on ? "" : o.hits.length ? `${o.hit + 1} of ${o.hits.length}` : "No matches";
+  n.title = on && o.more ? "Searches what's loaded: Load earlier output to search further back" : "";
+  ["aout-qprev", "aout-qnext"].forEach(id => { const b = document.getElementById(id); b.hidden = !on; b.disabled = o.hits.length < 2 && !(o.hits.length === 1 && id === "aout-qnext") });
+  document.getElementById("aout-qclear").hidden = !on; document.getElementById("aout-qk").hidden = on;
+}
+function outShowHit(o){
+  const el = document.querySelector(`#aout-list > [data-id="${CSS.escape(o.hits[o.hit])}"]`); if (!el) return;
+  (el.querySelector("mark.cur") || el).scrollIntoView({block: "center"});
+  outScrolled({currentTarget: document.getElementById("aout-log")});
+}
+function outMarkEl(el, e){
+  const o = ui.out, tx = el && (el.querySelector(".aotx") || (el.classList.contains("tool") ? el.querySelector(".aotool") || el : null)); if (!o || !tx) return;
+  const text = e.role === "tool" && !el.querySelector(".aotool") ? e.text : (e.text || " ");
+  const q = o.q, cur = o.hits[o.hit] === e.id;
+  if (!q || !o.hitSet || !o.hitSet.has(e.id)) { if (tx.querySelector("mark")) tx.textContent = text; return }
+  const parts = [], low = text.toLowerCase(); let i = 0, first = true;
+  for (let j; (j = low.indexOf(q, i)) >= 0; i = j + q.length) {
+    if (j > i) parts.push(text.slice(i, j));
+    parts.push(h("mark", {class: cur && first ? "cur" : null}, text.slice(j, j + q.length))); first = false;
+  }
+  parts.push(text.slice(i)); tx.replaceChildren(...parts);
+}
+function outMarks(){
+  const o = ui.out, list = document.getElementById("aout-list"); if (!o || !list) return;
+  const byId = new Map(outAll(o).map(e => [e.id, e]));
+  for (const el of list.querySelectorAll(":scope > [data-id]")) { const e = byId.get(el.dataset.id); if (e && (o.hitSet?.has(e.id) || el.querySelector("mark"))) outMarkEl(el, e) }
+}
+/* Jump to: since you last looked, errors, tool calls, prompts, the latest */
+function outJumpMenu(open){
+  const o = ui.out, tb = document.getElementById("aout-tb"), btn = document.getElementById("aout-jumpbtn"); if (!o || !tb) return;
+  document.getElementById("aout-jump")?.remove(); btn.setAttribute("aria-expanded", String(open));
+  if (!open) { btn.focus(); return }
+  const errs = [...o.info.values()].filter(f => f.k === "err").length;
+  const items = OUT_JUMPS.filter(([k]) => k !== "looked" || document.getElementById("aout-looked")).map(([k, d, label, key]) =>
+    h("button", {role:"menuitem", class:"aomi", tabindex:"-1", onclick: () => { outJumpMenu(false); k === "latest" ? outBottom() : outJump(k, d) }},
+      h("span", {class:"l"}, label), k === "err" && d > 0 && errs ? h("span", {class:"count"}, String(errs)) : null, h("kbd", {class:"kbd"}, key)));
+  const menu = h("div", {class:"aomenu", id:"aout-jump", role:"menu", "aria-label":"Jump to", onkeydown: e => {
+    const f = [...menu.querySelectorAll("[role=menuitem]")], k = f.indexOf(document.activeElement);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); f[(k + (e.key === "ArrowDown" ? 1 : -1) + f.length) % f.length].focus() }
+    if (e.key === "Tab") { e.preventDefault(); e.stopPropagation(); outJumpMenu(false) } }}, ...items);
+  tb.append(menu); menu.querySelector("[role=menuitem]")?.focus();
+  setTimeout(() => document.addEventListener("pointerdown", function away(ev){ if (!menu.contains(ev.target) && ev.target !== btn && !btn.contains(ev.target)) { menu.remove(); btn.setAttribute("aria-expanded", "false") }
+    document.removeEventListener("pointerdown", away) }), 0);
+}
+function outJump(kind, dir = 1){
+  const o = ui.out, log = document.getElementById("aout-log"), list = document.getElementById("aout-list"); if (!o || !log) return;
+  let target = null;
+  if (kind === "looked") target = document.getElementById("aout-looked");
+  else {
+    if (o.filter !== "all" && o.filter !== kind) outFilter("all");
+    const lr = log.getBoundingClientRect(), at = list.querySelector(":scope > .aoat:not([hidden])"), ar = at && at.getBoundingClientRect();
+    const ids = [...o.info].filter(([, f]) => f.k === kind).map(([id]) => id), top = ar && ar.bottom > lr.top && ar.top < lr.bottom ? ar.top : lr.top + 8;  // from the last jump while it's in view: the end of the log can't scroll it to the top
+    const els = ids.map(id => list.querySelector(`:scope > [data-id="${CSS.escape(id)}"]`)).filter(Boolean);
+    const pos = el => { const f = o.info.get(el.dataset.id); if (el.hidden) { if (f.sec) outFold(f.sec, false); if (f.turn && o.folds.has(f.turn)) outFold(f.turn, false) } return el.getBoundingClientRect().top };
+    target = dir > 0 ? els.find(el => !el.hidden && el.getBoundingClientRect().top > top + 2 || el.hidden && (pos(el) > top + 2))
+      : [...els].reverse().find(el => el.getBoundingClientRect().top < top - 2 || el.hidden && pos(el) < top - 2);
+  }
+  const note = document.getElementById("aout-note");
+  if (!target) { note.textContent = kind === "looked" ? "Nothing new since you last looked" : `No ${dir > 0 ? "later" : "earlier"} ${{err: "error", tool: "tool call", prompt: "prompt"}[kind]}`;
+    clearTimeout(outJump.t); outJump.t = setTimeout(() => { note.textContent = "" }, 3000); return }
+  note.textContent = "";
+  list.querySelectorAll(".aoat").forEach(x => x.classList.remove("aoat")); target.classList.add("aoat");
+  target.scrollIntoView({block: "start"}); log.scrollTop -= 8;
+  outScrolled({currentTarget: log});
+}
+/* stuck and looping: a banner under the strip, only while it's true; dismissed, it stays away until things change */
+function outLoop(o){  // the last lines are one block of 1–6 lines said again and again (digits don't count: timers, counters)
+  const es = o.entries.filter(e => (e.role === "line" || e.role === "tool") && /[A-Za-z]/.test(e.text || "")).slice(-90);
+  const norm = es.map(e => e.text.replace(/\d+/g, "#").trim()), n = norm.length;
+  for (let k = 1; k <= 6; k++) {
+    let r = 1;
+    for (; (r + 1) * k <= n; r++) { let same = true; for (let i = 0; i < k; i++) if (norm[n - 1 - i] !== norm[n - 1 - r * k - i]) { same = false; break } if (!same) break }
+    if (r >= (k === 1 ? 8 : 5)) { const first = es[n - r * k], last = es[n - 1];
+      return {k, r, first: first.id, ms: typeof first.ts === "number" && typeof last.ts === "number" ? last.ts - first.ts : 0} }
+  }
+  return null;
+}
+function outWarn(){
+  const o = ui.out, el = document.getElementById("aout-warn"); if (!o || !el) return;
+  const p = puckOf(o.name), a = (p && p.agent) || {}, last = outMaxTs(o), now = Date.now();
+  let w = null;
+  if (o.loaded && a.state === "working" && last && now - last > OUT_STUCK) w = {id: "stuck:" + last, lead: `No output for ${ago((now - last) / 3.6e6)}`,
+    rest: " while the agent is working. It may be stuck on a prompt or a hung command.", act: p && p.path ? ["Open in Basement", () => toBasement(o.name)] : null};
+  else if (o.loaded) { const L = outLoop(o);
+    if (L) w = {id: "loop:" + L.first, lead: `The same ${L.k === 1 ? "line" : L.k + " lines"} came back ${L.r} times`,
+      rest: `${L.ms >= 60e3 ? " in " + ago(L.ms / 3.6e6) : ""}. The agent may be looping.`, act: ["Show the repeat", () => {
+        const t = document.querySelector(`#aout-list > [data-id="${CSS.escape(L.first)}"]`); if (t) { const f = o.info.get(L.first); if (t.hidden && f && f.sec) outFold(f.sec, false); t.scrollIntoView({block: "start"}); outScrolled({currentTarget: document.getElementById("aout-log")}) } }]} }
+  if (w && o.dismissed === w.id) w = null;
+  const key = w ? w.id + w.lead : "";
+  if (key === o.warnKey) return; o.warnKey = key;
+  el.hidden = !w;
+  if (!w) { el.replaceChildren(); return }
+  el.className = "aowarn"; el.setAttribute("role", "status");
+  el.replaceChildren(icon("needs-fill", 16), h("span", {class:"msg"}, h("b", {}, w.lead), w.rest),
+    w.act ? h("button", {class:"btn sm", onclick: w.act[1]}, w.act[0]) : null,
+    h("button", {class:"btn ico sm", "aria-label":"Dismiss", title:"Dismiss until it changes", onclick: () => { o.dismissed = w.id; o.warnKey = null; outWarn(); document.getElementById("aout-log").focus() }}, icon("close", 12)));
+}
+/* the extras: the sessions' tokens and cost (the strip) and the files the branch touched (the panel); refreshed while open */
+function pollExtras(){
+  const o = ui.out; if (!o) return;
+  clearTimeout(o.xtimer);
+  if (!document.hidden) post({cmd: "logextras", name: o.name});
+  o.xtimer = setTimeout(pollExtras, OUT_EXTRAS);
+}
+function gotExtras(r){
+  const o = ui.out; if (!o || !r || r.name !== o.name) return;
+  o.extras = r; outHead(); outFilesPanel();
+  const n = document.getElementById("aout-files-n"), files = r.files && !r.files.error ? arr(r.files.files) : null;
+  if (n) { n.hidden = !files; n.textContent = files ? String(files.length) : "" }
+}
+function fmtTokens(n){ return n < 1000 ? String(n) : n < 1e6 ? `${(n / 1e3).toFixed(n < 1e4 ? 1 : 0)}k` : `${(n / 1e6).toFixed(n < 1e7 ? 2 : 1)}M` }
+function outCost(o){  // [text, title] for the strip, or null
+  const u = o.extras && o.extras.usage; if (!u || !(u.in_tokens || u.out_tokens)) return null;
+  const tok = `${fmtTokens((u.in_tokens || 0) + (u.out_tokens || 0))} tokens`, c = typeof u.cost_cents === "number" && isFinite(u.cost_cents) ? u.cost_cents : null;
+  const money = c == null ? "" : `≈$${(c / 100).toFixed(c < 100 ? 2 : c < 10000 ? 2 : 0)}`;
+  const title = [`${(u.in_tokens || 0).toLocaleString()} in (${(u.cache_read || 0).toLocaleString()} from cache), ${(u.out_tokens || 0).toLocaleString()} out`,
+    `${u.sessions} session${u.sessions === 1 ? "" : "s"}${arr(u.models).length ? " · " + arr(u.models).join(", ") : ""}`,
+    c == null ? "No cost: the agent doesn't report one" : "Estimated from list prices"].join("\n");
+  return [money, tok, title];
+}
+function outFiles(open){
+  const o = ui.out; if (!o) return;
+  o.filesOpen = open;
+  const aside = document.getElementById("aout-files"), btn = document.getElementById("aout-files-btn");
+  aside.hidden = !open; btn.setAttribute("aria-pressed", String(open)); btn.classList.toggle("on", open);
+  if (open) { outFilesPanel(); if (!o.extras) pollExtras() }
+}
+function splitPatch(patch){  // "diff --git a/x b/y" chunks by the new path
+  const out = {}; let cur = null;
+  for (const line of String(patch || "").split("\n")) {
+    const m = /^diff --git a\/(.+?) b\/(.+)$/.exec(line);
+    if (m) { cur = out[m[2]] = []; continue }
+    if (cur && !/^(index |--- |\+\+\+ |new file|deleted file|similarity |rename |old mode|new mode)/.test(line)) cur.push(line);
+  }
+  for (const k in out) while (out[k].length && out[k][out[k].length - 1] === "") out[k].pop();  // the patch's last newline isn't a line
+  return out;
+}
+function outFilesPanel(){
+  const o = ui.out, aside = document.getElementById("aout-files"); if (!o || !aside || !o.filesOpen) return;
+  const d = o.extras && o.extras.files, files = d && !d.error ? arr(d.files) : null;
+  const key = !o.extras ? "load" : d && d.error ? "err" + d.error : JSON.stringify([files, o.file, d.base, d.cut]) + (d.patch || "").length;
+  if (aside.dataset.key === key) return; aside.dataset.key = key;
+  const add = files ? files.reduce((s, f) => s + (Number(f[1]) || 0), 0) : 0, rem = files ? files.reduce((s, f) => s + (Number(f[2]) || 0), 0) : 0;
+  const head = h("div", {class:"aofh"}, h("b", {}, "Files touched"), files ? h("span", {class:"count"}, String(files.length)) : null,
+    files && files.length ? h("span", {class:"aofn"}, h("span", {class:"add"}, `+${add}`), " ", h("span", {class:"rem"}, `−${rem}`)) : null,
+    h("span", {class:"aosp"}), h("button", {class:"btn ico sm", "aria-label":"Close files", onclick: () => { outFiles(false); document.getElementById("aout-files-btn").focus() }}, icon("close", 12)));
+  if (!o.extras) return aside.replaceChildren(head, ...[70, 55, 80, 40].map(w => h("div", {class:"aofrow skel", "aria-hidden":"true"}, h("i", {style:`width:${w}%`}))));
+  if (d && d.error) return aside.replaceChildren(head, h("div", {class:"aofe"}, h("b", {}, "Couldn't load the files"), h("span", {}, short(d.error, 140)),
+    h("button", {class:"btn sm", onclick: () => { o.extras = null; aside.dataset.key = ""; outFilesPanel(); pollExtras() }}, "Retry")));
+  if (!files.length) return aside.replaceChildren(head, h("div", {class:"aofe"}, h("b", {}, "No files changed yet"), h("span", {}, "Files the agent edits show here, with their diff.")));
+  if (!o.file || !files.some(f => f[0] === o.file)) o.file = files[0][0];
+  const st = arr(d.status), chunks = splitPatch(d.patch), STN = {M: "Modified", A: "Added", D: "Deleted", R: "Renamed", U: "New, not committed", C: "Copied"};
+  const rows = files.map(([path, a, r], i) => { const slash = path.lastIndexOf("/") + 1, k = (st[i] || "M")[0];
+    return h("button", {class:"aofrow" + (path === o.file ? " sel" : ""), "aria-pressed": String(path === o.file), title: path, onclick: () => { o.file = path; outFilesPanel() }},
+      h("span", {class:"aost", title: STN[k] || k}, k), h("span", {class:"aop"}, h("span", {}, path.slice(0, slash)), path.slice(slash)),
+      h("span", {class:"aofn"}, a === "-" ? "binary" : [h("span", {class:"add"}, Number(a) ? `+${a}` : ""), " ", h("span", {class:"rem"}, Number(r) ? `−${r}` : "")])) });
+  const lines = chunks[o.file] || [], shownLines = lines.slice(0, 400);
+  const diff = h("div", {class:"aodiff", tabindex:"0", role:"region", "aria-label":`Diff of ${o.file}`},
+    h("div", {class:"dfn"}, o.file),
+    ...(lines.length ? shownLines.map(l => l.startsWith("@@") ? h("div", {class:"dh"}, l) : h("div", {class:"dl" + (l[0] === "+" ? " a" : l[0] === "-" ? " r" : "")},
+      h("span", {"aria-hidden":"true"}, l[0] === "+" || l[0] === "-" ? l[0] : " "), l.slice(1))) : [h("div", {class:"dh"}, d.cut ? "This diff is too large to show here" : "No text diff (a binary or an empty file)")]),
+    lines.length > 400 ? h("div", {class:"dh"}, `${lines.length - 400} more lines: open the workspace's Diff to see all of it`) : null);
+  aside.replaceChildren(head, h("div", {class:"aoflist"}, ...rows), diff,
+    h("div", {class:"aoff"}, d.mode === "branch" ? `Changed since this branch left ${d.base || "main"} · uncommitted included` : "Uncommitted changes"));
+}
+/* Share log…: the text is put together here, then the host takes out private details (dash.py logshare); nothing leaves
+   this window until that answer comes back, and a failed check shares nothing */
+function outShareText(o, range){
+  const list = document.getElementById("aout-list"), p = puckOf(o.name), dflt = p && p.agent.type;
+  let es = outAll(o).filter(e => e.role !== "sep" || range === "all");
+  if (range === "looked" && o.lastLooked != null) es = es.filter(e => typeof e.ts === "number" && e.ts > o.lastLooked);
+  if (range === "view") es = es.filter(e => { const el = list.querySelector(`:scope > [data-id="${CSS.escape(e.id)}"]`); return el && !el.hidden && (!o.hitSet || o.hitSet.has(e.id)) });
+  const stamp = ts => typeof ts === "number" && isFinite(ts) ? new Date(ts).toLocaleTimeString([], {hour12: false}) : "".padEnd(8);
+  const tag = e => e.role === "user" ? "Prompt: " : e.role === "said" ? `${agentMeta(e.kind || dflt).name}: ` : e.role === "tool" ? "› " : e.role === "sep" ? "── " : "";
+  return {n: es.length, text: es.map(e => `${stamp(e.ts)}  ${tag(e)}${e.text || ""}`).join("\n")};
+}
+function outShare(open){
+  const o = ui.out; if (!o) return;
+  document.getElementById("aout-share")?.remove();
+  if (!open) { o.share = null; document.getElementById("aout-share-btn")?.focus(); return }
+  o.share = {range: "all", status: "checking", sent: null, text: "", removed: 0, err: null, copied: false};
+  document.getElementById("aout").append(h("div", {class:"sheetbg", id:"aout-share", onclick: e => e.target === e.currentTarget && outShare(false)},
+    h("div", {class:"sheet aoshare", role:"dialog", "aria-modal":"true", "aria-labelledby":"aout-share-t"})));
+  outShareAsk(); outShareRender(true);
+}
+function outShareAsk(){
+  const o = ui.out, sh = o && o.share; if (!sh) return;
+  const {text} = outShareText(o, sh.range);
+  sh.status = "checking"; sh.sent = sh.range; sh.copied = false; sh.req = (sh.req || 0) + 1;
+  const req = sh.req; setTimeout(() => { if (ui.out === o && o.share === sh && sh.req === req && sh.status === "checking") gotShare({name: o.name, error: "no answer from the host"}) }, OUT_WAIT);
+  post({cmd: "logshare", name: o.name, text});
+}
+function gotShare(r){
+  const o = ui.out, sh = o && o.share; if (!sh || r.name !== o.name || sh.status !== "checking") return;
+  if (sh.sent !== sh.range) { outShareAsk(); outShareRender(); return }  // the range changed while it was checking: ask again
+  if (r.error || typeof r.text !== "string") { sh.status = "error"; sh.err = r.error || "no text came back" }
+  else { sh.status = "ready"; sh.text = r.text; sh.removed = Number(r.removed) || 0 }
+  outShareRender();
+}
+function outShareRender(first){
+  const o = ui.out, sh = o && o.share, box = document.querySelector("#aout-share .sheet"); if (!sh || !box) return;
+  const ranges = [["all", "The whole log", "loaded here"], ...(o.lastLooked != null ? [["looked", "Since you last looked", ""]] : []),
+    ...(o.filter !== "all" || o.q ? [["view", o.q ? `What the search finds: “${short(o.q, 30)}”` : `What the filter shows: ${OUT_FILTERS.find(f => f[0] === o.filter)[1]}`, ""]] : [])];
+  const ready = sh.status === "ready", fname = `agent-log-${o.name.replace(/[^\w.-]+/g, "-")}.txt`;
+  const had = box.contains(document.activeElement) && document.activeElement.id;
+  box.replaceChildren(
+    h("div", {class:"shd"}, h("h2", {id:"aout-share-t", style:"flex-grow:1"}, "Share this log"), h("button", {class:"btn ico", "aria-label":"Close", onclick: () => outShare(false)}, icon("close", 14))),
+    h("fieldset", {class:"aorange"}, h("legend", {}, "What to include"), ...ranges.map(([k, label, note]) => { const n = outShareText(o, k).n;
+      return h("label", {class:"aoopt"}, h("input", {type:"radio", name:"aout-range", id:`aout-r-${k}`, value: k, checked: sh.range === k, onchange: () => { sh.range = k; if (sh.status !== "checking") outShareAsk(); outShareRender() }}),
+        label, h("span", {class:"aooptn"}, `${n.toLocaleString()} line${n === 1 ? "" : "s"}${note ? " " + note : ""}`)) })),
+    h("div", {class:"aosafe"}, icon("lock", 16), h("div", {},
+      h("b", {}, sh.status === "checking" ? "Taking out private details…" : sh.status === "error" ? "Couldn't check it for private details" : `Private details are taken out: ${sh.removed} removed`),
+      h("p", {}, sh.status === "error" ? `So nothing is shared: ${short(sh.err, 160)}.` : "Paths, hosts, URLs, emails, keys and tokens, and your private terms, become placeholders like [path]. Read the preview before you send it."))),
+    h("pre", {class:"aopv", tabindex:"0", "aria-label":"Preview"}, ready ? (sh.text.split("\n").slice(0, 14).join("\n") || "Nothing to share in this range") : sh.status === "checking" ? h("span", {class:"spin"}) : ""),
+    h("div", {class:"aosf"},
+      sh.status === "error" ? h("button", {class:"btn", id:"aout-share-retry", onclick: () => { outShareAsk(); outShareRender() }}, "Try again") : null,
+      h("button", {class:"btn", id:"aout-share-copy", disabled: !ready, onclick: () => { post({cmd: "copyText", text: sh.text}); sh.copied = true; outShareRender() }}, icon(sh.copied ? "check" : "copy", 12), sh.copied ? "Copied" : "Copy"),
+      h("button", {class:"btn primary", id:"aout-share-save", disabled: !ready, onclick: () => post({cmd: "saveText", text: sh.text, filename: fname})}, "Save as file…")));
+  const f = first ? document.getElementById(`aout-r-${sh.range}`) : had && document.getElementById(had);
+  if (f) f.focus(); else if (!box.contains(document.activeElement)) document.getElementById(`aout-r-${sh.range}`)?.focus();
 }
 document.addEventListener("visibilitychange", () => { if (document.hidden && ui.out) saveOutLooked(ui.out) });
 window.addEventListener("pagehide", () => { if (ui.out) saveOutLooked(ui.out) });
@@ -2855,6 +3332,8 @@ window.mc = {
     render();
   },
   transcript(r){ gotOut(r) },  // All output's pages
+  logextras(r){ gotExtras(r) },  // All output's cost and files touched
+  logshared(r){ gotShare(r) },  // Share log…'s redacted text
   page(resp){
     if (!ui.page || resp.name !== ui.page.name) return;
     ui.page.loading = false;

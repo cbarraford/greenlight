@@ -1147,6 +1147,27 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 from.evaluateJavaScript("mc.transcript(\(js))")
             })
         }
+        // All output's extras: the sessions' tokens and cost, the files touched (logextras); a redacted copy of the log to share (logshare).
+        if cmd == "logextras" || cmd == "logshare", let name = b["name"] as? String {
+            let text = String((b["text"] as? String ?? "").prefix(4 << 20)), cb = cmd == "logextras" ? "mc.logextras" : "mc.logshared"
+            guard isWsName(name) else { from.callJS("window.mc && \(cb)", [["name": name, "error": badNameErr]]); return }
+            var out = ""
+            let h = workspaceHost(name: name, fallback: winHost)
+            ssh("\(pyCmd(on: h))/dash.py \(cmd) '\(name)'", on: h, stdin: text, onLine: { out += $0 }, onExit: { code in
+                let js = safeJSON(out, fallback: ["name": name, "error": "\(hostDisplayName(h)) didn't answer (exit \(code))"])
+                from.evaluateJavaScript("window.mc && \(cb)(\(js))")  // safety-ok: safeJSON is a JSON literal
+            })
+        }
+        // Share log…'s Copy and Save as file…: text the page already redacted (logshare).
+        if cmd == "copyText", let text = b["text"] as? String {
+            NSPasteboard.general.clearContents(); NSPasteboard.general.setString(String(text.prefix(4 << 20)), forType: .string)
+        }
+        if cmd == "saveText", let text = b["text"] as? String {
+            let s = NSSavePanel()
+            let n = (b["filename"] as? String ?? "").replacingOccurrences(of: #"[^\w.-]"#, with: "-", options: .regularExpression)
+            s.nameFieldStringValue = n.isEmpty ? "agent-log.txt" : String(n.prefix(80))
+            if s.runModal() == .OK, let u = s.url { try? String(text.prefix(4 << 20)).write(to: u, atomically: true, encoding: .utf8) }
+        }
         // A waiting agent's question (ask) and your reply to it (answer), from the Answer button or the page.
         if cmd == "ask" || cmd == "answer", let name = b["name"] as? String {
             let text = b["text"] as? String ?? ""
