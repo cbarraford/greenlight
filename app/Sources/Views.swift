@@ -548,7 +548,7 @@ struct Inbox: View {
                 }.font(sys(size: DS.TypeRole.caption.size)).padding(.horizontal, DS.Space.s16).frame(minHeight: 38)
             }
         }
-        .background(RoundedRectangle(cornerRadius: DS.Radius.lg).fill(bg))
+        .background(RoundedRectangle(cornerRadius: DS.Radius.lg).fill(Color(DS.Palette.bgRaised, dark: isDark)))  // bg.raised: the lightest surface in dark (§10.13)
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.lg).stroke(edge))
         .clipShape(RoundedRectangle(cornerRadius: DS.Radius.lg))
         .shadow(color: .black.opacity(isDark ? 0.45 : 0.10), radius: 12, y: 6)  // elevation 2: an overlay, no scrim (§10.13)
@@ -621,7 +621,7 @@ struct QuestionRow: View {
                     Button { c.replyText = ""; c.replyingTo = q.id } label: { HStack(spacing: 6) { kbd("R"); Text(q.options.isEmpty ? "Reply" : "Other…") } }
                         .buttonStyle(.plain).font(sys(size: DS.TypeRole.label.size))
                         .padding(.horizontal, DS.Space.s8).frame(minHeight: DS.Layout.controlHeightMd)
-                        .background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(surface)).contentShape(Rectangle())
+                        .background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(Color(DS.Palette.elementHover, dark: isDark))).contentShape(Rectangle())
                 }
             }
             ViewThatFits(in: .horizontal) {
@@ -715,7 +715,7 @@ struct AnswerChip: View {
             }
         }.buttonStyle(.plain).font(sys(size: DS.TypeRole.label.size, weight: likely ? .semibold : .regular))
             .padding(.horizontal, DS.Space.s8).frame(minHeight: DS.Layout.controlHeightMd)  // a secondary button (§10.2): the suggested one says so with a check and weight
-            .background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(Color(hover.on ? DS.Palette.elementHover : DS.Palette.elementRest, dark: isDark)))
+            .background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(Color(hover.on ? DS.Palette.elementActive : DS.Palette.elementHover, dark: isDark)))  // one step up: the popover is bg.raised, which is element.rest in dark
             .contentShape(Rectangle()).onHover { hover.on = $0 }
             .accessibilityLabel(likely ? "\(title), suggested" : title)
     }

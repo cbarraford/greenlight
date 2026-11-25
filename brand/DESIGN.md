@@ -586,7 +586,7 @@ Each recipe lists its tokens, sizes and every state. **R** rest · **H** hover �
 - **Gone:** `.go`, `.ans`, `.nact`, `.pri`, `.lbtn.raised` and the hcard tones `.or`/`.pu`/`.rd`/`.bl`. Everything maps to the five variants above.
 
 ### 10.3 Segmented control and tabs-as-filter
-- **Track and segments:** the track is `bg.sunken`, 28 tall, radius `sm`, with 2px padding. The selected segment is `bg.surface` with elevation 1 (light) or `element.active` (dark), in `fg.default`.
+- **Track and segments:** the track is `bg.sunken` (dark: `element.rest`, since `bg.sunken` is the bar's own colour there), 28 tall, radius `sm`, with 2px padding. The selected segment is `bg.surface` with elevation 1 (light) or `element.active` (dark), in `fg.default`.
 - **States:**
   - Hover on an unselected segment: `fg.default`.
   - Focus: a ring on the track.
@@ -741,7 +741,7 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
   5. Stat tiles in a 4-up grid of `label` and value.
   6. Footer with quiet links.
 - **Sizing:** it never scrolls inside itself. If content overflows, drop the tiles first.
-- **Inbox overlay:** a 400-wide column anchored top-right under the bar, `bg.raised`, elevation 2, radius `lg`, no scrim. Items are rows (§10.8) with the needs glyph, never cards; an open item's answers are secondary buttons (§10.2). Empty state: "No questions waiting" (the bar may still count workspaces that need you). Escape or clicking outside closes it.
+- **Inbox overlay:** a 400-wide column anchored top-right under the bar, `bg.raised`, elevation 2, radius `lg`, no scrim. Items are rows (§10.8) with the needs glyph, never cards; an open item's answers are secondary buttons (§10.2) one step up, on `element.hover`, since `bg.raised` is `element.rest` in dark. Empty state: "No questions waiting" (the bar may still count workspaces that need you). Escape or clicking outside closes it.
 
 ### 10.14 Toast and tooltip
 - **Toast:**
