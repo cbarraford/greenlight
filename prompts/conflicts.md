@@ -1,6 +1,6 @@
 Fix the merge conflicts on {mr} ({url}), {branch} → {target}. Follow this repo's rules for agents. Don't push, post, resolve or retry anything until I say so.
 
-1. git fetch; make sure {branch} is checked out at {sha} with a clean tree. Stop and tell me if it isn't.
+1. git fetch; make sure {branch} is checked out with a clean tree and its HEAD contains {sha} (`git merge-base --is-ancestor {sha} HEAD`). Commits on top of {sha} are earlier unpushed work: keep them, and carry them through the steps below. Stop and tell me only if the tree isn't clean or HEAD doesn't contain {sha}.
 
 2. Rebase onto origin/{target}. Merge instead if this repo's rules say so.
 
