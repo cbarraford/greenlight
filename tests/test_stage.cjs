@@ -637,6 +637,15 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.equal(await q2.textContent("#s .chip"), "CI passed");  // a restored card shows today's status
   await q2.evaluate(() => { stage.forward(); stage.options(["Merge it"]); stage.hold("x"); stage.back(); });
   assert.equal(await q2.locator(".options").count(), 0);  // a new turn: no earlier card keeps its options
+  // a stream a card was drawn over ends as it got (no caret, not streaming), and later text is a new card
+  await q2.evaluate(() => { stage.text({ lead: "S2.", md: "- a", live: true }); stage.spec({ kind: "list", title: "X", items: [{ label: "x" }] }); stage.back(); });
+  assert.deepEqual(await q2.evaluate(() => [document.getElementById("s").className, document.querySelectorAll("#s .caret").length]), ["doc", 0]);
+  await q2.evaluate(() => stage.text({ lead: "NEW.", md: "- new" }));
+  await q2.evaluate(() => { stage.back(); stage.back(); }); assert.equal(await q2.textContent("#s .lead"), "S2.");  // kept as it was
+  // the board emptying while you're on an earlier card: Listening goes behind the card, the card stays
+  await q2.evaluate(b => { stage.forward(); stage.forward(); stage.wait("Listening", ""); stage.spec(b); stage.back(); stage.idle("Listening", "Say something"); }, brd2("z"));
+  assert.equal(await q2.textContent("#s .lead"), "NEW.");
+  await q2.evaluate(() => stage.forward()); assert.equal(await q2.textContent("#s h1"), "Listening");
   const q3 = await b.newPage(); await q3.goto("file://" + require("path").join(__dirname, "../app/stage.html"));
   await q3.evaluate(b => { stage.text({ lead: "Only.", md: "x" }); stage.wait("Listening", ""); stage.spec(b); stage.back(); }, brd2("w"));
   assert.ok(await q3.isVisible("#hist")); assert.equal(await q3.$eval("#hist [data-go=forward]", b => b.disabled), false);

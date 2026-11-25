@@ -274,7 +274,8 @@ const TONE = {needs: ["M8 1.75 14.25 8 8 14.25 1.75 8z", "M8 5.25v3.25M8 10.75h.
 const TONE_SAY = {needs: "Needs you", bad: "Failed", now: "Now", ok: "Done"};
 function toneGlyph(t){ const NS = "http://www.w3.org/2000/svg", g = document.createElementNS(NS, "svg"); g.setAttribute("viewBox", "0 0 16 16"); g.setAttribute("class", "tone");
   g.setAttribute("role", "img"); g.setAttribute("aria-label", TONE_SAY[t]); for (const d of TONE[t]) { const p = document.createElementNS(NS, "path"); p.setAttribute("d", d); g.append(p); } return g; }
-function show(node, cls, keep = !/\b(wait|skeleton)\b/.test(cls || "")){ streamEl = null;  // anything drawn ends the stream's claim on its card
+function show(node, cls, keep = !/\b(wait|skeleton)\b/.test(cls || "")){
+  if (streamEl) { streamEl.classList.remove("streaming"); caret(streamEl, false); streamEl = null; }  // anything drawn ends the stream, its card as it got
   const old = document.getElementById("s"), s = $("div", cls); s.id = "s"; s.append(...[].concat(node)); old.replaceWith(s); document.body.scrollTop = 0; scrollTo(0, 0);
   if (cls === "wait") fx.think(); else if (cls === "wait listening") fx.stop(); else fx.reveal(s);  // working, your turn, or a card to show
   if (keep) remember(s); else histUI(); }
@@ -765,6 +766,12 @@ window.stage = {
     const now = s.classList.contains("streaming") ? s : document.getElementById("s");
     now.classList.toggle("streaming", live); streamEl = live ? now : null;
     caret(now, live);
+  },
+  // The idle stage giving way to Listening (issue 208, the board emptied): behind a card you went back to, else on the stage.
+  idle(title, sub){
+    if (!(liveEl && CARDS.includes(document.getElementById("s")))) return stage.wait(title, sub);
+    const h = $("h1", null, title || "Listening"), w = $("div", "wait listening"); h.append($("span", "cursor")); w.id = "s";
+    w.append(h, $("div", "sub", str(sub))); liveEl = w; histUI();
   },
   // The card history (issue 208): "go back" and the ‹ › buttons. Back from the board or Listening shows the latest card;
   // forward past the latest returns to it.
