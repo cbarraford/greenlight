@@ -213,9 +213,10 @@ def moves(r, blk=None):
     mine = mr.get("role") == "author"
     sm = _signoff_move(r)
     review = nxt.get("owner") == "me" and not sm and (nxt.get("step") == "review" or "review it" in nxt.get("action", ""))
-    v = mr.get("verify") or {}  # the verified step: a fresh verifier's turn (not while the builder fixes its defects)
+    v, base = mr.get("verify") or {}, r.get("_base_next") or nxt  # the verified step: a fresh verifier's turn (not while the builder fixes its defects);
+    # base: the step's own owner, before the scan's agent overlay says "working" (the card disables the button while one works)
     on = {"conflicts": mr.get("conflicts"), "ci": mr.get("pipeline") == "failed", "threads": mr.get("todo_threads"),  # the fixes: on any MR, yours or a review
-          "verify": mine and nxt.get("step") == "verified" and nxt.get("owner") == "agent" and v.get("phase") != "fix",
+          "verify": mine and base.get("step") == "verified" and base.get("owner") == "agent" and v.get("phase") != "fix",
           "review": review or (block_of(r, blk) or {}).get("reason") == "approval"}
     out, cmd = [], nxt.get("cmd") or []
     repo = r["project"].rsplit("/", 1)[-1]

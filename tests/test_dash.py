@@ -569,6 +569,8 @@ assert "--sha abc123" in vmv[0]["prompt"] and "{" not in vmv[0]["prompt"].replac
 assert vmv[0]["auto"].startswith(dash.AUTO_HEAD + "Run the verification, save its evidence") and "gate push" not in vmv[0]["auto"]
 assert dash.moves({**vrow, "mr": {**vrow["mr"], "verify": {"verdict": "fail", "phase": "fix", "round": 1, "stale": False}}}) == []
 assert dash.moves({**vrow, "mr": {**vrow["mr"], "role": "review"}}) == []
+_busy = {**vrow, "next": {**vrow["next"], "owner": "working"}, "_base_next": vrow["next"]}  # an agent works in the workspace: the scan's overlay
+assert [m["kind"] for m in dash.moves(_busy)] == ["verify"]  # still offered (the card greys it while the agent works)
 assert [m["kind"] for m in dash.moves({**vrow, "mr": {**vrow["mr"], "pipeline": "failed"}})] == ["ci", "verify"]  # a fix first, Verify beside it
 _sp = lambda v: {"state": "queued", "step": "verified", "owner": "agent", "agent": {"state": "idle"}, "mr": {"state": "opened", "verify": v}}
 assert dash.sig(_sp({"verdict": "fail", "stale": False, "round": 1})) != dash.sig(_sp({"verdict": "pass", "stale": False, "round": 0}))  # a verdict redraws the page
