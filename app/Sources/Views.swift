@@ -286,6 +286,10 @@ struct MsgView: View, Looked {
             let (said, q) = open ? asked : (m.text, nil)
             VStack(alignment: .leading, spacing: DS.Space.s12) {
                 turn(said)  // the reply, then how the run went: above any choices the reply ends on
+                if m.canvas && c.canvas.has {  // it drew the canvas above (#208): not after a relaunch or a new chat, when there's none
+                    Label { Text("Updated the canvas") } icon: { Image(ds: "panel", size: iconSize(DS.TypeRole.caption.size)) }
+                        .font(ui(DS.TypeRole.caption)).foregroundColor(dim)
+                }
                 if !m.options.isEmpty { choices(open, q) }
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -2035,6 +2039,7 @@ struct ChatView: View, Looked {
             Group {  // settings cover the dashboard pane: App.settingsHost
             StageOr(v: c.voice) { StageView(v: c.voice, c: c) } chat: {
             VStack(spacing: 0) {
+            CanvasPanel(cv: c.canvas)  // a typed reply's table or ```stage block, over the transcript (#208)
             ScrollViewReader { sv in
                 ScrollView {
                     VStack(alignment: .leading, spacing: DS.Space.s12) {  // 12 inside a turn, 24 between turns
@@ -2050,6 +2055,7 @@ struct ChatView: View, Looked {
                 }
                 .onAppear { DispatchQueue.main.async { sv.scrollTo("bottom", anchor: .bottom) } }  // after layout, or it lands short
                 .onChange(of: c.msgs.count) { sv.scrollTo("bottom") }
+                .onChange(of: c.canvasTick) { DispatchQueue.main.async { sv.scrollTo("bottom", anchor: .bottom) } }  // after the panel's layout (#208)
                 .onChange(of: c.run?.steps.count ?? -1) { sv.scrollTo("bottom") }
                 .onChange(of: c.run?.live.count ?? -1) { sv.scrollTo("bottom") }
                 .onChange(of: c.queue.count) { sv.scrollTo("bottom") }
@@ -2474,3 +2480,29 @@ extension Core {
     var ctxSpoken: String { window > 0 ? "\(Int((ctxFull * 100).rounded())) percent used" : "\(kfmt(context)) tokens used" }
 }
 
+
+
+/// The canvas over the transcript (#208): the stage's own page, drawn when a typed reply has a ```stage block or a table. Its
+/// quiet header collapses it, and collapsing is remembered (Settings-free: the last choice stands).
+struct CanvasPanel: View, Looked {
+    @ObservedObject var cv: Canvas
+    var body: some View {
+        if cv.has {
+            VStack(spacing: 0) {
+                Button { cv.collapsed.toggle() } label: {
+                    HStack(spacing: DS.Space.s8) {
+                        Image(ds: "panel", size: iconSize(DS.TypeRole.label.size))
+                        Text("Canvas").font(ui(DS.TypeRole.label))
+                        if cv.collapsed && cv.fresh { Text("Updated").font(ui(DS.TypeRole.caption)).foregroundColor(dim) }  // folded away, but a reply drew on it
+                        Spacer(minLength: DS.Space.s8)
+                        Image(ds: cv.collapsed ? "chevron-down" : "chevron-up", size: iconSize(DS.TypeRole.label.size))
+                    }
+                    .foregroundColor(dim).padding(.horizontal, DS.Space.s16).frame(height: DS.Layout.controlHeightLg).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).accessibilityLabel(cv.collapsed ? "Show the canvas" : "Hide the canvas")
+                if !cv.collapsed { StageWeb(web: cv.web).frame(height: cv.height) }
+                if mono { HLine().stroke(line, style: StrokeStyle(lineWidth: 1, dash: [4, 3])).frame(height: 1) } else { Rectangle().fill(line).frame(height: 1) }
+            }
+        }
+    }
+}

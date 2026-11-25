@@ -30,6 +30,7 @@ final class Voice: NSObject, ObservableObject {
                 stageWeb.appearance = stageAppearance
                 stageWeb.evaluateJavaScript("(s => { \(look.vars) })(document.documentElement.style)")  // safety-ok: hardcoded Theme look.vars
             }
+            core?.canvas.retheme()  // typed chat's canvas wears the look too (#208)
         }
     }
     @Published var captions = ud.object(forKey: "captions") as? Bool ?? true { didSet { ud.set(captions, forKey: "captions") } }
@@ -40,6 +41,7 @@ final class Voice: NSObject, ObservableObject {
             ud.set(thinkingMotion, forKey: "thinkingMotion")
             // While the page loads, the queued call still carries the old value: correct it there.
             if stageNav?.ready == true { stageWeb.evaluateJavaScript(motionVars) } else if let q = stageNav?.queued { stageNav?.queued = q + ";\n" + motionVars }  // safety-ok: a hardcoded on/off
+            core?.canvas.retheme()  // the chat canvas too (#208)
         }
     }
     var stageQueued: String? { stageNav?.queued }  // the call waiting for the stage page to load (VoiceTests)
@@ -104,7 +106,7 @@ final class Voice: NSObject, ObservableObject {
         return en.first { $0.identifier == ud.string(forKey: "voiceName") } ?? en.max { rank($0) < rank($1) } ?? AVSpeechSynthesisVoice(language: "en-US")
     }()
 
-    private final class StageNav: NSObject, WKNavigationDelegate, WKUIDelegate {
+    final class StageNav: NSObject, WKNavigationDelegate, WKUIDelegate {  // the chat's canvas (#208) uses it too
         let stageURL: URL?
         var ready = false, queued: String?
         init(_ u: URL?) { stageURL = u }
@@ -577,12 +579,7 @@ final class Voice: NSObject, ObservableObject {
     func stage(_ h: String, lead: String = "") {
         guard !chiefDrew || streamed else { return }  // a block that closes after the [screen] text began still outranks it
         endStream(); took()
-        let o = stageJSON(h).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }  // ```stage json
-        if let o, isStageChart(o) { put("stage.chart", [o], by: "chief") }
-        else if let card = stageCard(h) { put("stage.spec", [card], by: "chief") }  // a catalog card or {title, items}: drawn now
-        else if let html = stageHTML(h) { put("stage.html", [html], by: "chief") }
-        else if stageJSON(h) != nil { put("stage.spec", [fallbackSpec(h)], by: "app") }  // broken JSON: never shown raw
-        else { put("stage.text", [["lead": plain(splitOptions(lead).0), "md": h]], by: "chief") }  // notes under the gist, as [screen] text is
+        let c = stageCall(h, lead: lead); put(c.f, [c.arg], by: c.by)
     }
 
     // speech
@@ -1476,5 +1473,68 @@ final class LivePreview: ObservableObject {
         live?.close(); live = nil
         node?.stop(); engine?.stop(); node = nil; engine = nil; conv = nil
         closed = true
+    }
+}
+
+
+/// The canvas in typed chat (#208): the stage's own page in a panel above the transcript, drawn when a typed reply has a
+/// ```stage block or a table (which the transcript can't draw). Collapsing it is remembered.
+final class Canvas: ObservableObject {
+    @Published var has = false
+    @Published var collapsed = ud.bool(forKey: "canvasCollapsed") {
+        didSet {
+            ud.set(collapsed, forKey: "canvasCollapsed")
+            if !collapsed { fresh = false; DispatchQueue.main.async { [weak self] in self?.fit() } }  // your place in the transcript stays; refit once shown
+        }
+    }
+    @Published var fresh = false  // drawn while collapsed: its header says so
+    @Published var height: CGFloat = Canvas.tallest  // the panel's body: its content's height, up to `tallest`
+    static let tallest: CGFloat = 280, shortest: CGFloat = 96
+    weak var core: Core?
+    private var nav: Voice.StageNav?, pending = [(String, [Any])]()
+    var queued: Int { pending.count }  // calls waiting for the page (tests)
+    private(set) lazy var web: WKWebView = {
+        let cfg = WKWebViewConfiguration()
+        cfg.websiteDataStore = .nonPersistent()
+        let u = page("stage"), n = Voice.StageNav(u); nav = n
+        let v = WKWebView(frame: .zero, configuration: cfg)  // no message handlers: nothing on the canvas can reach the app
+        v.navigationDelegate = n; v.uiDelegate = n
+        v.setValue(false, forKey: "drawsBackground")
+        n.loaded = { [weak self] in self?.flush() }
+        if let u { v.loadFileURL(u, allowingReadAccessTo: u) }
+        return v
+    }()
+    func draw(_ f: String, _ arg: Any) {
+        has = true; pending.append((f, [arg])); if collapsed { fresh = true }
+        if nav?.ready == true { flush() } else { _ = web }
+        core?.canvasTick += 1  // the transcript keeps its newest reply in view as the panel changes
+    }
+    /// The look, the app's theme and the motion setting, now: on each draw, and when any of them changes (Voice.look and
+    /// thinkingMotion call it). The page also learns it's the canvas: no voice hints there.
+    func retheme() {
+        guard let c = core, nav?.ready == true else { return }
+        web.appearance = c.voice.stageAppearance
+        web.evaluateJavaScript("(s => { \(delegate.themeVars()) \(c.voice.look.vars) \(c.voice.motionVars) document.body.dataset.surface = 'canvas'; })(document.documentElement.style)")  // safety-ok: the app's own theme statements, as Voice.js() sends them
+    }
+    /// A new conversation: nothing of the last one stays, its cards (the page's history) included, nor a draw still waiting.
+    func reset() {
+        has = false; fresh = false; pending = []; height = Canvas.tallest
+        if nav?.ready == true, let u = page("stage") { nav?.ready = false; web.loadFileURL(u, allowingReadAccessTo: u) }  // a draw meanwhile waits for the new page
+    }
+    private func fit() {
+        guard nav?.ready == true, has, !collapsed else { return }
+        let js = "(() => { const s = document.getElementById('s'); if (!s) return 0; if (s.classList.contains('frame')) return 280; const t = s.getBoundingClientRect().top, p = parseFloat(getComputedStyle(s).paddingBottom) || 24; return [...s.children].reduce((a, e) => Math.max(a, e.getBoundingClientRect().bottom - t), 0) + p; })()"
+        web.evaluateJavaScript(js) { [weak self] h, _ in  // safety-ok: a constant expression, no data in it
+            guard let self, let h = h as? Double, h > 0 else { return }
+            self.height = min(Canvas.tallest, max(Canvas.shortest, CGFloat(h.rounded(.up)))); self.core?.canvasTick += 1
+        }
+    }
+    private func flush() {
+        guard let c = core, nav?.ready == true else { return }
+        retheme()
+        guard has, !pending.isEmpty else { return }
+        web.callJS("stage.refs", [refStatus(c.pucks)])  // the snapshot's MRs as chips: a table's refs say their status
+        pending.forEach { web.callJS($0.0, $0.1) }; pending = []
+        fit()
     }
 }

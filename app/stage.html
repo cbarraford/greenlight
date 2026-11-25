@@ -206,6 +206,9 @@ body.status.hist #s:not(.frame){padding-bottom:calc(var(--ds-space-24) + var(--d
 #hist button:focus-visible{outline:none;box-shadow:var(--ds-ring)}
 #hist .hh{margin-right:var(--ds-space-8)}
 #hist .hh[hidden]{display:none}
+body[data-surface=canvas] #hist .hh{display:none}  /* typed chat's canvas: no voice there to say it */
+body.hist #s:not(.frame){padding-bottom:calc(var(--ds-space-24) + var(--ds-space-24))}  /* room under the card for the history bar */
+body.status.hist #s:not(.frame){padding-bottom:calc(var(--ds-space-32) + var(--ds-space-48))}
 body.past .options{display:none}
 body.past #s{--text:var(--dim);--accent:var(--dim);color:var(--text)}  /* an earlier card steps down, as a held one does */
 body.past #s::before{content:"Earlier";font:var(--ds-type-label);font-family:var(--font);color:var(--faint)}
