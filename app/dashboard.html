@@ -1873,7 +1873,7 @@ function outKeys(e){
   }
   if (e.key !== "Tab") return;  // a modal: Tab cycles inside it (also WebKit, where native Tab skips buttons)
   const scope = o && o.share ? "#aout-share" : "#aout";
-  const f = [...document.querySelectorAll(`${scope} button:not([disabled]), ${scope} a[href], ${scope} input, ${scope} [tabindex='0']`)].filter(x => x.getClientRects().length), k = f.indexOf(document.activeElement);
+  const f = [...document.querySelectorAll(`${scope} button:not([disabled]), ${scope} a[href], ${scope} input, ${scope} [tabindex='0']`)].filter(x => x.tabIndex >= 0 && x.getClientRects().length), k = f.indexOf(document.activeElement);
   if (!f.length) return;
   e.preventDefault();
   f[k < 0 ? (e.shiftKey ? f.length - 1 : 0) : (k + (e.shiftKey ? -1 : 1) + f.length) % f.length].focus();
@@ -2232,10 +2232,13 @@ function outHeadRow(el, id, x, o){  // a tool call's or a prompt's row: its fold
     : x.tools ? `${x.tools} tool call${x.tools === 1 ? "" : "s"}` : "";
   const key = `${folded}|${meta}`; if (el.dataset.hk === key) return; el.dataset.hk = key;
   const slot = el.querySelector(".aog") || el.querySelector(".aow"), mt = el.querySelector(".aomt");
-  const btn = x.n ? h("button", {class:"aofold", tabindex:"-1", "aria-expanded": String(!folded), "aria-label": folded ? "Unfold" : "Fold",
-    title: folded ? "Show what's in it" : "Fold it", onclick: ev => { ev.stopPropagation(); outFold(id) }}, icon(folded ? "chevron-right" : "chevron-down", 12)) : null;
-  el.querySelector(".aofold")?.remove();
-  if (btn) slot.prepend(btn);
+  let btn = el.querySelector(".aofold");
+  if (!x.n) btn?.remove();
+  else {  // changed in place: the keyboard stays on it
+    if (!btn) { btn = h("button", {class:"aofold", tabindex:"-1", onclick: ev => { ev.stopPropagation(); outFold(id) }}); slot.prepend(btn) }
+    btn.setAttribute("aria-expanded", String(!folded)); btn.setAttribute("aria-label", folded ? "Unfold" : "Fold"); btn.title = folded ? "Show what's in it" : "Fold it";
+    btn.replaceChildren(icon(folded ? "chevron-right" : "chevron-down", 12));
+  }
   if (mt) mt.textContent = meta; else if (meta) slot.dataset.meta = meta; else delete slot.dataset.meta;  // a transcript's prompt: its label stays the label
 }
 function outFold(id, fold){
@@ -2395,9 +2398,9 @@ function outLoop(o){  // the last lines are one block of 1–6 lines said again 
 }
 function outWarn(){
   const o = ui.out, el = document.getElementById("aout-warn"); if (!o || !el) return;
-  const p = puckOf(o.name), a = (p && p.agent) || {}, last = outMaxTs(o), now = Date.now();
+  const p = puckOf(o.name), a = (p && p.agent) || {}, last = outMaxTs(o) || since(a.since), now = Date.now();  // nothing said yet: silent since it started
   let w = null;
-  if (o.loaded && a.state === "working" && last && now - last > OUT_STUCK) w = {id: "stuck:" + last, lead: `No output for ${ago((now - last) / 3.6e6)}`,
+  if (o.loaded && a.state === "working" && last && now - last > OUT_STUCK) w = {id: "stuck:" + last, lead: outMaxTs(o) ? `No output for ${ago((now - last) / 3.6e6)}` : `No output in the ${ago((now - last) / 3.6e6)} since it started`,
     rest: " while the agent is working. It may be stuck on a prompt or a hung command.", act: p && p.path ? ["Open in Basement", () => toBasement(o.name)] : null};
   else if (o.loaded) { const L = outLoop(o);
     if (L) w = {id: "loop:" + L.first, lead: `The same ${L.k === 1 ? "line" : L.k + " lines"} came back ${L.r} times`,
@@ -2407,14 +2410,23 @@ function outWarn(){
           if (t.hidden && f && f.turn && o.folds.has(f.turn)) outFold(f.turn, false);
           if (t.hidden && f && f.sec) outFold(f.sec, false); t.scrollIntoView({block: "start"}); outScrolled({currentTarget: document.getElementById("aout-log")}) } }]} }
   if (w && o.dismissed === w.id) w = null;
-  const key = w ? w.id + w.lead : "";
-  if (key === o.warnKey) return; o.warnKey = key;
+  const key = w ? w.id + w.lead + w.rest : "";
+  if (key === o.warnKey) return;
+  const log = document.getElementById("aout-log"), keepBottom = o.follow && log;
+  const msg = el.querySelector(".msg");
+  if (w && msg && !el.hidden && el.dataset.wid === w.id) { o.warnKey = key; msg.replaceChildren(h("b", {}, w.lead), w.rest); return }  // the same warning, a minute on: its buttons keep the keyboard
+  o.warnKey = key;
+  const had = el.contains(document.activeElement);
   el.hidden = !w;
-  if (!w) { el.replaceChildren(); return }
+  if (keepBottom) log.scrollTop = log.scrollHeight;  // a banner coming or going doesn't push the latest output out of view
+  if (!w) { el.replaceChildren(); delete el.dataset.wid; if (had) log.focus(); return }
+  el.dataset.wid = w.id;
   el.className = "aowarn"; el.setAttribute("role", "status");
   el.replaceChildren(icon("needs-fill", 16), h("span", {class:"msg"}, h("b", {}, w.lead), w.rest),
     w.act ? h("button", {class:"btn sm", onclick: w.act[1]}, w.act[0]) : null,
     h("button", {class:"btn ico sm", "aria-label":"Dismiss", title:"Dismiss until it changes", onclick: () => { o.dismissed = w.id; o.warnKey = null; outWarn(); document.getElementById("aout-log").focus() }}, icon("close", 12)));
+  if (keepBottom) log.scrollTop = log.scrollHeight;
+  if (had) log.focus();
 }
 /* the extras: the sessions' tokens and cost (the strip) and the files the branch touched (the panel); refreshed while open */
 function pollExtras(){
@@ -2461,19 +2473,23 @@ function outFilesPanel(){
   const d = o.extras && (o.extras.files || {error: o.extras.error || "no answer about the files"}), files = d && !d.error ? arr(d.files) : null;
   const key = !o.extras ? "load" : d && d.error ? "err" + d.error : JSON.stringify([files, o.file, d.base, d.cut]) + (d.patch || "").length;
   if (aside.dataset.key === key) return; aside.dataset.key = key;
+  const fe = aside.contains(document.activeElement) ? document.activeElement : null;
+  const back = fe && (fe.dataset.path ? `.aofrow[data-path="${CSS.escape(fe.dataset.path)}"]` : fe.id ? "#" + CSS.escape(fe.id) : fe.classList.contains("aodiff") ? ".aodiff" : null);
+  queueMicrotask(() => { if (!fe || aside.contains(document.activeElement)) return;  // rebuilt under the keyboard: back where it was, else the log
+    const t = back && aside.querySelector(back); (t || document.getElementById("aout-log")).focus() });
   const add = files ? files.reduce((s, f) => s + (Number(f[1]) || 0), 0) : 0, rem = files ? files.reduce((s, f) => s + (Number(f[2]) || 0), 0) : 0;
   const head = h("div", {class:"aofh"}, h("b", {}, "Files touched"), files ? h("span", {class:"count"}, String(files.length)) : null,
     files && files.length ? h("span", {class:"aofn"}, h("span", {class:"add"}, `+${add}`), " ", h("span", {class:"rem"}, `−${rem}`)) : null,
-    h("span", {class:"aosp"}), h("button", {class:"btn ico sm", "aria-label":"Close files", onclick: () => { outFiles(false); document.getElementById("aout-files-btn").focus() }}, icon("close", 12)));
+    h("span", {class:"aosp"}), h("button", {class:"btn ico sm", id:"aout-files-close", "aria-label":"Close files", onclick: () => { outFiles(false); document.getElementById("aout-files-btn").focus() }}, icon("close", 12)));
   if (!o.extras) return aside.replaceChildren(head, ...[70, 55, 80, 40].map(w => h("div", {class:"aofrow skel", "aria-hidden":"true"}, h("i", {style:`width:${w}%`}))));
   if (d && d.error) return aside.replaceChildren(head, h("div", {class:"aofe"}, h("b", {}, "Couldn't load the files"), h("span", {}, short(d.error, 140)),
-    h("button", {class:"btn sm", onclick: () => { o.extras = null; aside.dataset.key = ""; outFilesPanel(); pollExtras() }}, "Retry")));
+    h("button", {class:"btn sm", id:"aout-files-retry", onclick: () => { o.extras = null; aside.dataset.key = ""; outFilesPanel(); pollExtras() }}, "Retry")));
   if (!files.length) return aside.replaceChildren(head, h("div", {class:"aofe"}, h("b", {}, "No files changed yet"), h("span", {}, "Files the agent edits show here, with their diff.")));
   if (!o.file || !files.some(f => f[0] === o.file)) o.file = files[0][0];
   const newPath = p => String(p).replace(/\{[^{}]* => ([^{}]*)\}/, "$1").replace(/^.* => /, "").replace(/\/\//g, "/");  // git's rename form: dir/{old => new}.py
   const st = arr(d.status), chunks = splitPatch(d.patch), STN = {M: "Modified", A: "Added", D: "Deleted", R: "Renamed", U: "New, not committed", C: "Copied"};
   const rows = files.map(([path, a, r], i) => { const slash = path.lastIndexOf("/") + 1, k = (st[i] || "M")[0];
-    return h("button", {class:"aofrow" + (path === o.file ? " sel" : ""), "aria-pressed": String(path === o.file), title: path, onclick: () => { o.file = path; outFilesPanel() }},
+    return h("button", {class:"aofrow" + (path === o.file ? " sel" : ""), "data-path": path, "aria-pressed": String(path === o.file), title: path, onclick: () => { o.file = path; outFilesPanel() }},
       h("span", {class:"aost", title: STN[k] || k}, k), h("span", {class:"aop"}, h("span", {}, path.slice(0, slash)), path.slice(slash)),
       h("span", {class:"aofn"}, a === "-" ? "binary" : [h("span", {class:"add"}, Number(a) ? `+${a}` : ""), " ", h("span", {class:"rem"}, Number(r) ? `−${r}` : "")])) });
   const lines = chunks[o.file] || chunks[newPath(o.file)] || [], shownLines = lines.slice(0, 400);
@@ -2487,10 +2503,10 @@ function outFilesPanel(){
 }
 /* Share log…: the text is put together here, then the host takes out private details (dash.py logshare); nothing leaves
    this window until that answer comes back, and a failed check shares nothing */
-function outShareText(o, range){
+function outShareText(o, range, looked = o.share ? o.share.looked : o.lastLooked){
   const p = puckOf(o.name), dflt = p && p.agent.type;
   let es = outAll(o).filter(e => e.role !== "sep" || range === "all");
-  if (range === "looked" && o.lastLooked != null) es = es.filter(e => typeof e.ts === "number" && e.ts > o.lastLooked);
+  if (range === "looked") es = looked == null ? [] : es.filter(e => typeof e.ts === "number" && e.ts > looked);  // as it was when the sheet opened
   if (range === "view") es = es.filter(e => { const f = o.info.get(e.id); return f && outVisible(o, e.id, f) && (!o.hitSet || o.hitSet.has(e.id)) });
   const stamp = ts => typeof ts === "number" && isFinite(ts) ? new Date(ts).toLocaleTimeString([], {hour12: false}) : "".padEnd(8);
   const tag = e => e.role === "user" ? "Prompt: " : e.role === "tool" ? "› " : e.role === "sep" ? "── " : e.role === "line" ? "" : `${agentMeta(e.kind || dflt).name}: `;  // a transcript's agent says "assistant"
@@ -2503,7 +2519,7 @@ function outShare(open){
   const o = ui.out; if (!o) return;
   document.getElementById("aout-share")?.remove();
   if (!open) { o.share = null; document.getElementById("aout-share-btn")?.focus(); return }
-  o.share = {range: "all", status: "checking", sent: null, text: "", removed: 0, err: null, copied: false, saved: null,
+  o.share = {looked: o.lastLooked, range: "all", status: "checking", sent: null, text: "", removed: 0, err: null, copied: false, saved: null,
     counts: Object.fromEntries(["all", "looked", "view"].map(k => [k, outShareText(o, k)]).map(([k, t]) => [k, {n: t.n, kept: t.kept}]))};  // once: the sheet redraws often
   document.getElementById("aout").append(h("div", {class:"sheetbg", id:"aout-share", onclick: e => e.target === e.currentTarget && outShare(false)},
     h("div", {class:"sheet aoshare", role:"dialog", "aria-modal":"true", "aria-labelledby":"aout-share-t"})));
@@ -2525,9 +2541,9 @@ function gotShare(r){
 }
 function outShareRender(first){
   const o = ui.out, sh = o && o.share, box = document.querySelector("#aout-share .sheet"); if (!sh || !box) return;
-  const ranges = [["all", "The whole log", "loaded here"], ...(o.lastLooked != null ? [["looked", "Since you last looked", ""]] : []),
+  const ranges = [["all", "The whole log", "loaded here"], ...(sh.looked != null ? [["looked", "Since you last looked", ""]] : []),
     ...(o.filter !== "all" || o.q ? [["view", o.q ? `What the search finds: “${short(o.q, 30)}”` : `What the filter shows: ${OUT_FILTERS.find(f => f[0] === o.filter)[1]}`, ""]] : [])];
-  const ready = sh.status === "ready", fname = `agent-log-${new Date().toISOString().slice(0, 10)}.txt`;  // not the workspace's name: it may be private
+  const ready = sh.status === "ready" && sh.text.length > 0, fname = `agent-log-${new Date().toISOString().slice(0, 10)}.txt`;  // not the workspace's name: it may be private
   const cut = sh.counts[sh.range] && sh.counts[sh.range].kept < sh.counts[sh.range].n ? sh.counts[sh.range].kept : 0;
   const had = box.contains(document.activeElement) && document.activeElement.id;
   box.replaceChildren(

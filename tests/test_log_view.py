@@ -124,6 +124,13 @@ def test_redact_takes_out_credential_assignments_whatever_the_value():
     assert out.startswith('{"password": [secret], "user": "x"}')
     out, _ = log_view.redact("curl -H 'Authorization: Bearer q9Zx7LmP2vR8wq' x")
     assert "q9Zx7" not in out
+    out, _ = log_view.redact("mysql --password hunter2 -u root; gh --token abc --verbose")
+    assert out == "mysql --password [secret] -u root; gh --token [secret] --verbose", out
+
+
+def test_redact_takes_a_url_whole_brackets_included():
+    out, _ = log_view.redact("see (https://ci.example.com/job/(internal)/artifact?signature=abc123def). Done")
+    assert out == "see ([url]). Done", out
 
 
 def test_redact_takes_out_the_workspaces_own_name_and_path():
@@ -141,18 +148,24 @@ def test_redact_catches_prompts_env_paths_file_urls_and_windows_homes(monkeypatc
     assert "react@18" in out, "a package version isn't a user@host"
 
 
-def test_usage_is_cached_until_the_transcript_changes(tmp_path, monkeypatch):
+def test_usage_reads_only_what_a_live_transcript_added(tmp_path, monkeypatch):
     monkeypatch.setattr(log_view, "_cache_file", lambda: tmp_path / "cache" / "usage.json")
     f = _write(tmp_path / "s.jsonl", [_claude_msg("a", "claude-opus-5-5", 10, 1)])
-    calls = []
-    real = log_view.claude_usage
-    monkeypatch.setattr(log_view, "claude_usage", lambda p: calls.append(p) or real(p))
+    starts = []
+    real = log_view._read
+    monkeypatch.setattr(log_view, "_read", lambda p, off=0: starts.append(off) or real(p, off))
     assert log_view.usage([(f, "claude")])["in_tokens"] == 10
-    assert log_view.usage([(f, "claude")])["in_tokens"] == 10 and len(calls) == 1, "unchanged: read from the cache"
-    _write(f, [_claude_msg("a", "claude-opus-5-5", 10, 1), _claude_msg("b", "claude-opus-5-5", 5, 1)])
-    assert log_view.usage([(f, "claude")])["in_tokens"] == 15 and len(calls) == 2, "changed: read again"
+    size = f.stat().st_size
+    assert log_view.usage([(f, "claude")])["in_tokens"] == 10 and starts == [0, size], "the second poll starts where the first ended"
+    with f.open("a") as fh:  # the live message streams: its usage again, fuller, then a new one; then half a line
+        fh.write(json.dumps(_claude_msg("a", "claude-opus-5-5", 10, 7)) + "\n" + json.dumps(_claude_msg("b", "claude-opus-5-5", 5, 1)) + "\n" + '{"message": {"usa')
+    u = log_view.usage([(f, "claude")])
+    assert (u["in_tokens"], u["out_tokens"]) == (15, 8), "a's fuller usage replaces its first, once"
+    f.write_text("")  # rewritten shorter: read again from the start
+    assert log_view.usage([(f, "claude")])["sessions"] == 0
     (tmp_path / "cache" / "usage.json").write_text("not json")
-    assert log_view.usage([(f, "claude")])["in_tokens"] == 15, "a broken cache is only a miss"
+    _write(f, [_claude_msg("a", "claude-opus-5-5", 10, 1)])
+    assert log_view.usage([(f, "claude")])["in_tokens"] == 10, "a broken cache is only a miss"
 
 
 def test_redact_takes_out_this_accounts_name_but_not_inside_other_words(monkeypatch):
@@ -160,6 +173,8 @@ def test_redact_takes_out_this_accounts_name_but_not_inside_other_words(monkeypa
     monkeypatch.setattr(log_view, "_hosts", list)
     out, n = log_view.redact("git push origin pat/fix-retry; Pat said ok; compatible patterns")
     assert out == "git push origin [user]/fix-retry; [user] said ok; compatible patterns" and n == 2
+    out, _ = log_view.redact("ls projects/-home-pat-orca-ws; tmux attach -t pat_dev; git checkout pat-fix-191")
+    assert "pat" not in out.replace("[user]", ""), out
     monkeypatch.setattr(log_view, "_user", lambda: "ci")  # too short to be told from ordinary text
     assert log_view.redact("ci passed")[0] == "ci passed"
 

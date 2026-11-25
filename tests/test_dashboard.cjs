@@ -1843,6 +1843,11 @@ test("log view: tool calls and prompts fold, a long finished call starts folded,
   await page.click("#aout-list > .turn >> nth=1 >> .aofold");
   assert.deepEqual(await visibleTexts(page), ["> Fix the flaky retry test", "⏺ Bash(pytest -q -k retry)", "⏺ The test waits on a real clock.", "> CI still fails on the retry path"], "a folded turn hides its calls and their output");
   assert.equal(await page.getAttribute("#aout-list > .turn >> nth=1 >> .aofold", "aria-expanded"), "false");
+  await page.focus("#aout-list > .sec >> nth=1 >> .aofold"); await page.keyboard.press("Enter");
+  assert.equal(await page.evaluate(() => document.activeElement.classList.contains("aofold")), true, "a fold toggled from the keyboard keeps it");
+  await page.keyboard.press("Enter");
+  await page.focus("#aout-q");
+  for (let k = 0; k < 12; k++) { await page.keyboard.press("Tab"); assert.equal(await page.evaluate(() => document.activeElement.classList.contains("aofold")), false, "Tab skips the fold buttons") }
   await page.click("#aout-foldall");
   assert.equal(await page.locator("#aout-list > [data-id]:not([hidden])").count(), 2, "Fold all leaves the prompts");
   assert.match(await page.textContent("#aout-foldall"), /Unfold all/);
@@ -1963,6 +1968,13 @@ test("log view: a working agent quiet for 10 min gets a stuck banner; a repeatin
   await page.$eval("#aout-log", e => { e.scrollTop = 0 });
   await page.click("#aout-warn button:has-text('Show the repeat')");
   assert.ok(await page.$eval("#aout-list > [data-id='mc-s1.g0:100']", e => { const r = e.getBoundingClientRect(), l = document.getElementById("aout-log").getBoundingClientRect(); return r.top >= l.top - 1 && r.top < l.bottom }), "it scrolls to where the repeat starts");
+  // working, and not a word since it started 20 min ago
+  await page.evaluate(() => closeOut(false));
+  await page.evaluate(s => mc.update({...s, pucks: s.pucks.map(p => ({...p, agent: {...p.agent, since: Date.now() - 20 * 60e3}}))}), SNAP);
+  await page.evaluate(() => openOut("plan-b"));
+  await page.evaluate(() => mc.transcript({name: "plan-b", before: null, more: null, source: "pane", entries: []}));
+  await page.waitForSelector("#aout-warn:not([hidden])");
+  assert.match(await page.textContent("#aout-warn"), /No output in the 20m since it started/);
   // an agent that isn't working is never stuck
   await page.evaluate(() => closeOut(false));
   await page.evaluate(s => mc.update({...s, pucks: s.pucks.map(p => ({...p, agent: {...p.agent, state: "idle"}}))}), SNAP);
@@ -2048,6 +2060,10 @@ test("log view: the sessions' cost and tokens in the strip; Files shows what the
   const before = (await posts(page, "logextras")).length;
   await page.click("#aout-files button:has-text('Retry')");
   assert.equal((await posts(page, "logextras")).length, before + 1, "Retry asks again");
+  assert.ok(await page.evaluate(() => document.getElementById("aout").contains(document.activeElement) && document.activeElement !== document.body), "the keyboard stays in the view");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.$("#aout"), null, "and Esc still closes it");
+  await openLog(page); await page.evaluate(r => mc.logextras(r), EXTRAS); await page.click("#aout-files-btn");
   await page.evaluate(() => mc.logextras({name: "plan-b", error: "the host didn't answer (exit 255)"}));  // the whole request failed
   assert.match(await page.textContent("#aout-files"), /Couldn't load the files.*the host didn't answer/);
   assert.equal(await page.$("#aout-strip .aos-cost"), null, "and no cost from a failed answer");
@@ -2098,6 +2114,11 @@ test("log view: Share log… sends nothing until the host has taken private deta
   assert.equal(await page.$("#aout-share"), null, "Esc closes the sheet first");
   assert.ok(await page.isVisible("#aout"));
   assert.equal(await page.evaluate(() => document.activeElement.id), "aout-share-btn");
+  // nothing in the range: nothing to copy (Copy would empty the clipboard)
+  await page.click("#aout-share-btn");
+  await page.evaluate(() => mc.logshared({name: "plan-b", req: ui.out.share.req, text: "", removed: 0}));
+  assert.equal(await page.isDisabled("#aout-share-copy"), true); assert.equal(await page.isDisabled("#aout-share-save"), true);
+  await page.keyboard.press("Escape");
   // a filtered view offers what it shows
   await page.click("#aout-filter [data-f=err]");
   await page.click("#aout-share-btn");

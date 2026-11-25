@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import getpass
 import json
+import os
 import re
 import socket
 import sys
@@ -41,7 +42,7 @@ PRICES = (  # the first prefix that matches a model id wins: keep the longer ids
     ("claude-haiku-4", (1.0, 5.0, 0.10)),
 )
 CACHE_WRITE = 1.25
-TAIL = 512 << 20  # bytes read from the end of a transcript past this size (the cache makes the whole read a one-time cost)
+TAIL = 512 << 20  # a first read of a transcript past this size starts this far from its end; later reads go on from there
 
 
 def price(model: str) -> tuple[float, float, float] | None:
@@ -53,72 +54,112 @@ def _num(x: Any) -> int:
     return int(x) if isinstance(x, (int, float)) and not isinstance(x, bool) and x > 0 else 0
 
 
-def _lines(path: Path):
+def _read(path: Path, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
+    """The usage-bearing JSON lines from byte `offset` on, and the offset after the last whole line (a line still being
+    written is read next time). A first read of a huge file starts TAIL bytes from its end."""
+    objs: list[dict[str, Any]] = []
     try:
         with path.open("rb") as fh:
-            size = path.stat().st_size
-            if size > TAIL:
+            size = os.fstat(fh.fileno()).st_size
+            if offset == 0 and size > TAIL:
                 fh.seek(size - TAIL)
-                fh.readline()  # the cut first line
+                offset = size - TAIL + len(fh.readline())  # the cut first line
+            else:
+                fh.seek(offset)
             for raw in fh:
+                if not raw.endswith(b"\n"):
+                    break
+                offset += len(raw)
                 if b'"usage"' in raw or b'"token_count"' in raw or b'"turn_context"' in raw:
                     try:
-                        yield json.loads(raw)
+                        d = json.loads(raw)
                     except ValueError:
                         continue
+                    if isinstance(d, dict):
+                        objs.append(d)
     except OSError:
-        return
+        pass
+    return objs, offset
+
+
+def _contrib(model: str, u: dict[str, Any]) -> tuple[int, int, int, int, float | None]:
+    i, o = _num(u.get("input_tokens")), _num(u.get("output_tokens"))
+    cr, cw = _num(u.get("cache_read_input_tokens")), _num(u.get("cache_creation_input_tokens"))
+    p = price(model)
+    cost = None if p is None else (i * p[0] + cw * p[0] * CACHE_WRITE + cr * p[2] + o * p[1]) / 1e6 * 100
+    return i + cr + cw, o, cr, cw, cost
+
+
+def _add(tot: dict[str, Any], model: str, u: dict[str, Any], sign: int) -> None:
+    tin, tout, cr, cw, cost = _contrib(model, u)
+    for k, v in (("in", tin), ("out", tout), ("cache_read", cr), ("cache_write", cw)):
+        tot[k] += sign * v
+    if cost is None:
+        tot["unpriced"] += sign * (1 if tin or tout else 0)
+    else:
+        tot["cost"] += sign * cost
+
+
+def claude_scan(path: Path, st: dict[str, Any] | None = None) -> dict[str, Any]:
+    """A Claude Code transcript's running totals, carried on from `st` (what an earlier read left). A streamed message
+    repeats its usage on consecutive lines: the fullest one counts, once."""
+    st = st or {"offset": 0, "tot": {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0, "cost": 0.0, "unpriced": 0, "models": []},
+                "last": None}
+    tot, last, models = st["tot"], st["last"], set(st["tot"]["models"])
+    objs, st["offset"] = _read(path, st["offset"])
+    for d in objs:
+        m = d.get("message")
+        if not isinstance(m, dict) or not isinstance(m.get("usage"), dict):
+            continue
+        mid, model, u = str(m.get("id") or d.get("uuid") or ""), str(m.get("model") or ""), m["usage"]
+        if last and mid and last["id"] == mid:
+            if _num(u.get("output_tokens")) < _num(last["usage"].get("output_tokens")):
+                continue
+            _add(tot, last["model"], last["usage"], -1)
+        _add(tot, model, u, 1)
+        last = {"id": mid, "model": model, "usage": u}
+        if model and not model.startswith("<"):
+            models.add(model)
+    tot["models"], st["last"] = sorted(models), last
+    return st
+
+
+def _claude_out(st: dict[str, Any]) -> dict[str, Any]:
+    t = st["tot"]
+    return {"in": t["in"], "out": t["out"], "cache_read": t["cache_read"], "cache_write": t["cache_write"],
+            "cost_cents": None if t["unpriced"] else t["cost"], "models": set(t["models"])}
 
 
 def claude_usage(path: Path) -> dict[str, Any]:
     """One Claude Code transcript: {in, out, cache_read, cache_write, cost_cents|None, models}."""
-    msgs: dict[str, tuple[str, dict]] = {}
-    for d in _lines(path):
-        m = d.get("message") if isinstance(d, dict) else None
-        if not isinstance(m, dict) or not isinstance(m.get("usage"), dict):
+    return _claude_out(claude_scan(path))
+
+
+def codex_scan(path: Path, st: dict[str, Any] | None = None) -> dict[str, Any]:
+    """A Codex rollout's last token_count running total (and model), carried on from `st`."""
+    st = st or {"offset": 0, "last": None, "model": ""}
+    objs, st["offset"] = _read(path, st["offset"])
+    for d in objs:
+        p = d.get("payload")
+        if not isinstance(p, dict):
             continue
-        mid = str(m.get("id") or d.get("uuid") or len(msgs))
-        u = m["usage"]
-        prev = msgs.get(mid)
-        if prev is None or _num(u.get("output_tokens")) >= _num(prev[1].get("output_tokens")):
-            msgs[mid] = (str(m.get("model") or ""), u)  # a streamed message repeats its usage: keep the fullest
-    out: dict[str, Any] = {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0, "cost_cents": 0.0, "models": set()}
-    priced = True
-    for model, u in msgs.values():
-        i, o = _num(u.get("input_tokens")), _num(u.get("output_tokens"))
-        cr, cw = _num(u.get("cache_read_input_tokens")), _num(u.get("cache_creation_input_tokens"))
-        out["in"] += i + cr + cw
-        out["out"] += o
-        out["cache_read"] += cr
-        out["cache_write"] += cw
-        if model and not model.startswith("<"):
-            out["models"].add(model)
-        p = price(model)
-        if p is None:
-            priced = priced and not (i or o or cr or cw)
-            continue
-        out["cost_cents"] += (i * p[0] + cw * p[0] * CACHE_WRITE + cr * p[2] + o * p[1]) / 1e6 * 100
-    if not priced:
-        out["cost_cents"] = None
-    return out
+        if d.get("type") == "turn_context" and p.get("model"):
+            st["model"] = str(p["model"])
+        info = p.get("info") if p.get("type") == "token_count" else None
+        if isinstance(info, dict) and isinstance(info.get("total_token_usage"), dict):
+            st["last"] = info["total_token_usage"]
+    return st
+
+
+def _codex_out(st: dict[str, Any]) -> dict[str, Any]:
+    last, models = st["last"] or {}, {st["model"]} - {""}
+    return {"in": _num(last.get("input_tokens")), "out": _num(last.get("output_tokens")),  # reasoning is part of output already
+            "cache_read": _num(last.get("cached_input_tokens")), "cache_write": 0, "cost_cents": None, "models": models}
 
 
 def codex_usage(path: Path) -> dict[str, Any]:
     """One Codex rollout: its last token_count's running total. Tokens only: no cost."""
-    last, model = None, ""
-    for d in _lines(path):
-        p = d.get("payload") if isinstance(d, dict) else None
-        if not isinstance(p, dict):
-            continue
-        if d.get("type") == "turn_context" and p.get("model"):
-            model = str(p["model"])
-        info = p.get("info") if p.get("type") == "token_count" else None
-        if isinstance(info, dict) and isinstance(info.get("total_token_usage"), dict):
-            last = info["total_token_usage"]
-    if not last:
-        return {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0, "cost_cents": None, "models": {model} - {""}}
-    return {"in": _num(last.get("input_tokens")), "out": _num(last.get("output_tokens")),  # reasoning is part of output already
-            "cache_read": _num(last.get("cached_input_tokens")), "cache_write": 0, "cost_cents": None, "models": {model} - {""}}
+    return _codex_out(codex_scan(path))
 
 
 def _cache_file() -> Path:
@@ -126,22 +167,24 @@ def _cache_file() -> Path:
 
 
 def _session_usage(f: Path, kind: str, cache: dict[str, Any]) -> dict[str, Any] | None:
-    """One session's usage, from the cache while its transcript's size and mtime haven't changed (the view polls)."""
+    """One session's usage. The cache keeps each transcript's totals and how far it was read: a live session's new lines
+    are the only ones read on the next poll; a file that shrank (rewritten) is read again from the start."""
     if kind not in ("claude", "codex"):
         return None
     try:
-        st = f.stat()
+        size = f.stat().st_size
     except OSError:
         return None
-    sig = [st.st_size, st.st_mtime_ns]
     hit = cache.get(str(f))
-    if isinstance(hit, dict) and hit.get("sig") == sig and isinstance(hit.get("u"), dict):
-        u = dict(hit["u"])
-        u["models"] = set(u.get("models") or [])
-        return u
-    u = claude_usage(f) if kind == "claude" else codex_usage(f)
-    cache[str(f)] = {"sig": sig, "u": {**u, "models": sorted(u["models"])}}
-    return u
+    st = hit.get("st") if isinstance(hit, dict) and hit.get("kind") == kind and isinstance(hit.get("st"), dict) else None
+    if st is None or not isinstance(st.get("offset"), int) or st["offset"] > size:
+        st = None
+    try:
+        st = claude_scan(f, st) if kind == "claude" else codex_scan(f, st)
+    except (KeyError, TypeError, AttributeError):  # a cache from another shape: start over
+        st = claude_scan(f) if kind == "claude" else codex_scan(f)
+    cache[str(f)] = {"kind": kind, "st": st}
+    return _claude_out(st) if kind == "claude" else _codex_out(st)
 
 
 def _load_cache() -> dict[str, Any]:
@@ -190,7 +233,7 @@ def usage(files: list[tuple[Path, str]]) -> dict[str, Any]:
 
 
 # ---------- sharing: a privacy-safe copy of the log ----------
-URL_RE = re.compile(r"\b(?:https?|ssh|git|wss?|file|ftp)://[^\s'\"<>)\]]+", re.I)
+URL_RE = re.compile(r"\b(?:https?|ssh|git|wss?|file|ftp)://[^\s'\"<>]+", re.I)
 SCP_RE = re.compile(r"\b[\w.-]+@[\w.-]+\.\w+:[\w./~-]+")  # git@host:owner/repo.git
 USERHOST_RE = re.compile(r"\b[\w.-]+@[A-Za-z][\w-]*(?:\.[\w-]+)*\b")  # alice@buildbox, a shell prompt's user@host
 HOST_RE = re.compile(r"\b(?:[a-z0-9-]+\.)+(?:local|lan|internal|corp|home|ts\.net)\b", re.I)
@@ -199,6 +242,7 @@ PATH_RE = re.compile(r"(?<![\w.])(?:~(?=/)|/(?:home|Users|root|tmp|private|var|o
 # NAME=value / NAME: value where the name says it's a credential, whatever the value looks like
 ASSIGN_RE = re.compile(r"(?i)([\"']?)\b([A-Z0-9_.-]*(?:PASSWORD|PASSWD|PASSPHRASE|SECRET|TOKEN|[_-]KEY|API[_-]?KEY|"
                        r"CREDENTIALS?|AUTH)[A-Z0-9_.-]*)\1(\s*[=:]\s*)(?:\"[^\"\n]*\"|'[^'\n]*'|(?![\s\[])[^\n,;}]+)")  # the whole value: quoted, or to the line's end
+FLAG_RE = re.compile(r"(?i)(--?[\w-]*(?:password|passwd|passphrase|secret|token|api[_-]?key|auth)[\w-]*)(\s+)(?!-)\S+")  # mysql --password hunter2
 BEARER_RE = re.compile(r"(?i)\b(Bearer|Basic|Token)\s+[\w.~+/=-]{8,}")
 TOKENISH_RE = re.compile(r"\b(?:sk|pk|rk|ghp|gho|ghs|ghu|glpat|xox[abpr]|AKIA)[-_A-Za-z0-9]{12,}\b")
 
@@ -218,6 +262,14 @@ def _hosts() -> list[str]:
     return sorted({full, full.split(".")[0]} - {"", "localhost"}, key=len, reverse=True)
 
 
+def _url(m: re.Match[str]) -> str:
+    """[url], keeping only the punctuation after it that isn't the URL's: a closing bracket it never opened, a full stop."""
+    u, tail = m.group(0), ""
+    while u and (u[-1] in ".,;:!?" or u[-1] in ")]}" and u.count(u[-1]) > u.count({")": "(", "]": "[", "}": "{"}[u[-1]])):
+        u, tail = u[:-1], u[-1] + tail
+    return "[url]" + tail
+
+
 def redact(text: str, terms: tuple[str, ...] = ()) -> tuple[str, int]:
     """(text, how many things were replaced). Order matters: secrets before URLs, URLs before paths and hosts."""
     n = 0
@@ -233,7 +285,9 @@ def redact(text: str, terms: tuple[str, ...] = ()) -> tuple[str, int]:
     n += sum(1 for rx, _ in audit.SECRET_RES for _ in rx.finditer(before))
     text = sub(TOKENISH_RE, "[token]", text)
     text = sub(BEARER_RE, r"\1 [secret]", text)
-    text = sub(URL_RE, "[url]", text)
+    text = sub(FLAG_RE, r"\1\2[secret]", text)
+    text, k = URL_RE.subn(_url, text)
+    n += k
     text = sub(SCP_RE, "[repo]", text)
     text = sub(audit.EMAIL_RE, "[email]", text)
     text = sub(USERHOST_RE, "[user@host]", text)
@@ -247,7 +301,7 @@ def redact(text: str, terms: tuple[str, ...] = ()) -> tuple[str, int]:
         text = sub(re.compile(re.escape(term), re.I), "[workspace]", text)
     for name, mark in ((_user(), "[user]"), *((h, "[host]") for h in _hosts())):
         if len(name) >= 3:  # this account's and this machine's names outside a path too: a branch, a prompt, a ssh line
-            text = sub(re.compile(rf"(?<![\w-]){re.escape(name)}(?![\w-])", re.I), mark, text)
+            text = sub(re.compile(rf"(?<![A-Za-z0-9]){re.escape(name)}(?![A-Za-z0-9])", re.I), mark, text)  # alice-fix, -home-alice-x too
     if (rx := diag.leak(strict=True)) is not None:
         text = sub(rx, "[private]", text)
     return text, n
