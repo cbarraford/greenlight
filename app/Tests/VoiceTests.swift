@@ -945,13 +945,17 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
         // issue 208 phase 2: while the turn thinks, its status goes on the strip; once it draws (or speaks) the status stops
         let th = Run("think?"); th.status = "Looking up !12"; c.run = th; v.on = true; v.isLive = false; v.hush(); v.began(th)
         let held = v.statusUp && !v.shown
-        v.statusUp = false; v.status("Running the tests"); let lineShown = v.statusUp
-        v.shown = true; v.statusUp = false; v.status("Reading the log"); let quietAfterDraw = !v.statusUp
+        let seqBefore = v.statusSeq
+        v.statusUp = false; v.status("Running the tests"); let lineShown = v.statusUp && v.statusSeq > seqBefore  // a quiet-time line on its way is dropped
+        v.shown = true; v.statusUp = false; v.status("Reading the log"); let underInstant = v.statusUp  // the instant card: still updating
+        v.took(); v.statusUp = false; v.status("Reading the log"); let quietAfterDraw = !v.statusUp; v.chiefDrew = false
         v.shown = false; v.said = 3; v.status("Reading the log"); let quietAfterSpeech = !v.statusUp
+        v.said = 0; v.statusShown = ["Checking the CI."]; v.status("Reading the log"); let haikuOwns = !v.statusUp; v.statusShown = []
         v.said = 0; c.run = nil; v.status("Reading the log"); let quietAfterTurn = !v.statusUp
+        let wt = Run("watch?"); wt.watch = true; c.run = wt; v.turnAt = nil; v.status("Watching"); let watchQuiet = !v.statusUp; c.run = nil
         v.hush(); v.clearStatus()
         check("voice: a turn holds the stage with its status on the strip until it draws, speaks or ends (issue 208)",
-              held && lineShown && quietAfterDraw && quietAfterSpeech && quietAfterTurn)
+              held && lineShown && underInstant && quietAfterDraw && quietAfterSpeech && quietAfterTurn && haikuOwns && watchQuiet)
         try? FileManager.default.removeItem(at: Diag.url)  // the folder is the test run's support folder too
         // the status line (issue 176): after a quiet stretch of a running turn, a line on the strip (the fallback without a key);
         // the same work again shows nothing new; a clear (speech, the turn's end) takes it down and drops a line on its way

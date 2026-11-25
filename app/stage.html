@@ -142,10 +142,13 @@ ol.life li span{color:var(--dim)}
 /* While Chief thinks (issue 208): the last card stays, stepped down to muted; with none, a still skeleton of the answer. */
 #s.held{--text:var(--dim);--accent:var(--dim);color:var(--text)}  /* fg.muted, or the look's own dim */
 #s.held .caret{display:none}
+#s.held::before{content:"Last answer";font:var(--ds-type-label);font-family:var(--font);color:var(--faint)}  /* the second cue: it's the last answer */
+[data-look=phosphor] #s.held{--text:var(--faint);--dim:var(--faint)}
 #s.held .track i.peak{background:var(--bar)}  /* a held chart steps down too: its accent goes neutral */
-#s.held svg.chart,#s.held .legend i,#s.held svg.tone{filter:grayscale(1)}
+#s.held svg.chart,#s.held .legend i,#s.held svg.tone,#s.held .diff,#s.held pre.hunk,#s.held ol.life{filter:grayscale(1)}
+#s.held iframe{filter:grayscale(1);opacity:.6}  /* Chief's own page can't take the muted colour: it's dimmed instead */
 .skel{display:flex;flex-direction:column;gap:var(--ds-space-12);max-width:var(--ds-layout-measure)}
-.skel i{display:block;height:var(--ds-space-8);border-radius:var(--ds-radius-xs);background:var(--card)}
+.skel i{display:block;height:var(--ds-space-8);border-radius:var(--ds-radius-xs);background:var(--track)}  /* a step above element.rest, to read on the stage */
 .skel i.lead{height:var(--ds-space-12);margin-bottom:var(--ds-space-8)}
 /* Phosphor's hand: shell marks in place of the dots and numbers, dashed rules, everything in mono. */
 [data-look=phosphor]{

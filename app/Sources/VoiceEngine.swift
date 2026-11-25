@@ -144,6 +144,11 @@ final class Voice: NSObject, ObservableObject {
     }
     var turnMark: (turn: Int, at: Date?) { (turnNo, turnAt) }
     func wait(_ title: String, _ sub: String) { put("stage.wait", [title, sub], by: "app") }
+    /// Voice mode is up: the listening card, or, partway through a turn, that turn held with what it's doing (#208).
+    func listening() {
+        if let r = core?.run, !r.watch, !r.checkIn { put("stage.hold", [byline(r, now: Date(), lead: true)], by: "app"); statusUp = true }
+        else { wait("Listening", "Say something, or “goodbye” to stop.") }
+    }
     func show(_ spec: [String: Any]) {  // a card the app drew (the workspace you switched to): newer than any drawing on its way
         guard on else { return }
         drawSeq += 1; shown = true; put("stage.spec", [spec], by: "app", mark: (turnNo, nil))  // you picked it: never a turn's answer, so never timed
@@ -232,7 +237,7 @@ final class Voice: NSObject, ObservableObject {
             Speech.shared.warm()  // a fresh try at a voice that failed last time
             if live { return self.openLive() }
             self.listen()
-            self.wait("Listening", "Say something, or “goodbye” to stop.")
+            self.listening()
         }}
         AVCaptureDevice.requestAccess(for: .audio) { ok in
             if live { finishAuth(ok, true) } else { SFSpeechRecognizer.requestAuthorization { st in finishAuth(ok, st == .authorized) } }
@@ -344,7 +349,7 @@ final class Voice: NSObject, ObservableObject {
         let body = (try? JSONSerialization.data(withJSONObject: ["text": heard, "focus": c.focusName ?? "", "pucks": dwimPucks(dwimScopedPucks(c.pucks, c.scope()))])).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
         var out = ""
         ssh("\(py)/dwim.py stage", stdin: body, onLine: { out += $0 }, onExit: { [weak self] _ in
-            guard let self, self.on, seq == self.drawSeq, !self.shown, !self.chiefDrew,
+            guard let self, self.on, seq == self.drawSeq, mark.turn == self.turnNo, !self.shown, !self.chiefDrew,  // this turn's, nothing drawn yet
                   let o = try? JSONSerialization.jsonObject(with: Data(out.utf8)) as? [String: Any], o["kind"] is String else { return }
             self.shown = true; self.put("stage.spec", [o], by: "dwim", mark: mark, extra: ["req_secs": (Date().timeIntervalSince(t0) * 1000).rounded() / 1000])
             NSLog("dwim: stage %@ in %d ms (dwim.py %@ ms)", o["kind"] as? String ?? "", Int(Date().timeIntervalSince(t0) * 1000), "\(o["ms"] ?? "?")")
@@ -382,10 +387,11 @@ final class Voice: NSObject, ObservableObject {
             self.say(self.waitWord, filler: true)
         }
     }
-    /// What the turn is doing (its newest step, its plan), on the strip under the held card or skeleton until the turn draws
-    /// something of its own or speaks. Not a draw for the trail.
+    /// What the turn is doing (its newest step, its plan), on the strip under the held card, the skeleton or the instant card,
+    /// until Chief draws or speaks, or a quiet-time line takes the strip over. Only for a turn began() saw. Not a draw for the trail.
     func status(_ s: String) {
-        guard on, !shown, said == 0, speaking == 0, lines.isEmpty, core?.run != nil else { return }
+        guard on, turnAt != nil, !chiefDrew, said == 0, speaking == 0, lines.isEmpty, statusShown.isEmpty, core?.run != nil else { return }
+        statusSeq += 1  // a quiet-time line asked for before this newer one doesn't land over it
         statusUp = true; js("stage.status", [s])
     }
     /// The status line's clock for a turn: from its start, or from voice mode starting partway through it. One clock at a time.
@@ -485,7 +491,7 @@ final class Voice: NSObject, ObservableObject {
         else { draw(plain(spoken), last: true) }
     }
     /// Chief's own drawing (a ```stage block or the [screen] text) takes the stage: Haiku's, even one on its way, doesn't land.
-    func took() { chiefDrew = true; shown = true; drawSeq += 1 }
+    func took() { chiefDrew = true; shown = true; drawSeq += 1; clearStatus() }  // Chief's own drawing is the reply: the strip goes
     /// The turn was stopped or failed: back to listening, saying why (unless you said stop).
     func failed(_ text: String) {
         chiefDrew = false; endStream()
@@ -607,7 +613,7 @@ final class Voice: NSObject, ObservableObject {
     func onLive(_ e: LiveEvent) {
         guard on, isLive else { return }
         switch e {
-        case .started: liveUp = true; wait("Listening", "Say something, or “goodbye” to stop.")
+        case .started: liveUp = true; listening()
         case .heard where micMuted: break  // GPT-Live still transcribing what it got before the mute: not your turn any more
         case .heard(let d): heard = heard.isEmpty ? String(d.drop { $0.isWhitespace }) : heard + d
         case .said(let d):
