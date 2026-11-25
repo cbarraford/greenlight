@@ -529,7 +529,7 @@ final class Voice: NSObject, ObservableObject {
         guard on else { return }
         defer {  // after whichever card this turn ends on: the reply's options as buttons under it (#208)
             stageOptions = st.parts.options
-            if !stageOptions.isEmpty { js("stage.options", [stageOptions]) }
+            js("stage.options", [stageOptions])  // [] too: no earlier row can outlive this turn
         }
         clearStatus()
         if let h = st.stage { stage(h, lead: gist) } else if let o = st.stageOpen { stage(o, lead: gist) }  // a block never closed: drawn as it stands

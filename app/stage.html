@@ -293,8 +293,9 @@ const inline = t => str(t).split(INLINE_RE).flatMap((x, i) => {
   if (x.startsWith("**")) return [wrap("b", x.slice(2, -2))];
   if (x[0] === "*" || x[0] === "_") return [wrap("em", x.slice(1, -1))];
   const text = x.slice(1, x.indexOf("](")), url = x.slice(x.indexOf("](") + 2, -1).trim();
-  if (!/^https?:\/\/[^\s]+$/i.test(url)) return inline(text);  // only a web link is a link (issue 208): the rest stay their words
-  const a = $("a"); a.href = url; a.append(...inline(text)); return [a];  // a click opens it in the browser (the app's StageNav), never here
+  const web = (() => { try { const u = new URL(url); return /^https?:$/.test(u.protocol) && u.hostname ? u.href : null; } catch { return null; } })();
+  if (!web) return inline(text);  // only a web link (http or https, with a host) is a link (issue 208): the rest stay their words
+  const a = $("a"); a.href = web; a.append(...inline(text)); return [a];  // a click opens it in the browser (the app's StageNav), never here
 });
 // A pipe table's rows as cells (its |---| rule dropped; pipes in `code` or \| stay inside their cell), drawn as the table template's grid.
 function splitRow(r){
@@ -527,7 +528,7 @@ function chipify(nodes, seen = new Set()){
   for (const root of nodes) {
     if (root.nodeType !== 1 || root.classList.contains("lead")) continue;
     const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode: t =>
-      t.parentElement.closest("code, pre, svg, .chip, .lead") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT }), texts = [];
+      t.parentElement.closest("code, pre, svg, .chip, .lead, .options") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT }), texts = [];
     while (w.nextNode()) texts.push(w.currentNode);
     for (let t of texts) {
       for (let m; (REF_RE.lastIndex = 0, m = REF_RE.exec(t.nodeValue));) {
@@ -535,7 +536,10 @@ function chipify(nodes, seen = new Set()){
         if (!Object.hasOwn(REFS, ref) || seen.has(ref)) { if (end >= t.nodeValue.length) break; t = t.splitText(end); continue; }
         seen.add(ref);
         const a = t.parentElement.closest("a");
-        if (a) { a.after(chipFor(ref, REFS[ref])); break; }  // a linked ref: its chip after the link, not inside it
+        if (a) {  // a linked ref: its chip after the link (after any chips already there), not inside it
+          let at = a; while (at.nextSibling?.classList?.contains("chip")) at = at.nextSibling;
+          at.after(chipFor(ref, REFS[ref])); if (end >= t.nodeValue.length) break; t = t.splitText(end); continue;
+        }
         const rest = t.splitText(end); rest.before(chipFor(ref, REFS[ref])); t = rest;
       }
     }
@@ -690,10 +694,10 @@ window.stage = {
   // looks the text up in the list it holds and sends it as if you'd said it. [] takes them away.
   options(list){
     const s = document.getElementById("s"); s.querySelectorAll(":scope > .options").forEach(o => o.remove());
-    const os = arr(list).slice(0, 6).map(str).filter(Boolean);
+    const os = arr(list).slice(0, 6).map((t, i) => [str(t).trim(), i]).filter(([t]) => t);  // each keeps its index in the app's list
     if (!os.length) return;
     const row = $("div", "options"); row.setAttribute("role", "group"); row.setAttribute("aria-label", "Options");
-    os.forEach((t, i) => { const a = $("a", "option", t); a.href = "greenlight-option:" + i; row.append(a); });
+    os.forEach(([t, i]) => { const a = $("a", "option", t); a.href = "greenlight-option:" + i; row.append(a); });
     s.append(row);
   },
   // The status line under the stage (issue 176): one short line of what Chief is doing, text only, updated in place; "" clears it.
