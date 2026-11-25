@@ -91,18 +91,20 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 
 /* top bar */
 .bar{height:var(--bar-h);flex-shrink:0;display:flex;align-items:center;gap:var(--sp-3);padding:0 var(--sp-4);background:var(--bar);border-bottom:1px solid var(--hair);z-index:5}
-.title{display:flex;flex-direction:column;gap:0;min-width:max-content;flex-grow:1}  /* the count never truncates; the search gives way */
+.title{display:flex;align-items:center;gap:var(--ds-space-8);min-width:max-content;flex-grow:1}  /* the count never truncates; the search gives way */
 .title b{font-size:var(--fs-4);line-height:var(--lh-4);font-weight:600;letter-spacing:var(--ds-type-title-sm-track);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.title span{font-size:var(--fs-1);line-height:var(--lh-1);color:var(--orange-ink);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.title .count{min-width:16px;height:16px;padding:0 5px;border-radius:var(--ds-radius-full);font:var(--ds-type-label-sm);line-height:16px;font-variant-numeric:tabular-nums;text-align:center;font-style:normal;
+  background:var(--ds-status-needs-solid);color:var(--ds-status-needs-on-solid)}  /* §10.11: the attention count, a badge after the title */
+.title .count.crashed{background:var(--ds-status-crashed-solid);color:var(--ds-status-crashed-on-solid)}
+:root{color-scheme:dark} @media (prefers-color-scheme: light){:root{color-scheme:light}}  /* following the system: light-dark() and the native scrollbars need it said (data-appearance says its own) */
 .seg{display:inline-flex;padding:2px;border-radius:var(--r-1);background:var(--fill)}
 .seg button{height:24px;padding:0 var(--sp-3);border:0;border-radius:var(--r-0);background:none;font-size:var(--fs-2);font-weight:500;color:var(--text2)}
 .seg button:hover{color:var(--text)}
-.seg button[aria-pressed=true]{background:var(--sheet);color:var(--text);box-shadow:var(--shadow-sm)}
+.seg button[aria-pressed=true]{background:light-dark(var(--sheet),var(--ds-element-active));color:var(--text);box-shadow:var(--shadow-sm)}
 .search.proj{width:auto;max-width:160px;padding:0 var(--sp-2)}
-.search{height:28px;width:180px;border-radius:var(--r-1);border:1px solid var(--line);background:var(--fill);color:var(--text);padding:0 var(--sp-2);font:inherit;font-size:var(--fs-3)}
+.search{height:28px;width:180px;border-radius:var(--r-1);border:1px solid var(--line);background:light-dark(var(--ds-bg-surface),var(--ds-element-rest));color:var(--text);padding:0 var(--sp-2);font:inherit;font-size:var(--fs-3)}
 .search:hover{border-color:var(--line-hover)} .search:focus{border-color:var(--accent)} .search::placeholder{color:var(--faint)}
 .qwrap{position:relative;display:flex;flex:0 4 200px;min-width:110px}.qwrap .search{width:100%;min-width:0}.qwrap .ic{position:absolute;left:var(--sp-2);top:6px;color:var(--faint);pointer-events:none}.qwrap .search{padding-left:28px}
-.seg.wait{background:none;box-shadow:inset 0 0 0 1px var(--line)}
 .seg.wait button,.seg.wait button[aria-pressed=true]{background:none;box-shadow:none;color:var(--faint);cursor:default}
 @media (max-width:640px){.bar{gap:var(--sp-2)} .qwrap{min-width:32px}}
 .qwrap.wait .search{background:none;border-color:var(--hair);cursor:default} .qwrap.wait .search::placeholder{color:var(--faint);opacity:1}
@@ -118,8 +120,8 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .btn.ghost{background:var(--fill)}
 .btn.ico{width:28px;padding:0;justify-content:center;position:relative;background:none;color:var(--text2)}
 .btn.ico:hover:not(:disabled){background:var(--fill);color:var(--text)}
-.btn.ico.on{color:var(--accent-fg);background:var(--accent-subtle)}
-.btn.ico .badge{position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;padding:0 var(--sp-1);border-radius:var(--r-full);background:var(--fill-active);color:var(--text);
+.btn.ico.on{color:var(--text);background:var(--ds-element-active)}  /* a toggle that is on: a neutral fill, as a macOS toolbar toggle; the accent stays for the one primary */
+.btn.ico .badge{position:absolute;inset:-6px -6px auto auto;transform:none;min-width:16px;height:16px;padding:0 var(--sp-1);border-radius:var(--r-full);background:var(--fill-active);color:var(--text);
   font-size:var(--fs-1);line-height:16px;font-weight:600;font-style:normal;text-align:center;box-shadow:0 0 0 2px var(--bar)}
 .btn.ico .badge.needs{background:var(--orange);color:var(--on-orange)}
 .back{background:none;color:var(--text2);padding:0 var(--sp-2) 0 var(--sp-1);font-size:var(--fs-3)} .back:hover:not(:disabled){color:var(--text)}
@@ -149,13 +151,14 @@ main.ov{background:var(--canvas)}
 .crash{display:inline-flex;align-items:center;gap:var(--sp-1);height:20px;padding:0 var(--sp-2);border-radius:var(--r-full);border:0;background:var(--red-tint);color:var(--red-ink);font-size:var(--fs-1);font-weight:500}
 .crash:hover{box-shadow:inset 0 0 0 1px var(--red-edge)}
 /* cards keep about one size whatever the window: a wide window gets more columns, not wider cards */
-.acards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,420px),1fr));gap:var(--sp-2)}
-.acard{border-radius:var(--r-2);background:var(--card);border:1px solid var(--card-line);padding:var(--sp-3);min-width:0;
-  display:flex;flex-direction:column;gap:var(--sp-2);container-type:inline-size;position:relative}
-.acard:hover{border-color:var(--line-hover)} .acard.hl{border-color:var(--accent)}
-.acard.crashed{box-shadow:inset 2px 0 0 var(--red)}  /* a crash: the only tint a card gets, a leading edge */
+.acards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,420px),1fr));gap:var(--sp-2);max-height:240px;overflow-y:auto;padding:1px 1px var(--sp-3);margin:-1px -1px calc(-1*var(--sp-3))}  /* capped: the board stays in view, the strip scrolls */
+.acard{border-radius:var(--ds-radius-md);background:var(--card);padding:var(--ds-space-12);min-width:0;
+  --edge:var(--ds-elevation-1);box-shadow:var(--lead,0 0 transparent),var(--edge);
+  display:flex;flex-direction:column;gap:var(--ds-space-8);container-type:inline-size;position:relative}
+.acard:hover{--edge:0 0 0 1px var(--ds-border-hover)} .acard.hl{--edge:0 0 0 1px var(--accent)}
+.acard.crashed{--lead:inset 2px 0 0 var(--red)}  /* a crash: the only tint a card gets, a leading edge */
 .acard:hover,.acard:focus-within{z-index:2}  /* its stage list floats over the next card */
-.atop{display:flex;align-items:center;gap:var(--sp-2);min-width:0}
+.atop{display:flex;align-items:center;gap:var(--sp-2);min-width:0} .acard .av{width:20px;height:20px;background:none} .acard>.aline,.acard>.prog,.acard>.ameta{margin-left:28px} .atop .open{min-width:64px}
 .av{width:28px;height:28px;flex-shrink:0;border-radius:var(--r-1);display:flex;align-items:center;justify-content:center;background:var(--fill);color:var(--text)}
 .av.claude{color:var(--claude)} .av.codex{color:var(--codex)} .av.agy{color:var(--agy)}
 .at{display:flex;flex-direction:column;min-width:0;flex-grow:1}
@@ -241,13 +244,14 @@ button.aline .aexp{margin-left:auto;flex-shrink:0;display:flex;color:var(--text3
 .segs span{height:4px;border-radius:var(--r-full);background:var(--track);overflow:hidden}
 .segs i{display:block;height:100%;border-radius:var(--r-full);background:var(--text3)}
 .segs i.cur{background:var(--blue)} .acard.wait .segs i.cur{background:var(--orange)} .acard.crashed .segs i.cur{background:var(--red)}
-.acard .ask{padding:var(--sp-2) var(--sp-3);border-radius:var(--r-1);background:var(--orange-tint);font-size:var(--fs-3);line-height:var(--lh-3);color:var(--text);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.acard .askrow{display:flex;align-items:flex-end;gap:var(--ds-space-8);padding-left:28px}  /* under the title, past the avatar */
+.acard .ask{flex:1;min-width:0;font:var(--ds-type-body);color:var(--text);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .acard .el{min-width:40px;text-align:right}
 .acard .ask.full{display:block;white-space:pre-wrap;max-height:40vh;overflow:auto}
-.acard .fullq{height:24px;padding:0 var(--sp-2);border:0;border-radius:var(--r-1);background:none;color:var(--accent-fg);font-size:var(--fs-2);font-weight:500} .acard .fullq:hover{background:var(--fill)}
-.acard .open{flex-shrink:0;height:28px;padding:0 var(--sp-3);border-radius:var(--r-1);border:0;background:var(--fill);color:var(--text);font-size:var(--fs-2);font-weight:500}
-.acard .open:hover{background:var(--fill-hover)} .acard .open:active{background:var(--fill-active);transform:scale(.97)}
-.acard .open.ans{background:var(--accent-solid);color:var(--on-accent);font-weight:600} .acard .open.ans:hover{background:var(--accent-hover)}
+.acard .fullq{height:24px;flex-shrink:0;padding:0 var(--ds-space-8);margin:-4px 0;border:0;border-radius:var(--ds-radius-sm);background:none;color:var(--text2);font:var(--ds-type-label)} .acard .fullq:hover{background:var(--ds-element-rest);color:var(--text)}
+.acard .open{flex-shrink:0;height:24px;padding:0 var(--ds-space-8);border-radius:var(--ds-radius-sm);border:0;background:var(--ds-element-rest);color:var(--text);font:var(--ds-type-label)}
+.acard .open:hover{background:var(--ds-element-hover)} .acard .open:active{background:var(--ds-element-active);transform:scale(.97)}
+.acards>.acard:first-child .open.ans{background:var(--accent-solid);color:var(--on-accent)} .acards>.acard:first-child .open.ans:hover{background:var(--accent-hover)}  /* one primary per view: the first question */
 @keyframes breathe{50%{opacity:.45}}
 .whead{display:flex;flex-wrap:wrap;align-items:center;gap:6px var(--sp-4);padding:var(--sp-4) var(--sp-4) 0;font-size:var(--fs-2);color:var(--text3)}
 .whead h2.sect{margin:0}
@@ -271,8 +275,8 @@ button.aline .aexp{margin-left:auto;flex-shrink:0;display:flex;color:var(--text3
 .hx{position:relative;--hfill:var(--hexbody);--hedge:var(--line);--hink:var(--text2);--htrack:transparent;--hprog:var(--text3)}
 .hx.st-needs{--hfill:var(--orange);--hedge:transparent;--hink:var(--on-orange);--htrack:color-mix(in srgb,var(--on-orange) 30%,transparent);--hprog:var(--on-orange)}
 .hx.st-crashed{--hfill:var(--red);--hedge:transparent;--hink:var(--on-red);--htrack:color-mix(in srgb,var(--on-red) 30%,transparent);--hprog:var(--on-red)}
-.hx.st-working{--hfill:var(--blue-tint);--hedge:transparent;--hink:var(--blue-ink);--htrack:var(--blue-edge);--hprog:var(--blue-ink)}
-.hx.st-raised{--hfill:var(--yellow-tint);--hedge:transparent;--hink:var(--yellow-ink);--htrack:var(--yellow-edge);--hprog:var(--yellow-ink)}
+.hx.st-working{--hfill:var(--blue-tint);--hedge:var(--blue-edge);--hink:var(--blue-ink);--htrack:var(--blue-edge);--hprog:var(--blue-ink)}
+.hx.st-raised{--hfill:var(--yellow-tint);--hedge:var(--yellow-edge);--hink:var(--yellow-ink);--htrack:var(--yellow-edge);--hprog:var(--yellow-ink)}
 .hx svg{position:absolute;inset:0;overflow:visible}
 .hx .body{fill:var(--hfill);stroke:var(--hedge);stroke-width:1.5;stroke-linejoin:round}
 .hx .back{fill:var(--hexbody);stroke:var(--hexline);stroke-width:1}
@@ -290,7 +294,7 @@ button.aline .aexp{margin-left:auto;flex-shrink:0;display:flex;color:var(--text3
 .hin b{font-weight:600;white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--hink)}
 /* no MR yet: a dashed outline. Needs-you and crashed keep their solid fill, so their on-solid ink stays readable (issue 155) */
 .hx.nomr .body{stroke:var(--line);stroke-width:1.5;stroke-dasharray:4 3}
-.hx.nomr:not(.st-needs):not(.st-crashed) .body{fill:var(--hexbody)}
+.hx.nomr:not(.st-needs):not(.st-crashed):not(.st-working) .body{fill:var(--hexbody)} .hx.nomr.st-working .body{stroke:var(--hedge)}
 .hin b.hname{font-family:inherit;font-size:var(--fs-3);line-height:var(--lh-2);margin-bottom:0;font-weight:600;white-space:normal;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:var(--hink)}
 .hx:not(.st-needs):not(.st-crashed) .hin b.hname{color:var(--text)}
 .hin span{font-size:var(--fs-1);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;color:var(--hink)}
@@ -313,8 +317,8 @@ button.aline .aexp{margin-left:auto;flex-shrink:0;display:flex;color:var(--text3
 .fan.open .fp.dim{opacity:.35}
 .fan .hub{position:absolute;left:var(--hx);top:var(--hy);pointer-events:auto;z-index:1;transition:left var(--t-base) var(--ease),top var(--t-base) var(--ease),transform var(--t-base) var(--ease)}
 .fan.open .hub{left:var(--cx);top:var(--cy);transform:scale(var(--hs,.55))}
-.badge{position:absolute;left:50%;bottom:6%;transform:translateX(-50%);min-width:28px;height:20px;padding:0 6px;border-radius:var(--r-full);background:var(--text);color:var(--canvas);
-  font-size:var(--fs-1);font-weight:600;display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 2px var(--canvas)}
+.badge{position:absolute;left:50%;bottom:14%;transform:translateX(-50%);min-width:16px;height:16px;padding:0 5px;border-radius:var(--ds-radius-full);background:color-mix(in srgb,currentColor 14%,transparent);color:var(--hink);
+  font:var(--ds-type-label-sm);line-height:16px;font-variant-numeric:tabular-nums;text-align:center}  /* a count badge in the hex's own ink (§10.5) */
 @media (prefers-reduced-motion: reduce){.fan .fp,.fan .backdrop,.fan .hub,.fieldwrap>.cell,.fan,.btn,.acard,.hx .halo{transition:none}
   .hx .pulse,.stagepop,.spin,#hcard,#hcard .gl.working,.rescan.on,#hcard .mg .go i{animation:none}}
 
@@ -460,20 +464,20 @@ body.hasdock:not(.nohex) .empty{right:var(--dock-w)}
 
 /* list: one row per workspace (DESIGN.md §10.8) */
 .list{padding:var(--sp-3) var(--sp-4) var(--sp-5);display:flex;flex-direction:column;gap:2px}
-.lsum{display:flex;flex-direction:column;gap:var(--sp-2);margin:0 0 var(--sp-2)}
+.lsum{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--ds-space-8);margin:0 0 var(--ds-space-8)}  /* one row: filters left, grouping right */
 .lchips{display:flex;flex-wrap:nowrap;align-items:center;gap:6px;overflow-x:auto;scrollbar-width:none}
-.lgrp{display:flex;align-items:center;gap:var(--sp-2);font-size:var(--fs-2);color:var(--text3)}.lgrp .sp{flex-grow:1}
+.lgrp{display:flex;align-items:center;gap:var(--sp-2);font-size:var(--fs-2);color:var(--text3)}
 .lchip{flex:none;display:flex;align-items:center;gap:6px;height:24px;padding:0 var(--sp-2);border:0;border-radius:var(--r-1);background:var(--fill);color:var(--text2);font:inherit;font-size:var(--fs-2);font-weight:500}
 .lchip:hover{background:var(--fill-hover)}
 .lchip[aria-pressed=true]{background:var(--accent-subtle);color:var(--accent-fg)} .lchip b{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums} .lchip[aria-pressed=true] b{color:inherit}
 .sg{display:inline-flex;flex-shrink:0}.lsec b{font-weight:600}
 .lsec{margin:var(--sp-4) var(--sp-3) var(--sp-1);display:flex;align-items:center;gap:var(--sp-2);font-size:var(--fs-2);font-weight:500;color:var(--text3)}
-.lsec .rule{flex-grow:1;height:1px;background:var(--hair)}
+.lsec .rule{flex-grow:1}
 .lmore{border:0;background:none;color:var(--accent-fg);font:inherit;font-size:var(--fs-2);font-weight:500}
-.lrow{display:grid;grid-template-columns:44px minmax(0,1fr) 160px 196px 200px 40px;gap:var(--sp-4);align-items:center;padding:var(--sp-2) var(--sp-3);border-radius:var(--r-1);border:1px solid transparent}
+.lrow{display:grid;grid-template-columns:20px minmax(0,1fr) 160px 196px 200px 40px;gap:var(--sp-4);align-items:center;padding:var(--sp-2) var(--sp-3);border-radius:var(--r-1);border:1px solid transparent}
 .lrow:hover,.lrow.hl{background:var(--fill)}
-.lrow.lhead{padding-block:0;background:none;font-size:var(--fs-1);font-weight:500;color:var(--text3)}
-.lhex{color:var(--text)}
+.lrow.lhead{padding-block:0 var(--ds-space-4);border-radius:0;border-bottom-color:var(--ds-border-subtle);background:none;font-size:var(--fs-1);font-weight:500;color:var(--text3)}
+.lhex{width:20px;height:20px}
 .lmain{min-width:0;display:flex;flex-direction:column;gap:2px}
 .lmain .t{display:flex;align-items:center;gap:var(--sp-2);min-width:0}
 .lmain b{font-size:var(--fs-3);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -491,19 +495,18 @@ body.hasdock:not(.nohex) .empty{right:var(--dock-w)}
 .lag .av.sm{width:20px;height:20px}
 .lag .lst{min-width:0;display:flex;flex-direction:column;gap:1px}.lag .lst .mono{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lag small{font-size:var(--fs-1);color:var(--text3)}
-.lbtn{flex-shrink:0;height:28px;padding:0 var(--sp-3);border:0;border-radius:var(--r-1);background:var(--accent-solid);color:var(--on-accent);font:inherit;font-size:var(--fs-2);font-weight:600;transition:transform var(--t-press) var(--ease)}
-.lbtn:hover{background:var(--accent-hover)} .lbtn.raised,.lbtn.bad{background:var(--fill);color:var(--text);font-weight:500} .lbtn.raised:hover,.lbtn.bad:hover{background:var(--fill-hover)}
+.lbtn{flex-shrink:0;height:24px;padding:0 var(--ds-space-8);border:0;border-radius:var(--ds-radius-sm);background:var(--ds-element-rest);color:var(--text);font:var(--ds-type-label);transition:transform var(--t-press) var(--ease)}  /* secondary: a row's action is never the view's primary */
+.lbtn:hover{background:var(--ds-element-hover)}
 .lbtn:active{transform:scale(.97)} .lbtn:disabled{background:var(--fill);color:var(--faint)}
 .lsub{display:flex;align-items:center;gap:6px;min-width:0;max-width:100%;font-size:var(--fs-2);color:var(--text3);white-space:nowrap}.lsub .mono{overflow:hidden;text-overflow:ellipsis;color:var(--text2)}
 .av.xs{width:16px;height:16px;border-radius:var(--r-full)}
 .lage{text-align:right;font-size:var(--fs-2);color:var(--text3);font-variant-numeric:tabular-nums}
 .list.narrow .lhead{display:none}
-.list.narrow .lrow{grid-template-columns:36px minmax(0,1fr) 132px;grid-template-areas:"hex main ag" "hex sig ag";gap:6px var(--sp-3);padding:var(--sp-2) var(--sp-3) var(--sp-2) var(--sp-2);margin-bottom:6px;background:var(--card);border-color:var(--card-line);border-radius:var(--r-2)}
-.list.narrow .lrow:hover,.list.narrow .lrow.hl{border-color:var(--line-hover)}
-.list.narrow .lhex{grid-area:hex;width:36px;height:36px;align-self:start}.list.narrow .lmain{grid-area:main}.list.narrow .lage{display:none}
-.list.narrow .lcyc{display:none}.list.narrow .lsig{grid-area:sig;display:flex;gap:var(--sp-1) var(--sp-3);flex-wrap:wrap}
-.list.narrow .lag{grid-area:ag;flex-direction:column;align-items:flex-end;gap:6px;align-self:center}.list.narrow .lbtn{width:132px;padding:0}
-.list.narrow .lmain .lwhy{white-space:normal}
+.list.narrow .lrow{grid-template-columns:20px minmax(0,1fr) auto;grid-template-areas:"hex main ag" "hex sig ag";gap:2px var(--ds-space-8);padding:6px var(--ds-space-8)}  /* flat rows, not cards (§10.8) */
+.list.narrow .lhex{grid-area:hex;align-self:start}.list.narrow .lage,.list.narrow .lcyc,.list.narrow .lsig.nomr{display:none}
+.list.narrow .lmain{grid-area:main;display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px var(--ds-space-8)}.list.narrow .lmain .t{grid-column:1/-1}  /* the title, then the name and what it says on one line */
+.list.narrow .lsig{grid-area:sig;display:flex;gap:var(--sp-1) var(--sp-3);flex-wrap:wrap}
+.list.narrow .lag{grid-area:ag;align-self:center}
 
 /* overview grid and cards */
 .grid{padding:var(--sp-4);display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:var(--sp-3);align-content:start}
@@ -762,13 +765,13 @@ function dsIconHTML(name, px = 16, opts = {}){ return dsIcon(name, px, opts).out
 <script>
 "use strict";
 const STATE = {
-  needs:   {label:"Needs you", color:"--orange", size:160},
-  crashed: {label:"Crashed",   color:"--red", size:96},
-  raised:  {label:"Your move", color:"--yellow", size:104},
-  working: {label:"Working",   color:"--blue", size:112},
-  queued:  {label:"Queued",    color:"--gray", size:78},
-  quiet:   {label:"Waiting on others", color:"--purple", size:64},
-  done:    {label:"Done",      color:"--green", size:58},
+  needs:   {label:"Needs you", color:"--orange", size:160, glyph:"needs"},
+  crashed: {label:"Crashed",   color:"--red", size:96, glyph:"crashed"},
+  raised:  {label:"Your move", color:"--yellow", size:104, glyph:"your-move"},
+  working: {label:"Working",   color:"--blue", size:112, glyph:"working"},
+  queued:  {label:"Queued",    color:"--gray", size:78, glyph:"queued"},
+  quiet:   {label:"Waiting on others", color:"--purple", size:64, glyph:"waiting"},
+  done:    {label:"Done",      color:"--green", size:58, glyph:"done"},
 };
 const ORDER = Object.keys(STATE);
 const TONE = {ok:"--green", warn:"--orange", bad:"--red", info:"--blue", idle:"--track"};
@@ -992,8 +995,8 @@ function hexEl(p, R, opts = {}){
     s("polygon", {class:"halo", points: hpoly(R * 1.05)}),
     p.state === "needs" || p.state === "crashed" ? s("polygon", {class:"pulse", points: hpoly(R * .97), stroke: col}) : null,
     s("polygon", {class:"body", points: hpoly(R * .97)}),
-    s("polygon", {class:"track", points: hpoly(R * .92), "stroke-width": 2}),
-    s("polygon", {class:"prog", points: hpoly(R * .92), "stroke-width": 2, pathLength: n, "stroke-dasharray": "0.86 0.14 ".repeat(i) + `0 ${n}`}));
+    i ? s("polygon", {class:"track", points: hpoly(R * .92), "stroke-width": 2}) : null,  // no step done: one edge, no empty ring inside it (§10.9)
+    i ? s("polygon", {class:"prog", points: hpoly(R * .92), "stroke-width": 2, pathLength: n, "stroke-dasharray": "0.86 0.14 ".repeat(i) + `0 ${n}`}) : null);
   const b = Math.max(6, Math.round(R * .15)), named = !compact && R >= 50 && lb.num !== "No MR" && !opts.num;  // named: task, MR, step
   const ly = named ? R * 1.02 : R * 1.04;  // under the bell and agent dot's band
   return h("div", {class:"hx st-" + p.state + (lb.num === "No MR" ? " nomr" : "") + (R < 40 ? " sm" : ""), style:`width:${2 * R}px;height:${2 * R}px;--hc:${col}`}, svg,
@@ -1160,14 +1163,14 @@ function agentCard(p){  // one size everywhere: who and the action, the steps as
   const act = a.tool ? `${a.tool}${a.input ? ": " + a.input : ""}` : short(said || "Working", 160);
   const {n, i} = stepsOf(p), t0 = since(a.since), title = String(mr.title || p.goal || p.name).replace(/^Draft:\s*/i, ""), steps = p.steps || [];
   const q = String(a.last || "").trim().replace(/\n{3,}/g, "\n\n"), full = wait && ui.fullAsk[p.name], long = q.length > 120 || q.includes("\n");  // Full question: blank runs folded to one
-  const ci = CIWORD[mr.pipeline], why = p.action || p.why || (wait ? "asked a question" : "");
+  const ci = CIWORD[mr.pipeline], why = steps.length ? p.action || p.why || "" : "";  // no steps: nothing to say about the lifecycle
   const fact = (k, v, col) => h("span", {}, k + " ", h("b", {style: col ? `color:${ink(col)}` : null}, v));
   return h("article", {class:"acard" + (wait ? " wait" : crash ? " crashed" : ""), "data-name": p.name, "aria-label":`${a.type || "agent"} on ${title}`,
     onmouseenter: () => hl(p.name, true), onmouseleave: () => hl(p.name, false)},
-    h("div", {class:"atop"}, agentAv(a.type, 14),
+    h("div", {class:"atop"}, agentAv(a.type, 20),
       h("div", {class:"at"}, h("b", {title: a.task || title}, short(title, 160)),
-        h("span", {}, [mr.iid && mrRef(mr), p.project, mr.draft && "draft", ag.tag, p.goal && `goal: ${short(p.goal, 80)}`].filter(Boolean).join(" · "))),
-      statusPill(wait ? "wait" : crash ? "red" : "blue", wait ? "Needs you" : crash ? "Crashed" : DOING[p.step] || STEP_NAMES[p.step] || p.step),
+        h("span", {}, [mr.iid && mrRef(mr), p.project, mr.draft && "draft", ag.tag, p.goal && p.goal !== title && `goal: ${short(p.goal, 80)}`].filter(Boolean).join(" · "))),  // not when the goal is the title
+      statusPill(wait ? "wait" : crash ? "red" : "blue", wait ? "Needs you" : crash ? "Crashed" : DOING[p.step] || (steps.length && STEP_NAMES[p.step]) || "Working"),
       h("span", {class:"el", "data-since": t0}, clock(t0)),
       h("button", {class:"open" + (wait ? " ans" : ""), onclick: () => wait ? openAnswer(p.name) : openPage(p.name)}, wait ? "Answer" : crash ? askLabel(p) : "Open")),
     steps.length ? h("div", {class:"prog" + (ui.stage && ui.stage.name === p.name ? " steady" + (ui.stage.up ? " up" : "") + (ui.stage.hush ? " hush" : "") : ""), id: `pg-${cssId(p.name)}`, tabindex:"0", "aria-label": `Step ${Math.min(i + 1, n)} of ${n}: ${STEP_NAMES[steps[i]] || steps[i] || "done"}`, "aria-describedby": `sp-${cssId(p.name)}`,
@@ -1176,17 +1179,17 @@ function agentCard(p){  // one size everywhere: who and the action, the steps as
       h("div", {class:"segs", "aria-hidden":"true"}, steps.map((_, k) => h("span", {}, h("i", {class: k === i ? "cur" : null, style:`width:${k < i ? 100 : k === i ? 50 : 0}%`})))),
       h("div", {class:"lbls", "aria-hidden":"true"}, steps.map((s, k) => h("span", {class: k < i ? "done" : k === i ? "cur" : null}, HEXSUB[s] || STEP_NAMES[s] || s))),  // the stage list names them all: no title tips over it
       stageList(p, steps, i, n)) : null,
-    wait ? h("div", {class:"ask" + (full ? " full" : ""), role:"status", title: full ? null : q}, full ? q : short(q || "Waiting on you", 240))  // two lines of the question, or all of it
+    wait ? h("div", {class:"askrow"}, h("div", {class:"ask" + (full ? " full" : ""), role:"status", title: full ? null : q}, full ? q : short(q || "Waiting on you", 240)),  // two lines of the question, or all of it
+        long ? h("button", {class:"fullq", "aria-expanded": String(!!full), onclick: () => { ui.fullAsk[p.name] = !full; renderMain() }}, full ? "Less" : "Full question") : null)
       : crash ? (said ? outLine(p, said, h("span", {class:"mono", title: said}, said)) : null)  // its last words, if any
       : outLine(p, act, h("span", {class:"adot", "aria-hidden":"true"}), h("span", {class:"mono", title: act}, act)),
-    h("div", {class:"ameta"},
+    steps.length || ci || mr.conflicts || mr.threads_total || mr.approvals_required ? h("div", {class:"ameta"},
       steps.length ? fact("Step", `${Math.min(i + 1, n)} of ${n}`) : null,
       ci ? fact("CI", ci[0], ci[1]) : null,
       mr.conflicts ? h("b", {style:`color:${ink("--red")}`}, "Conflicts") : null,
       mr.threads_total ? fact("Threads", `${mr.threads || 0} of ${mr.threads_total} open`) : null,
       mr.approvals_required ? fact("Approvals", `${mr.approvals || 0} of ${mr.approvals_required}`) : null,
-      why ? h("span", {class:"why", title: why}, why) : null,
-      wait && long ? h("button", {class:"fullq", "aria-expanded": String(!!full), onclick: () => { ui.fullAsk[p.name] = !full; renderMain() }}, full ? "Less" : "Full question") : null));
+      why ? h("span", {class:"why", title: why}, why) : null) : null);
 }
 /* the action a human request asks for, said the same in every row that offers it */
 const askLabel = p => asking(p) ? "Answer" : p.mr && p.mr.role === "review" ? "Review MR" : p.step === "merge" ? "Review merge"
@@ -1243,9 +1246,9 @@ function topBar(){
   }
   const n = ui.snap ? counts() : {}, live = !!ui.snap && ui.snap.pucks.length > 0;  // not live: nothing to switch or search; the page's own button starts the first task
   const att = (n.needs || 0) + (n.raised || 0) + (n.crashed || 0);
-  const bits = [att && h("span", {style:`color:${ink(n.crashed && !n.needs ? "--red" : "--orange")}`}, `${att} need${att > 1 ? "" : "s"} attention`), !att && n.working && `${n.working} working`].filter(Boolean);
+  const attn = att && `${att} need${att > 1 ? "" : "s"} attention`;
   bar.append(h("div", {class:"title"}, h("b", {}, "Spaces"),
-      h("span", {}, bits.flatMap((b, i) => i ? [" · ", b] : [b]))),
+      att ? h("i", {class:"count" + (n.crashed && !n.needs ? " crashed" : ""), role:"img", title: attn, "aria-label": attn}, String(att)) : null),
     h("div", {class:"seg" + (live ? "" : " wait"), role:"group"}, ["overview", "list"].map(v => h("button", {"aria-pressed": String(ui.view === v), disabled: !live,
       onclick: () => { ui.view = v; localSet("view", v); render() }}, v === "overview" ? "Overview" : "List"))),
     h("span", {class:"qwrap" + (live ? "" : " wait")}, icon("search"), h("input", {class:"search", id:"q", type:"search", readonly: !live, "aria-disabled": live ? null : "true", placeholder:"Search", value: ui.q, "aria-label":"Search workspaces",
@@ -1356,7 +1359,7 @@ function sig(k, txt, tn){ return h("span", {class:"sig", style: tn ? `color:${in
 const pips = (have, need) => h("span", {class:"pips", "aria-hidden":"true"}, Array.from({length: need}, (_, k) => h("i", {class: k < have ? "on" : null})));
 function listSignals(p){
   const mr = p.mr;
-  if (!mr || !mr.iid) return h("div", {class:"lsig"}, h("span", {class:"sig"}, "No MR yet"));
+  if (!mr || !mr.iid) return h("div", {class:"lsig nomr"}, h("span", {class:"sig"}, "No MR yet"));
   const appr = mr.approvals || 0, need = Math.max(mr.approvals_required || 0, appr), [ci, tn, ic] = ciSay({}, mr);
   return h("div", {class:"lsig"},
     sig(ic, tn === "ok" ? "CI passed" : tn === "bad" ? "CI failed" : "CI " + ci, {ok:"--green", bad:"--red", run:"--blue"}[tn]),
@@ -1370,13 +1373,13 @@ function listAgent(p){
   const a = p.agent, t0 = since(a.since), go = e => { e.stopPropagation(); openPage(p.name) };
   const av = () => a.type ? agentAv(a.type, 9, "av xs") : null;
   const sub = (...k) => h("span", {class:"lsub"}, ...k), el = () => h("span", {class:"el", "data-since": t0}, clock(t0));
-  if (asking(p)) return h("div", {class:"lag"}, h("button", {class:"lbtn", onclick: e => { e.stopPropagation(); openAnswer(p.name) }}, "Answer"),
-    sub(av(), "waiting ", el()));
-  if (a.state === "working") { const act = a.tool ? `${a.tool}${a.input ? ": " + a.input : ""}` : DOING[p.step] || "Working";
-    return h("div", {class:"lag"}, sub(h("span", {class:"adot", "aria-hidden":"true"}), h("span", {class:"mono", title: act}, act)), sub(av(), "working ", el())) }
+  if (asking(p)) return h("div", {class:"lag"}, sub(av(), "waiting ", el()),
+    h("button", {class:"lbtn", onclick: e => { e.stopPropagation(); openAnswer(p.name) }}, "Answer"));
+  if (a.state === "working") { const act = a.tool ? `${a.tool}${a.input ? ": " + a.input : ""}` : DOING[p.step];  // nothing to add: "working" alone says it
+    return h("div", {class:"lag"}, sub(av(), "working ", el()), act ? sub(h("span", {class:"adot", "aria-hidden":"true"}), h("span", {class:"mono", title: act}, act)) : null) }
   if (["needs", "raised", "crashed"].includes(p.state)) return h("div", {class:"lag"},
-    h("button", {class:"lbtn" + (p.state === "crashed" ? " bad" : p.state === "raised" ? " raised" : ""), onclick: go}, askLabel(p)),
-    a.type ? sub(av(), p.state === "crashed" ? "crashed" : `idle ${ago(a.idle_h)}`) : sub(p.mr && p.mr.role === "review" ? "no agent · review request" : "no agent"));
+    a.type ? sub(av(), p.state === "crashed" ? "crashed" : `idle ${ago(a.idle_h)}`) : sub(p.mr && p.mr.role === "review" ? "no agent · review request" : "no agent"),
+    h("button", {class:"lbtn" + (p.state === "crashed" ? " bad" : p.state === "raised" ? " raised" : ""), onclick: go}, askLabel(p)));
   const say = p.state === "queued" ? `Next: ${STEP_NAMES[p.step] || p.step}` : p.state === "done" ? "Done" : short(p.why || "Waiting on others", 60);
   return h("div", {class:"lag"}, sub(say));
 }
@@ -1387,33 +1390,32 @@ function listRow(p){
       role:"button", tabindex:"0", onclick: go, onkeydown: e => e.target === e.currentTarget && (e.key === "Enter" || e.key === " ") && (e.preventDefault(), go()),
       onmouseenter: () => hl(p.name, true), onmouseleave: () => hl(p.name, false)},
     s("svg", {class:"lhex", width:44, height:44, viewBox:"-22 -22 44 44", role:"img", "aria-label": STATE[p.state].label},
-      s("polygon", {points: hpoly(20), fill: col, "fill-opacity": p.state === "quiet" || p.state === "done" ? .06 : .14, stroke: col, "stroke-width": 2.5}),
-      s("text", {y: 3.5, "text-anchor":"middle", "font-size": 9.5, "font-weight": 700, fill:"currentColor"}, mr.iid ? mrRef(mr) : "—")),
+      s("polygon", {points: hpoly(20), fill: col, "fill-opacity": p.state === "quiet" || p.state === "done" ? .06 : .14, stroke: col, "stroke-width": 2.5})),
     h("div", {class:"lmain"},
       h("div", {class:"t"}, h("b", {title: mrTitle(p)}, mrTitle(p)), mr.draft ? h("span", {class:"ltag"}, "Draft") : null,
-        stepTag(p) ? h("span", {class:"ltag", style:`background:color-mix(in srgb, ${col} 18%, transparent);color:${ink(STATE[p.state].color)}`}, stepTag(p)) : null),
+        stepTag(p) ? h("span", {class:"ltag"}, stepTag(p)) : null),
       h("div", {class:"lmeta"}, h("span", {class:"mono", title: p.name}, p.name), ...[mr.iid && mrRef(mr), p.project, mr.author].filter(Boolean).flatMap(x => [h("span", {}, "·"), h("span", {}, x)])),
       (w => w ? h("div", {class:"lwhy", title: w, style: mine ? `color:${c("--text")}` : null}, w) : null)(p.agent.state === "waiting" && p.agent.last ? short(p.agent.last, 200) : p.state === "quiet" ? null : sayOf(p))),  // waiting on others: the Agent column already says on whom; a waiting agent: its own question, as the overview says it
     h("div", {class:"lcyc"},
       steps.length ? h("div", {class:"lsegs", "aria-hidden":"true"}, steps.map((_, k) => h("span", {style: k < i ? `background:${c("--green")}` : k === i ? `background:${col}` : null}))) : null,
-      h("div", {}, h("span", {style:`color:${ink(STATE[p.state].color)};font-weight:600`}, STEP_NAMES[p.step] || p.step || ""), steps.length ? h("span", {class:"muted"}, `Step ${Math.min(i + 1, n)} of ${n}`) : null)),
+      h("div", {}, h("span", {}, STEP_NAMES[p.step] || p.step || ""), steps.length ? h("span", {class:"muted"}, `Step ${Math.min(i + 1, n)} of ${n}`) : null)),
     listSignals(p),
     listAgent(p),
     h("span", {class:"lage", style: mine ? `color:${ink("--orange")}` : null}, ago(p.agent.idle_h)));
 }
 function renderList(main){
   const all = shown(), n = counts(), by = LGROUP[ui.listBy] ? ui.listBy : "state";
-  const list = h("div", {class:"list" + (main.clientWidth < 900 ? " narrow" : "")});
+  const list = h("div", {class:"list" + (main.clientWidth < 1100 ? " narrow" : "")});
   list.append(h("div", {class:"lsum"},
     h("div", {class:"lchips"}, ORDER.filter(k => n[k]).map(k => h("button", {class:"lchip", "aria-pressed": String(ui.listOnly === k),
         onclick: () => { ui.listOnly = ui.listOnly === k ? null : k; renderMain() }}, stateGlyph(STATE[k]), STATE[k].label, h("b", {}, n[k])))),
     h("div", {class:"lgrp"}, "Group by",
       h("div", {class:"seg", role:"group", "aria-label":"Group by"}, [["state", "State"], ["project", "Project"], ["step", "Step"]].map(([k, t]) =>
         h("button", {"aria-pressed": String(by === k), onclick: () => { ui.listBy = k; localSet("listBy", k); renderMain() }}, t))),
-      h("span", {class:"sp"}), h("span", {id:"lshow"}))));
+      h("span", {id:"lshow"}))));
   list.append(h("div", {class:"lrow lhead", "aria-hidden":"true"}, h("span"), h("span", {}, "Merge request"), h("span", {}, "Lifecycle"), h("span", {}, "Signals"), h("span", {}, "Agent · next"), h("span", {style:"text-align:right"}, "Age")));
   const ps = all.filter(p => matches(p) && (!ui.listOnly || p.state === ui.listOnly)), groups = new Map();
-  list.querySelector("#lshow").textContent = `Showing ${ps.length} of ${all.length}`;
+  if (ps.length < all.length) list.querySelector("#lshow").textContent = `${ps.length} of ${all.length}`;  // only when a filter hides some
   if (by === "state") ORDER.forEach(k => groups.set(k, []));
   for (const p of ps) { const k = LGROUP[by](p); groups.has(k) || groups.set(k, []); groups.get(k).push(p) }
   for (const [k, rows] of groups) {

@@ -193,6 +193,7 @@ final class UITestServer {
         case "dashboard", "mc", "center": return app.window
         case "terminal", "term", "basement", "pipe": return app.termWindow
         case "settings": return app.settingsWindow
+        case "orb": return app.termOrb  // the floating orb's own panel
         default: return l1(target, app: app)?.w ?? view(target, app: app) ?? (target.contains(":") ? nil : app.upstairs ? app.window : app.termWindow)
         }
     }
@@ -313,7 +314,7 @@ final class UITestServer {
                 app.setChat(hidden: !app.chatHidden)
                 done(["ok": true, "chatShown": app.chatShown])
             case "openSettings":
-                if let tab = req["tab"] as? String, !tab.isEmpty { app.greenlight.settingsTab = tab }
+                if let tab = (req["tab"] ?? req["to"]) as? String, !tab.isEmpty { app.greenlight.settingsTab = tab }  // a pane by name, for screenshots
                 app.greenlight.settingsOpen = true
                 app.presentWindow(app.settingsWindow)
                 done(["ok": true, "settingsOpen": true, "tab": app.greenlight.settingsTab])
