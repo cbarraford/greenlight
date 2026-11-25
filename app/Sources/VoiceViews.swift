@@ -351,6 +351,8 @@ struct DropArea: NSViewRepresentable {
 /// only shown (on the stage, and in the transcript under the gist), never read out.
 struct Staged: Equatable {
     var text: String; var stage: String?; var end = false; var hexes: [String]? = nil; var reset = false; var console: String? = nil; var open: URL? = nil; var screen: String? = nil
+    /// A ```stage block still being written (its fence not closed yet): what's in it so far, to draw as soon as it can be read (#208).
+    var stageOpen: String? = nil
     /// What the transcript shows: the gist, then the detail.
     var shown: String { [text, screen ?? ""].filter { !$0.isEmpty }.joined(separator: "\n\n") }
     /// The finished reply's parts with the Options lines off, whichever part Chief ended with one: what's shown, the gist,
@@ -383,8 +385,12 @@ func staged(_ s: String) -> Staged {
     }
     let reset = text.range(of: #"\[chat: ?reset\]"#, options: [.regularExpression, .caseInsensitive]).map { text.removeSubrange($0); return true } ?? false  // asked to start over
     if let r = text.range(of: #"\[stage: ?(full|normal)\]"#, options: [.regularExpression, .caseInsensitive]) { text.removeSubrange(r) }  // the old size line: no full size any more
+    var stageOpen: String?
     while let open = text.range(of: #"```[ \t]*stage(?![A-Za-z0-9])"#, options: [.regularExpression, .caseInsensitive]) {  // every one, ```Stage too: never for the transcript
-        guard let close = text[open.upperBound...].range(of: "```") else { text = String(text[..<open.lowerBound]); break }
+        guard let close = text[open.upperBound...].range(of: "```") else {
+            if stage == nil { stageOpen = String(text[open.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines) }
+            text = String(text[..<open.lowerBound]); break
+        }
         if stage == nil { stage = String(text[open.upperBound..<close.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines) }  // the first is drawn
         text.removeSubrange(open.lowerBound..<close.upperBound)
     }
@@ -394,7 +400,8 @@ func staged(_ s: String) -> Staged {
         text = String(text[..<r.lowerBound])
     }
     return Staged(text: text.trimmingCharacters(in: .whitespacesAndNewlines), stage: stage, end: end, hexes: hexes, reset: reset,
-                  console: console?.isEmpty == false ? console : nil, open: link, screen: screen?.isEmpty == false ? screen : nil)
+                  console: console?.isEmpty == false ? console : nil, open: link, screen: screen?.isEmpty == false ? screen : nil,
+                  stageOpen: stageOpen?.isEmpty == false ? stageOpen : nil)
 }
 
 /// The forges Greenlight tracks (greenlight.py's forge_project): the only hosts Chief's [open: …] may send the browser to.
@@ -844,23 +851,6 @@ func haiku(_ system: String, _ user: String, _ schema: [String: Any], done: @esc
     }.resume()
 }
 
-/// Haiku draws what Chief is saying as a card for stage.spec.
-func drawSpec(_ heard: String, _ reply: String, done: @escaping ([String: Any]?) -> Void) {
-    let item: [String: Any] = ["type": "object", "properties": ["label": ["type": "string"], "detail": ["type": "string"],
-                                                                "tone": ["type": "string", "enum": ["", "needs", "bad", "now", "ok"]]],
-                               "required": ["label", "detail", "tone"], "additionalProperties": false]
-    let schema: [String: Any] = ["type": "object", "additionalProperties": false, "required": ["eyebrow", "title", "kind", "stat", "items"], "properties": [
-        "title": ["type": "string"], "kind": ["type": "string", "enum": ["list", "steps", "stat", "flow", "compare", "quote"]],
-        "eyebrow": ["type": "string"], "stat": ["type": "string"], "items": ["type": "array", "items": item]]]
-    haiku("You draw a voice assistant's reply as one glanceable card on the user's screen while it is spoken. "
-            + "title: the point in a few words. kind: list (facts), steps (an order), stat (one number matters: put it in stat, e.g. \"3 MRs\"), "
-            + "flow (a pipeline or lifecycle, short labels), compare (side by side options), quote (one line to remember). "
-            + "eyebrow: 1–4 lowercase words of context above the title (a workspace name, \"needs you · 2\", \"this week\") or empty; no emoji. "
-            + "items: at most 6, label a few words, detail one short line or empty (for stat, items are facts: label the name, detail the value). "
-            + "tone: needs (waits on the user), bad (failed or crashed), now (in progress), ok (done), else empty; the card shows it as a glyph. "
-            + "Use names, numbers and MR refs from the reply; never invent any. stat is empty unless kind is stat.",
-          "The user said: \(heard)\n\nThe assistant's reply:\n\(reply)", schema, done: done)
-}
 
 // MARK: voice mode's status line (#176): what Chief is doing, on the stage's strip, while it says nothing. Never spoken.
 
@@ -1166,11 +1156,18 @@ let voiceNote = "(Voice mode: the user is talking to you out loud. Your reply ha
     + "It's shown on their screen and in the transcript under the gist, never spoken, so the two needn't match, and it's exempt from the "
     + "few-short-lines rule (lists and bold are fine there; still no tables or headings). Put [screen] alone on its line, and an Options line last, after the text. "
     + "Leave [screen] out only when the gist says it all (a yes, a done, a single fact). Their screen shows a stage beside your voice: "
-    + "the [screen] text, or else a card a fast model draws from what you said. "
-    + "To draw it yourself instead, a chart or a picture, or when they ask you to draw or redraw something, add one ```stage fenced block (it outranks [screen] on the stage): "
-    + "for a chart or graph, JSON the stage draws instantly: {\"chart\": \"bar\"|\"line\"|\"pie\", \"title\": …, \"sub\": …, \"labels\": [x labels], "
+    + "the [screen] text as you write it, or else your gist. "
+    + "To draw it yourself instead, or when they ask you to draw or redraw something, add one ```stage fenced block (it outranks [screen] on the stage) "
+    + "holding JSON the stage draws instantly, from this catalog: "
+    + "a chart or graph {\"chart\": \"bar\"|\"line\"|\"pie\", \"title\": …, \"sub\": …, \"labels\": [x labels], "
     + "\"series\": [{\"name\": …, \"values\": [numbers], \"color\": green|red|gray|blue|amber|purple|teal|pink}], \"stacked\": true, \"note\": …} "
-    + "(pie: one series, a slice per label; never hand-draw a chart in SVG); for a card, JSON {\"title\": …, \"items\": [short lines]}; otherwise plain notes (drawn for you) or a self-contained HTML fragment with inline CSS or SVG and no scripts (shown as is; theme colors: "
+    + "(pie: one series, a slice per label; never hand-draw a chart in SVG); "
+    + "a table {\"kind\": \"table\", \"title\": …, \"columns\": [up to 5], \"rows\": [[cells], up to 10], \"tones\": [per row: bad|now|ok|\"\"]}; "
+    + "a timeline {\"kind\": \"timeline\", \"title\": …, \"items\": [{\"at\": …, \"label\": …, \"detail\": …}], newest first}; "
+    + "a diff {\"kind\": \"diff\", \"title\": …, \"files\": [{\"path\": …, \"add\": n, \"del\": n}], \"lines\": [{\"t\": \"+\"|\"-\"|\" \"|\"@\", \"s\": the line}]}; "
+    + "an MR's lifecycle {\"kind\": \"lifecycle\", \"title\": …, \"stages\": [{\"label\": …, \"state\": done|now|todo, \"detail\": …}]}; "
+    + "or a card {\"title\": …, \"items\": [short lines]}. Plain notes in the block are shown as markdown. "
+    + "Only for a picture none of those can show, a self-contained HTML fragment with inline CSS or SVG and no scripts (shown as is; theme colors: "
     + "var(--text), var(--dim), var(--accent), var(--card), var(--line)). When the conversation is over (they say goodbye, thanks that's it, or ask you to stop listening "
     + "or turn voice mode off), say a short goodbye and add a line [voice: off]: voice mode ends after you finish speaking.)\n"
 

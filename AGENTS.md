@@ -25,7 +25,7 @@ the host: the checkout is `~/.claude/skills/greenlight`.
   `hang {secs}` (the main thread didn't answer for over 2 s) and, every 5 min, `sample {rss_mb, cpu_pct, up_mins}`.
 - `summary.crashes`: the app's macOS crash reports (`~/Library/Logs/DiagnosticReports/Greenlight*.ips`), exception,
   signal and the crashed thread's frames as `image:symbol`. Only when `diag.py` runs on the Mac (not with a remote host).
-- `summary.stage`: the voice stage's draws by who asked (`chief`, `fast` for the Haiku card, `dwim`, `app`) and by draw
+- `summary.stage`: the voice stage's draws by who asked (`chief`, `dwim`, `app`; `fast` was the Haiku card, gone since #208 phase 3) and by draw
   (`wait`, `hold`, `text`, `spec`, `chart`, `html`), and per turn p50/p95 seconds to the first card and to the last draw (a wait card or the turn's held card counts as neither).
   Each `stage` event carries `draw`, `by` and `card` (an allowlisted kind or `other`). One drawn for a turn also has `turn` and `at`,
   and `n` (its place) when it lands in that turn; the fast model's (and the app's fallback for it) and dwim's carry `req_secs`, the fast model's and its fallback's `mid` (a mid-reply card).
