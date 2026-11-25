@@ -144,6 +144,11 @@ def test_redact_takes_paths_with_spaces_trailing_slashes_and_bracketed_secrets()
     for spaced in ('cd "/' + 'Users/Jane Doe/secret plans"', "/" + "Users/Jane Doe/Acme Payroll 2025", "/" + "Users/Jane Doe; ls"):
         out = log_view.redact(spaced)[0]
         assert not re.search(r"Doe|plans|Payroll|2025", out), out
+    for v in ("password:\n  hunter2", '{"password":\n  "hunter2"}', "export AWS_SECRET_ACCESS_KEY=\nhunter2", "password: |\n  hunter2\nnext: 1",
+              "password: >-\n    hunter2", "private_key:\n  - hunter2", "ssh_keys:\n  - hunter2",
+              "password:\n  - a\n  # note\n  - hunter2\n", "password:\r\n  - hunter2\r\n", "password:\r\n  hunter2"):
+        assert "hunter2" not in log_view.redact(v)[0], v
+    assert log_view.redact("password: |\n  hunter2\nnext: 1")[0].endswith("next: 1")
     out, _ = log_view.redact("password:\n  - hunter2\n  - swordfish\nnext: 1")
     assert "hunter2" not in out and "swordfish" not in out and out.endswith("next: 1"), out
     for bad in ("/tmp/x " + "A " * 24999 + "A/", "/tmp/x " + "Ab " * 16666 + "Ab'", "/a/b" + " Ab" * 20000):
