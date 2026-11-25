@@ -5,7 +5,7 @@ alongside the native engine, greenlight must not dispatch into, or delete, a wor
 live. No per-ADE driver: an agent is a process (claude, codex, agy, gemini, opencode, pi) whose working directory is
 inside the worktree, and it is ours when it descends from a pane of `tmux -L greenlight`.
 
-    python3 external.py [--json]     every external agent: worktree-relative facts only (pid, agent, cwd)
+    python3 external.py [--json] [--all]   every agent outside Greenlight's panes (--all: its own too, with `pane`)
 
 Linux reads /proc; macOS asks `ps` and `lsof`. Read-only, stdlib only, cached for a few seconds (a scan asks often).
 A scan that fails fails closed (cleanup: strict; native rows: by_worktree_safe). Known gap: an app that runs its
@@ -36,7 +36,6 @@ PACKAGES = {"claude": ("/@anthropic-ai/claude-code/", "/@anthropic-ai/claude-age
 # until the 6 h hold hands it to the user)
 SERVERS = {"mcp-server", "mcp"}  # not `serve`: an ADE may run `opencode serve` per worktree, and it runs the sessions there
 APP_RE = re.compile(r"\.app/Contents/(?:MacOS|Frameworks)/")  # an app's own executable or helpers (an agent CLI it ships in Resources counts)
-PANE_KINDS = ("claude", "codex", "agy")  # the agents ade_basement.agent_type knows in its own panes
 LAUNCHERS = ("node", "bun", "deno", "python", "python3", "env")
 LAUNCHER_ARGS = {"run", "-r", "--require", "--import", "--loader"}  # `bun run x.js`, `node --require hook.js x.js`: not the script
 
@@ -62,8 +61,8 @@ def agent_of(argv):
         b = ALIASES.get(b, b)
         kind = b if b in AGENTS else next((k for k, pkgs in PACKAGES.items() if any(p in a for p in pkgs)), None)
         if kind:
-            rest = argv[i + 1:i + 5]
-            words = [w for w in rest if not w.startswith("-")]
+            rest = argv[i + 1:]
+            words = [w for w in rest[:4] if not w.startswith("-")]
             if words[:1] and words[0] in SERVERS or words[:2] == ["mcp", "serve"]:
                 return None  # a server that never edits a folder
             listen = next((rest[j + 1] if w == "--listen" and j + 1 < len(rest) else w.partition("=")[2]
@@ -189,7 +188,9 @@ def _tmux_roots():
 
 
 def scan(procs=None, roots=None, cwd_of=None):
-    """[{pid, agent, cwd, start}] for every agent process outside greenlight's tmux (start: when it began, epoch s). An
+    """[{pid, agent, cwd, start[, pane]}] for every agent process (start: when it began, epoch s). One under a Greenlight
+    pane carries that pane's folder as `pane`: by_worktree, the one way callers read this, keeps it only when it works in
+    another worktree than its pane's. An
     agent another agent started counts on its own only in another folder (a claude's own children aren't another
     agent; a codex it runs in another worktree is). procs/roots/cwd_of: injected by tests."""
     mac = platform.system() == "Darwin"
@@ -213,23 +214,26 @@ def scan(procs=None, roots=None, cwd_of=None):
         cwds = _cwds_mac(list(found)) if mac else {pid: _cwd_linux(pid) for pid in found}
         cwd_of = cwds.get
 
-    # Under a Greenlight pane, a claude, codex or agy (the kinds ade_basement reads a pane's state for) carries its pane's
+    # Under a Greenlight pane, an agent of any kind (Greenlight launches opencode, gemini and pi too) carries its pane's
     # folder as `pane`: by_worktree drops it only when it works in the pane's own worktree; one working in another
-    # (`cd ../B && codex`, a nested worktree) counts there. Any other kind typed into a pane (opencode, gemini, pi)
-    # has no pane state, so it keeps its folder busy as an outside one does.
-    rooted = {pid: r for pid in found if (r := root_of(pid)) is not None and found[pid] in PANE_KINDS}
+    # (`cd ../B && codex`, a nested worktree) counts there. (A pane's opencode, gemini or pi has no pane state in
+    # ade_basement.agent_type: the native engine's own limit, not passive coexistence's.)
+    rooted = {pid: r for pid in found if (r := root_of(pid)) is not None}
     pane = {pid: roots[r] for pid, r in rooted.items() if roots[r]}
+    every = dict(found)  # for the child-of-its-parent check below, before a pane of unknown folder drops its own
     found = {pid: k for pid, k in found.items() if not (pid in rooted and not roots[rooted[pid]])}  # a pane of unknown folder: ours
-    if mac and (lost := [p for p in found if p not in pane and cwd_of(p) is None and _alive(p)]):
-        raise OSError(f"no cwd for {len(lost)} live agent(s)")  # lsof said nothing about a live outside agent
+    top = {pid for pid in pane if procs[pid]["ppid"] == rooted[pid]}  # the pane's own agent: in the pane's folder
+    if mac and (lost := [p for p in found if p not in top and cwd_of(p) is None and _alive(p)]):
+        raise OSError(f"no cwd for {len(lost)} live agent(s)")  # lsof said nothing about a live agent that may be elsewhere
     out = []
     for pid in sorted(found):
         c, parent = cwd_of(pid), procs[pid]["ppid"]
-        if c and not (parent in found and cwd_of(parent) == c):
+        # a child in its parent's folder is the parent's own process, unless the parent is ours and the child isn't
+        # (our claude running opencode there: by_worktree drops the claude, so the opencode must stand on its own)
+        if c and not (parent in every and cwd_of(parent) == c and (parent not in pane or pid in pane)):
             out.append({"pid": pid, "agent": found[pid], "cwd": c, "start": procs[pid].get("start"),
                         **({"pane": pane[pid]} if pid in pane else {})})
-        elif not c and pid in pane:
-            continue  # one of ours lsof missed: it's in its pane's folder, nothing to hold
+
     return out
 
 
@@ -296,7 +300,7 @@ if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import diag
     diag.install("external")
-    rows = agents(fresh=True)
+    rows = [r for r in agents(fresh=True) if "--all" in sys.argv or "pane" not in r]  # --all: Greenlight's own pane agents too
     if "--json" in sys.argv:
         print(json.dumps(rows, indent=1))
     else:

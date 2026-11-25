@@ -974,7 +974,11 @@ def tree_info(path):
 def outside_agent(path):
     """cleanup.outside_agent, for the Basement's Delete: an agent outside Greenlight in the tree is a risk to confirm."""
     import cleanup
-    return cleanup.outside_agent(path, fresh=True)
+    paths = []
+    if ade.is_native():
+        with contextlib.suppress(Exception):  # every worktree: our agents' ownership depends on the nested ones
+            paths = [w["path"] for w in importlib.import_module("ade_basement").worktrees()]
+    return cleanup.outside_agent(path, fresh=True, paths=paths)
 
 
 def tree_rm(path, force=False, teardown=""):

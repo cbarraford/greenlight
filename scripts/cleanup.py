@@ -263,13 +263,17 @@ def evaluate(wt, repo, busy):
     return "candidate", reason
 
 
-def outside_agent(path, fresh=False):
+ALL_PATHS: list = []  # every worktree this run listed (scan() fills it)
+
+
+def outside_agent(path, fresh=False, paths=None):
     """The agent another ADE or a plain terminal runs in path, under the native engine (#195 passive coexistence),
     else None. Orca's own agents are in its terminal list (the busy check)."""
     if not ade.is_native():
         return None
-    try:
-        found = external.by_worktree([path], external.agents(fresh=fresh, strict=True)).get(path.rstrip("/"))
+    try:  # against every worktree: whether one of our agents is in its own pane's worktree depends on the nested ones
+        every = [*(ALL_PATHS if paths is None else paths), path]
+        found = external.by_worktree(every, external.agents(fresh=fresh, strict=True)).get(path.rstrip("/"))
     except external.Unknown:
         return "an agent (the process check failed, so it can't be ruled out)"
     return found[0]["agent"] if found else None
@@ -300,6 +304,7 @@ def dedupe(wts):
 
 def scan():
     wts = dedupe(orca("worktree", "list", "--limit", "10000")["worktrees"])
+    ALL_PATHS[:] = [w["path"] for w in wts if w.get("path")]
     cutoff = time.time() * 1000 - ACTIVE_MINUTES * 60_000
     busy = {t["worktreeId"] for t in orca("terminal", "list", "--limit", "10000")["terminals"]
             if (t.get("lastOutputAt") or 0) > cutoff}

@@ -39,6 +39,7 @@ def test_agent_of():
     assert external.agent_of(["codex", "app-server", "--listen", "unix://x"]) is None
     assert external.agent_of(["codex", "app-server", "--listen", "stdio://"]) == "codex"  # a session's, spelled out
     assert external.agent_of(["codex", "app-server", "--listen=stdio://"]) == "codex"
+    assert external.agent_of(["codex", "app-server", "-c", "k=v", "--listen", "stdio://"]) == "codex"  # past the first words
     assert external.agent_of(["node", "/srv/n/@anthropic-ai/claude-agent-sdk/cli.js", "--output-format", "stream-json"]) == "claude"  # T3's Claude
     assert external.agent_of(["/Applications/T3.app/Contents/MacOS/T3", "/srv/n/@anthropic-ai/claude-agent-sdk/cli.js"]) == "claude"  # as node
     assert external.agent_of(["node", "/srv/n/@anthropic-ai/claude-code/cli.js", "mcp", "serve"]) is None
@@ -80,8 +81,14 @@ def test_scan_finds_only_outside_agents():
     nested = external.scan(procs=ours, roots={11: "/w/mine"}, cwd_of={12: "/w/mine", 14: "/w/mine/.wt/b"}.get)
     owned = external.by_worktree(["/w/mine", "/w/mine/.wt/b"], nested)  # a worktree nested in the pane's folder
     assert {k: [a["pid"] for a in v] for k, v in owned.items()} == {"/w/mine/.wt/b": [14]}
-    typed = {11: {"ppid": 1, "argv": ["zsh"]}, 15: {"ppid": 11, "argv": ["opencode"]}}  # typed into a Basement pane
-    assert [a["pid"] for a in external.scan(procs=typed, roots={11: "/w/b"}, cwd_of={15: "/w/b"}.get)] == [15]  # no pane state: busy
+    # asked about one path, it's still decided against every worktree (cleanup passes them all: ALL_PATHS)
+    assert external.by_worktree(["/w/mine/.wt/b", "/w/mine"], nested).get("/w/mine") is None
+    launched = {11: {"ppid": 1, "argv": ["zsh"]}, 15: {"ppid": 11, "argv": ["opencode"]}}  # Greenlight launches opencode too
+    assert external.by_worktree(["/w/b"], external.scan(procs=launched, roots={11: "/w/b"}, cwd_of={15: "/w/b"}.get)) == {}
+    kid = {11: {"ppid": 1, "argv": ["zsh"]}, 12: {"ppid": 11, "argv": ["claude"]}, 13: {"ppid": 12, "argv": ["bash"]},
+           16: {"ppid": 13, "argv": ["gemini", "-p", "x"]}}  # our claude's gemini in another worktree: outside there
+    got = external.by_worktree(["/w/a", "/w/b"], external.scan(procs=kid, roots={11: "/w/a"}, cwd_of={12: "/w/a", 16: "/w/b"}.get))
+    assert {k: [a["pid"] for a in v] for k, v in got.items()} == {"/w/b": [16]}
     assert external.scan(procs={5: {"ppid": 6, "argv": ["claude"]}, 6: {"ppid": 5, "argv": ["sh"]}}, roots=set(),
                          cwd_of=lambda p: "/x") == [{"pid": 5, "agent": "claude", "cwd": "/x", "start": None}]  # a ppid loop ends
 
@@ -213,7 +220,7 @@ def test_orchestrate_rechecks_afresh():
 def test_basement_delete_warns(monkeypatch):
     import cleanup
     import dash
-    monkeypatch.setattr(cleanup, "outside_agent", lambda path, fresh=False: "codex" if fresh else None)
+    monkeypatch.setattr(cleanup, "outside_agent", lambda path, fresh=False, paths=None: "codex" if fresh else None)
     monkeypatch.setattr(dash, "tree", lambda p: (None, {"isPinned": False}))
     monkeypatch.setattr(dash, "tree_info", lambda p: {"dirty": 0, "unpushed": 0})
     assert dash.tree_rm("/srv/w/x") == {"risks": ["codex runs in it outside Greenlight"]}  # asks first (the page lists it, tree_info's "outside")
@@ -283,6 +290,11 @@ def test_failures_fail_closed(monkeypatch):
     monkeypatch.setattr(external, "_alive", lambda pid: True)
     with pytest.raises(OSError, match="no cwd"):
         external.scan(procs={7: {"ppid": 1, "argv": ["claude"]}}, roots=set(), cwd_of=lambda p: None)
+    deep = {11: {"ppid": 1, "argv": ["zsh"]}, 12: {"ppid": 11, "argv": ["claude"]}, 13: {"ppid": 12, "argv": ["bash"]},
+            14: {"ppid": 13, "argv": ["codex", "exec"]}}
+    with pytest.raises(OSError, match="no cwd"):  # our claude's codex, maybe in another worktree, with no cwd: fails closed
+        external.scan(procs=deep, roots={11: "/w/a"}, cwd_of={12: "/w/a"}.get)
+    assert external.scan(procs=deep, roots={11: "/w/a"}, cwd_of={14: "/w/a"}.get)[0]["pid"] == 14  # the pane's own claude missed: fine
     # another user's agent (root's, a second account's): skipped, not a failure that holds every worktree
     assert external.scan(procs={8: {"ppid": 1, "argv": ["claude"], "other": True}}, roots=set(), cwd_of=lambda p: None) == []
     assert external.scan(procs={9: {"ppid": 1, "argv": ["claude"]}}, roots=set(), cwd_of=lambda p: "") == []  # lsof listed it, no path (its folder was deleted): seen
