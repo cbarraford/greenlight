@@ -850,7 +850,7 @@ test("workspace card: facts, agent actions, inline goal, delete asks once (or ne
   await page.evaluate(() => term.suggest({name: "sidebar", label: "Fix lint job", prompt: "Fix the failing lint job on !51 and push."}));
   assert.match(await page.$eval("#card .nx", b => b.textContent), /Fix lint job.*Fix the failing lint job/);
   await page.click("#card .nx");
-  assert.match((await posts(page, "in")).pop().d, /^claude \$'Fix the failing lint job on !51 and push\.'/);
+  assert.match((await posts(page, "open")).pop().run, /^claude \$'Fix the failing lint job on !51 and push\.'$/);
   // Copy opens a small menu
   await row("sidebar").click({button: "right"}); await page.click("#card button:has-text('Copy')"); await page.click("#menu button:text-is('Branch name')");
   assert.equal((await posts(page, "copy")).pop().text, "term-sidebar");
@@ -995,7 +995,7 @@ test("workspace card: Review runs Claude with the repo's prompt, in place of the
   await page.click("#card .rv .mn"); await page.click("#menu button:has-text('Edit greenlight')");
   assert.deepEqual((await posts(page, "settings")).pop(), {cmd: "settings", repo: "greenlight", kind: "review"});
   await page.locator(".ws", {hasText: "rv"}).first().click({button: "right"}); await page.click("#card .rv .go");
-  assert.equal((await posts(page, "in")).pop().d, "claude $'Review !58 at abc123.\\x0aIt\\'s\\x09yours: don\\'t post.'\r");
+  assert.equal((await posts(page, "open")).pop().run, "claude $'Review !58 at abc123.\\x0aIt\\'s\\x09yours: don\\'t post.'");
 });
 test("workspace card: the most urgent move on top, the rest under it, Terminal and Claude below", async page => {
   await page.evaluate(() => term.workspaces({trees: [{ade: "cmux", project: "octo/greenlight", name: "fx", path: "/w/fx", branch: "fx", main: false, agent: "done", state: "needs", puck: "fx",
@@ -1007,7 +1007,7 @@ test("workspace card: the most urgent move on top, the rest under it, Terminal a
   assert.match(await page.$eval("#card .rv .go", b => b.textContent), /^Resolve 2 threads/, "several fixes: blue");
   assert.equal(await page.$("#card .nx"), null);
   await page.click("#card .also button:text-is('Fix CI')");
-  assert.equal((await posts(page, "in")).pop().d, "claude $'fix ci'\r");
+  assert.equal((await posts(page, "open")).pop().run, "claude $'fix ci'");
 });
 test("workspace card: Merge asks once more, then merges; the forge's refusal shows verbatim", async page => {
   const t = ok => ({trees: [{ade: "cmux", project: "octo/greenlight", name: "mg", path: "/w/mg", branch: "mg", main: false, agent: "done", state: "needs", puck: "mg",
@@ -1088,7 +1088,7 @@ test("auto-run: the main window runs a marked move once per head, in an unfocuse
   await page.evaluate(t => term.workspaces(t), w([ci]));
   assert.deepEqual(await page.evaluate(() => tabs.filter(t => t.auto).map(t => [t.name, t.auto.kind, t.ws])), [["Fix CI · !7", "ci", "/w/ar"]]);
   assert.equal(await page.evaluate(() => cur.key), was, "focus stays where it was");
-  assert.equal((await posts(page, "in")).pop().d, "claude $'unattended: fix'\r");
+  assert.equal((await posts(page, "open")).pop().run, "claude $'unattended: fix'");
   assert.equal(await page.$$eval('#side svg[data-icon="bolt"]', x => x.length), 1, "the bolt");
   await page.evaluate(t => term.workspaces(t), w([ci]));
   assert.equal(await page.evaluate(() => tabs.filter(t => t.auto).length), 1, "once per head");
@@ -1247,11 +1247,11 @@ test("a workspace page's Basement button: its agent's live session, else a tab r
   const typed = async id => (await posts(page, "in")).filter(m => m.id === id).map(m => m.d);
   await page.evaluate(() => term.ws("/w/review", {harness: "codex"}));  // exited: a new tab there continuing its last session
   let [o] = await opens(); assert.ok(o, "a tab in the worktree");
-  assert.deepEqual(await typed(o.id), ["codex resume --last\r"]);
+  assert.equal(o.run, "codex resume --last"); assert.deepEqual(await typed(o.id), [], "the session starts it: nothing typed");
   await page.evaluate(() => term.ws("/w/review", {harness: "nope; rm -rf ~"}));  // not a harness: the plain button, its latest tab
   assert.equal((await opens()).length, 1, "no command for an unknown harness");
   await page.evaluate(() => term.ws("/w/review", {harness: "claude", session: "mc-1a2b3c4d"}));  // alive: attach to it, type nothing
-  const at = (await opens()).pop(); assert.equal(at.session, "mc-1a2b3c4d"); assert.deepEqual(await typed(at.id), []);
+  const at = (await opens()).pop(); assert.equal(at.session, "mc-1a2b3c4d"); assert.equal(at.run, undefined); assert.deepEqual(await typed(at.id), []);
   await page.evaluate(() => show(tabs[0]));
   await page.evaluate(() => term.ws("/w/review", {harness: "claude", session: "mc-1a2b3c4d"}));  // its tab is open: show it, no new one
   assert.equal((await opens()).length, 2); assert.equal(await page.evaluate(() => cur.focus.session), "mc-1a2b3c4d");
@@ -1262,13 +1262,13 @@ test("a workspace page's Basement button: its agent's live session, else a tab r
   await page.evaluate(id => term.feed(id, btoa(String.fromCharCode(...new TextEncoder().encode("\x1b]0;✳ review\x07")))), at.id);
   await page.evaluate(() => show(tabs[0]));
   await page.evaluate(() => term.ws("/w/review", {harness: "claude"}));  // a ✳ title with no live session is a quit Claude: continue it
-  const cl = (await opens()).pop(); assert.equal((await opens()).length, 3); assert.deepEqual(await typed(cl.id), ["claude --continue\r"]);
+  const cl = (await opens()).pop(); assert.equal((await opens()).length, 3); assert.equal(cl.run, "claude --continue"); assert.deepEqual(await typed(cl.id), []);
   await page.evaluate(() => show(tabs[0]));
   await page.evaluate(() => term.ws("/w/review", {harness: "claude"}));  // clicked again before the next snapshot: that tab, no second copy
   assert.equal((await opens()).length, 3); assert.equal(await page.evaluate(() => cur.focus.session), cl.session);
   await page.evaluate(() => term.ws("/w/shipped", {harness: "claude", session: "bad session; x"}));  // a bad session name: ignored
   const sh = (await posts(page, "open")).filter(o => o.ws === "/w/shipped");
-  assert.equal(sh.length, 1); assert.notEqual(sh[0].session, "bad session; x"); assert.deepEqual(await typed(sh[0].id), ["claude --continue\r"]);
+  assert.equal(sh.length, 1); assert.notEqual(sh[0].session, "bad session; x"); assert.equal(sh[0].run, "claude --continue"); assert.deepEqual(await typed(sh[0].id), []);
   await page.evaluate(() => term.ws("/w/fix-login", {}));  // never ran an agent: as before, a plain shell
   const pl = (await posts(page, "open")).filter(o => o.ws === "/w/fix-login");
   assert.equal(pl.length, 1); assert.deepEqual(await typed(pl[0].id), []);
@@ -1281,9 +1281,9 @@ test("a workspace page's Basement button: its agent's live session, else a tab r
   await page.evaluate(id => term.feed(id, btoa("\x1b]0;zsh\x07")), at.id);  // codex quit there
   await page.evaluate(() => tabs.forEach(t => { if (t.resumed) t.resumed.at -= 61e3 }));  // and the ones this started are a minute old
   await page.evaluate(() => term.ws("/w/review", {harness: "codex", bin: "/opt/cx/codex"}));  // no tab runs codex: continue it
-  const cx = (await opens()).pop(); assert.deepEqual(await typed(cx.id), ["/opt/cx/codex resume --last\r"]);
+  const cx = (await opens()).pop(); assert.equal(cx.run, "/opt/cx/codex resume --last"); assert.deepEqual(await typed(cx.id), []);
   await page.evaluate(() => term.ws("/w/review", {harness: "pi", bin: "/x/../pi; rm"}));  // a bad bin: the PATH's
-  assert.deepEqual(await typed((await opens()).pop().id), ["pi --continue\r"]);
+  assert.equal((await opens()).pop().run, "pi --continue");
 });
 
 test("a codex tab's ⌬ title is saved, so after a relaunch the Basement button shows it rather than start a second codex (issue 157)", async page => {
@@ -1319,7 +1319,7 @@ test("Basement supports Codex and agy: tab icons, configured default agent launc
   await page.locator(".ws", {hasText: "fix-agy"}).first().click({button: "right"});
   assert.ok(await page.$("#card button:text-is('Antigravity')"), "primary agent button follows configured default agent");
   await page.click("#card .rv .go");
-  assert.equal((await posts(page, "in")).pop().d, "agy -i $'Fix CI now'\r", "agy launches with -i");
+  assert.equal((await posts(page, "open")).pop().run, "agy -i $'Fix CI now'", "agy launches with -i");
   await page.evaluate(() => term.workspaces({
     agents: ["codex", "claude"],
     trees: [{ade: "orca", project: "octo/greenlight", name: "fix-agy", path: "/w/fix-agy", branch: "fix-agy", main: false, agent: "none",
@@ -1328,7 +1328,15 @@ test("Basement supports Codex and agy: tab icons, configured default agent launc
   await page.locator(".ws", {hasText: "fix-agy"}).first().click({button: "right"});
   assert.ok(await page.$("#card button:text-is('Codex')"), "primary agent button switches to Codex");
   await page.click("#card .rv .go");
-  assert.equal((await posts(page, "in")).pop().d, "codex $'Fix CI now'\r", "codex launches with positional prompt");
+  assert.equal((await posts(page, "open")).pop().run, "codex $'Fix CI now'", "codex launches with positional prompt");
+  // a long prompt (the conflicts one is ~1.4 KB) goes whole to the pane's session: typed, macOS's 1024-byte TTY line dropped its tail and Enter
+  const long = "Fix the merge conflicts on #189 → main. Don't push.\n\n" + "Keep both intents; if they can't both hold, stop and ask me.\n".repeat(30);
+  await page.evaluate(long => term.workspaces({agents: ["agy"], trees: [{ade: "orca", project: "octo/greenlight", name: "fix-agy", path: "/w/fix-agy", branch: "fix-agy", main: false, agent: "none",
+    mr: {ref: "!99", state: "opened", sha: "s1", conflicts: true}, moves: [{kind: "conflicts", prompt: long}]}]}), long);
+  await page.locator(".ws", {hasText: "fix-agy"}).first().click({button: "right"}); await page.click("#card .rv .go");
+  const lo = (await posts(page, "open")).pop();
+  assert.equal(lo.run, await page.evaluate(long => agentCmd("agy", long), long)); assert.ok(lo.run.length > 2000, "past the TTY's line");
+  assert.deepEqual((await posts(page, "in")).filter(m => m.id === lo.id), [], "nothing typed into the new pane");
   // Diff note pastes directly into an open Codex or agy pane, not only Claude
   const codexId = await page.evaluate(() => cur.focus.id);
   await page.evaluate(([id, data]) => term.feed(id, data), [codexId, b64("\x1b]0;⌬ Codex session\x07")]);
@@ -1442,7 +1450,7 @@ test("⌘⇧P: the repo's .greenlight.json commands; a shell one runs in a new t
   await page.fill("#pq", "run tests"); await page.keyboard.press("Enter");
   const o = (await posts(page, "open")).slice(before);
   assert.equal(o.length, 1); assert.equal(o[0].ws, "/w/fix-login", "a new tab in the workspace you're in");
-  assert.deepEqual(await ins(page, o[0].id), ["make test\r"]);
+  assert.equal(o[0].run, "make test", "the new tab's session runs it"); assert.deepEqual(await ins(page, o[0].id), []);
   await page.keyboard.press("Meta+Shift+p"); await page.fill("#pq", "ask for review"); await page.keyboard.press("Enter");
   assert.deepEqual((await posts(page, "copy")).pop(), {cmd: "copy", text: "review this\nplease\x1b[201~\x07"}, "no agent open: the clipboard");
   assert.equal((await toastText(page)).b, "No Claude open in fix-login: copied it instead");

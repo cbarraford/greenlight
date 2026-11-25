@@ -601,8 +601,9 @@ function newPane(tab, cmd, session = sid()){
       if (l && !e.metaKey && !e.ctrlKey && !t.hasSelection()) post({cmd: "url", url: fullUrl(t, l)}) });
     t.onData(d => { if (!p.dead) { if (p.hist) { p.hist = false; d = HIST_EXIT + d } return post({cmd: "in", id, d}) } reconnect(p); render() });
     t.onResize(({cols, rows}) => post({cmd: "size", id, cols, rows}));
-    post({cmd: "open", id, session, ws: p.tab.ws, cols: t.cols, rows: t.rows});
-    if (cmd) post({cmd: "in", id, d: cmd + "\r"});
+    // cmd (an agent and its prompt): the pane's session starts it (paneCmd), not typed. Typed before the shell reads it, a line
+    // lands in the TTY's line buffer, which on macOS holds 1024 bytes and drops the rest, Enter too: a long prompt sat unsent.
+    post({cmd: "open", id, session, ws: p.tab.ws, cols: t.cols, rows: t.rows, ...cmd ? {run: cmd} : {}});
   }};
 }
 // The wheel: ghostty-web only ever scrolls its own scrollback (arrow keys on the alternate screen) and never reports the

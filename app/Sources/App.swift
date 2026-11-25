@@ -2078,10 +2078,14 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// What a pane prints just before it runs tmux: the page sends tmux's wheel events (terminal.html `wheel()`) only after it.
     static let tmuxMark = "\\033]6973;greenlight-tmux\\007"
     /// The pane's command: tmux (or a plain login shell where there's none) in the workspace, here or on GREENLIGHT_HOST over ssh.
-    func paneCmd(session: String, cwd: String, on host: String) -> String {
-        let inner = (cwd.isEmpty ? "cd; " : "cd \(shellQuote(cwd)) 2>/dev/null || cd; ") + "command -v tmux >/dev/null || exec $SHELL -l; "
+    /// `run` (an agent and its prompt) is the new session's first command, in an interactive login shell, then a shell when it ends.
+    /// It isn't typed: a line typed before the shell reads it sits in the TTY's line buffer, 1024 bytes on macOS, the rest (Enter too) dropped.
+    func paneCmd(session: String, cwd: String, on host: String, run: String = "") -> String {
+        let first = run.isEmpty ? "exec $SHELL -l" : "exec $SHELL -lic " + shellQuote(run + "\nexec $SHELL -l")
+        let inner = (cwd.isEmpty ? "cd; " : "cd \(shellQuote(cwd)) 2>/dev/null || cd; ") + "command -v tmux >/dev/null || \(first); "
             + "printf '\(App.tmuxMark)'; exec \(App.tmux) start-server \\; "
             + (App.tmuxOpts + App.paneRecorderHooks()).joined(separator: " \\; ") + " \\; new-session -A -s \(shellQuote(session)) -c \"$PWD\""
+            + (run.isEmpty ? "" : " " + shellQuote(first))  // -A onto a session that's still there: tmux ignores it
         if host.isEmpty || host == "local" { return inner }
         // -q: a lost connection still shows (exit 255). ControlPath=none: each pane its own connection, as a wedged ControlMaster
         // (~/.ssh/config's ControlMaster auto) left every new pane hanging; ponytail: a full handshake per pane, fine at tab counts
@@ -2177,7 +2181,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let p = Pty()
             p.onOutput = { [weak web] d in web?.evaluateJavaScript("term.feed(\(tid),'\(d.base64EncodedString())')") }  // safety-ok: base64 alphabet only
             p.onExit = { [weak web] code in web?.evaluateJavaScript("term.exited(\(tid), \(code))") }
-            ptys[id] = p; ptySession[id] = session; p.start(cols: cols, rows: rows, cmd: paneCmd(session: session, cwd: at.cwd, on: at.host))
+            ptys[id] = p; ptySession[id] = session; p.start(cols: cols, rows: rows, cmd: paneCmd(session: session, cwd: at.cwd, on: at.host, run: b["run"] as? String ?? ""))
         case "in":
             ptys[id]?.write(b["d"] as? String ?? ""); greenlight.active()
         case "size": ptys[id]?.resize(cols: cols, rows: rows)
