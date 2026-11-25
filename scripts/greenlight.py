@@ -785,7 +785,7 @@ h2{{font-size:15px;margin:0 0 8px}}code{{font-size:12px}}ul{{margin:0;padding-le
 
 def verify_record(project, iid, verdict, sha="", summary="", evidence="", defects=(), unproven=()):
     """Record a verifier's verdict on project#iid at sha (reset: forget it). A fail or uncertain after one counts a round; a pass
-    starts over. Without --evidence, an HTML page is written for it. Returns the stored record (None on reset)."""
+    starts over; a verdict on the commit the last one checked replaces it in the same round. Without --evidence, an HTML page is written for it. Returns the stored record (None on reset)."""
     if verdict not in ("pass", "fail", "uncertain", "reset"):
         raise ValueError(f"bad verdict {verdict!r}: expected pass, fail, uncertain or reset")
     key, f = f"{project}#{iid}", STATE / "verify.json"
@@ -795,7 +795,8 @@ def verify_record(project, iid, verdict, sha="", summary="", evidence="", defect
         vs = verifications()
         prev, rec = vs.pop(key, None) or {}, None
         if verdict != "reset":
-            rnd = 0 if verdict == "pass" else int(prev.get("round") or 0) + 1 if prev.get("verdict") in ("fail", "uncertain") else 1
+            last = int(prev.get("round") or 0) if prev.get("verdict") in ("fail", "uncertain") else 0
+            rnd = 0 if verdict == "pass" else last if last and prev.get("sha") == (sha or "") else last + 1  # the same commit again: the same round
             rec = {"sha": sha or "", "verdict": verdict, "round": rnd, "ts": int(time.time()), "summary": summary.strip(),
                    "evidence": evidence.strip(), "defects": [d.strip() for d in defects if d and d.strip()],
                    "unproven": [u.strip() for u in unproven if u and u.strip()]}

@@ -803,6 +803,8 @@ st1 = greenlight.verify_status("acme/verified", 1, "sha1")
 assert st1["phase"] == "fix" and st1["round"] == 1 and not st1["stale"] and os.path.exists(st1["evidence"]), st1
 ev_html = greenlight.Path(st1["evidence"]).read_text()
 assert "FAIL" in ev_html and "Cancel leaves dialog dirty" in ev_html and "Safari" in ev_html
+greenlight.verify_record("acme/verified", 1, "fail", sha="sha1", summary="cancel kept state")  # recorded again on the same commit: still round 1
+assert greenlight.verify_status("acme/verified", 1, "sha1")["round"] == 1
 e = ev_v("sha1")  # round 1 failed on sha1: the builder fixes it
 assert (e["step"], e["owner"]) == ("verify", "agent") and "Fix verification defects (round 1/3): cancel kept state" in e["action"], e
 e = ev_v("sha2")  # the fix landed: a fresh verifier, round 2
