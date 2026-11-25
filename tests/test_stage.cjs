@@ -535,6 +535,8 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.ok(await p.evaluate(() => [...document.querySelectorAll(".options a, #s a")].every(a => ![...a.attributes].some(x => x.name.startsWith("on")))));
   assert.equal(await p.$eval(".options a.option", a => getComputedStyle(a).cursor), "default");  // a button, not a link (§10.2)
   assert.equal(await p.$eval(".options a.option", a => getComputedStyle(a).height), "28px");
+  assert.equal(await p.$eval(".options a.option", a => getComputedStyle(a).textDecorationLine), "none");  // a button, not an underlined link
+  assert.equal(await p.$eval(".options a.option", a => getComputedStyle(a).color), await p.$eval(".doc p", e => getComputedStyle(e).color));
   await p.evaluate(() => stage.options(["Only one"])); assert.equal(await p.locator(".options a.option").count(), 1);  // replaced, not added
   await p.evaluate(() => stage.hold("Thinking")); assert.equal(await p.locator(".options").count(), 0);
   await p.evaluate(() => { stage.text({ md: "a" }); stage.options([]); }); assert.equal(await p.locator(".options").count(), 0);
