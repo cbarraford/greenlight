@@ -33,6 +33,13 @@ final class Voice: NSObject, ObservableObject {
         }
     }
     @Published var captions = ud.object(forKey: "captions") as? Bool ?? true { didSet { ud.set(captions, forKey: "captions") } }
+    /// Settings ▸ Thinking motion: the stage's field of needles while Chief works, which lands as the lines of what it shows
+    /// (stage.html's fx). On unless turned off; Reduce Motion keeps the stage still either way.
+    @Published var thinkingMotion = ud.object(forKey: "thinkingMotion") as? Bool ?? true {
+        didSet { ud.set(thinkingMotion, forKey: "thinkingMotion"); if stageWebLoaded { stageWeb.evaluateJavaScript(motionVars) } }  // safety-ok: a hardcoded on/off
+    }
+    /// The stage's side of thinkingMotion: data-motion on its root, which it reads as each wait begins (and mid-thought).
+    var motionVars: String { thinkingMotion ? "document.documentElement.dataset.motion = 'on';" : "document.documentElement.dataset.motion = 'off';" }
     @Published var transcript = false  // the chat instead of the stage
     @Published var speaking = 0 {  // speech buffers queued and not yet played
         didSet {
@@ -119,7 +126,7 @@ final class Voice: NSObject, ObservableObject {
     func js(_ f: String, _ args: [Any]) {
         guard JSONSerialization.isValidJSONObject(args),
               let d = try? JSONSerialization.data(withJSONObject: args), let a = String(data: d, encoding: .utf8) else { return }
-        let code = "(s => { \(delegate.themeVars()) \(look.vars) })(document.documentElement.style); \(f)(...\(a))"
+        let code = "(s => { \(delegate.themeVars()) \(look.vars) \(motionVars) })(document.documentElement.style); \(f)(...\(a))"
         _ = stageWeb
         if stageNav?.ready == true { stageWeb.evaluateJavaScript(code) } else { stageNav?.queued = code }  // safety-ok: JSONSerialization args + hardcoded look.vars
     }

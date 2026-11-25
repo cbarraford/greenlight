@@ -198,5 +198,75 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.ok(await p.evaluate(() => Math.max(window.scrollY, document.body.scrollTop, document.documentElement.scrollTop) > 0), "scrolled before replacement");
   await p.evaluate(() => stage.text({ lead: "Next long reply.", md: Array.from({ length: 24 }, (_, i) => `- next item ${i}`).join("\n") }));
   assert.equal(await p.evaluate(() => Math.max(window.scrollY, document.body.scrollTop, document.documentElement.scrollTop)), 0, "new stage render resets scroll to top");
+  // The thinking field (DESIGN.md §10.18): needles while Chief works, clear of the wait card's words; the card that follows waits
+  // for them to land, then enters as ever. Your turn, Reduce Motion and Settings ▸ Thinking motion off all leave the stage still.
+  await p.setViewportSize({ width: 800, height: 500 });
+  const fxNow = () => p.evaluate(() => document.body.dataset.fx), born = () => p.$eval("#s", e => e.classList.contains("born"));
+  const settled = () => p.waitForFunction(() => !document.body.dataset.fx && !document.getElementById("s").classList.contains("born"));
+  const ink = title => p.evaluate(title => {  // how many pixels the field has inked: over the stage, or just over the wait card's title
+    const c = document.getElementById("fx"), d = c.width / innerWidth; let box = { left: 0, top: 0, width: innerWidth, height: innerHeight };
+    if (title) { const r = document.createRange(); r.selectNodeContents(document.querySelector("h1").firstChild); box = r.getBoundingClientRect(); }
+    const px = c.getContext("2d").getImageData(Math.round(box.left * d), Math.round(box.top * d), Math.max(1, Math.round(box.width * d)), Math.max(1, Math.round(box.height * d))).data;
+    let n = 0; for (let i = 3; i < px.length; i += 4) if (px[i] > 8) n++; return n; }, title);
+  await p.evaluate(() => stage.wait("Listening", "")); await settled();
+  assert.equal(await ink(), 0);  // your turn: nothing moves
+  await p.evaluate(() => stage.wait("One minute", "Reading the diff"));
+  assert.equal(await fxNow(), "think");
+  await p.waitForTimeout(700);
+  assert.ok(await ink() > 2000, "needles are drawn while Chief works");
+  assert.equal(await ink(true), 0, "and keep clear of the wait card's words");
+  assert.equal(await p.$eval("#fx", e => getComputedStyle(e).pointerEvents + e.getAttribute("aria-hidden")), "nonetrue");  // decoration: not in the way, not read out
+  await p.evaluate(() => stage.wait("One minute", "Still reading"));  // a new status line: the field carries on
+  assert.equal(await fxNow(), "think");
+  await p.evaluate(() => stage.spec({ title: "Three workspaces need you", kind: "list", items: [{ label: "one", detail: "review is in" }, { label: "two", detail: "ready to merge" }] }));
+  assert.equal(await fxNow(), "reveal");
+  assert.equal(await p.$eval("#s", e => getComputedStyle(e).opacity), "0", "the card waits for the needles to land");
+  await p.evaluate(() => stage.spec({ title: "Four workspaces need you", kind: "list", items: [{ label: "one" }] }));  // a newer card mid-reveal takes over
+  assert.ok(await born());
+  await p.waitForFunction(() => !document.getElementById("s").classList.contains("born"));
+  assert.equal(await p.$eval("#s", e => getComputedStyle(e).animationName), "in");  // then it enters as it always has
+  assert.match(await p.textContent("h1"), /Four/);
+  await settled();
+  assert.equal(await ink(), 0, "and the field is gone");
+  await p.evaluate(() => stage.spec({ title: "No thinking first", items: [{ label: "a" }] }));  // a card with no wait before it just enters
+  assert.ok(!(await born()) && (await fxNow()) === undefined);
+  await p.evaluate(() => { stage.wait("One minute", "x"); stage.spec({ title: "Fast answer", items: [{ label: "a" }] }); });  // nor one before the needles show
+  assert.ok(!(await born()));
+  await settled();
+  await p.evaluate(() => { document.documentElement.dataset.motion = "off"; stage.wait("One minute", "x"); });  // Settings ▸ Thinking motion, off
+  assert.equal(await fxNow(), undefined);
+  await p.evaluate(() => stage.spec({ title: "t", items: [{ label: "a" }] }));
+  assert.ok(!(await born()));
+  await p.evaluate(() => { document.documentElement.dataset.motion = "on"; stage.wait("One minute", "x"); });
+  assert.equal(await fxNow(), "think");
+  await p.evaluate(() => { document.documentElement.dataset.motion = "off"; });  // switched off mid-thought: it stops by itself
+  await settled();
+  await p.evaluate(() => { document.documentElement.dataset.motion = "on"; });
+  await p.emulateMedia({ reducedMotion: "reduce" });
+  await p.evaluate(() => stage.wait("One minute", "x"));
+  assert.equal(await fxNow(), undefined);  // Reduce Motion: no loop, and the card fades in as before
+  assert.equal(await p.$eval("#fx", e => getComputedStyle(e).display), "none");
+  await p.evaluate(() => stage.spec({ title: "t", items: [{ label: "a" }] }));
+  assert.ok(!(await born()));
+  await p.emulateMedia({ reducedMotion: "no-preference" });
+  await p.evaluate(() => stage.wait("One minute", "x"));
+  await p.setViewportSize({ width: 640, height: 400 });  // the window changes size mid-thought: the field is laid out again
+  await p.waitForTimeout(300);
+  assert.ok((await fxNow()) === "think" && (await ink()) > 1000 && await p.evaluate(() => Math.abs(document.getElementById("fx").width / innerWidth - Math.min(2, devicePixelRatio)) < .01));
+  await p.evaluate(() => stage.html("<p>page</p>"));  // Chief's own page has no lines to land on: the needles fall into step and fade
+  assert.ok((await fxNow()) === "reveal" && await born());
+  await p.setViewportSize({ width: 800, height: 500 });  // a resize mid-reveal shows the card at once
+  await settled();
+  await p.evaluate(() => { stage.wait("One minute", "x"); stage.wait("Listening", "Go on"); });  // your turn ends the thinking
+  await settled();
+  for (const o of [{ chart: "bar", title: "Runs", labels: ["a", "b"], series: [{ name: "s", values: [2, 5] }] },  // ledger rows: the needles take the tracks
+    { chart: "bar", stacked: true, title: "Runs", labels: ["a", "b"], series: [{ name: "ok", values: [4, 3] }, { name: "failed", values: [1, 2] }] }]) {  // bars: along their tops
+    await p.evaluate(() => stage.wait("One minute", "x")); await p.waitForTimeout(450);
+    await p.evaluate(o => stage.chart(o), o);
+    assert.equal(await fxNow(), "reveal");
+    await p.waitForTimeout(500);
+    assert.ok(await ink() > 200, "the needles are on their way to the chart");
+    await settled();
+  }
   console.log("stage ok"); await b.close();
 })().catch(e => { console.error(e); process.exit(1); });
