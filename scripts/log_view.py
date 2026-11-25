@@ -301,11 +301,13 @@ ASSIGN_RE = re.compile(r"(?i)([\"']?)(?<![A-Z0-9_.-])([A-Z0-9_.-]{0,64}(?:PASSWO
                        r"CREDENTIALS?|AUTH)[A-Z0-9_.-]{0,64})\1([ \t]*[=:][ \t]*(?:[!&]\S*[ \t]*)*(?:\r?\n[ \t]*(?=[^\s-])(?![\w.\"'-]+[ \t]*[=:]|\$ ))?[ \t]*)(?:\"[^\"\n]*\"|'[^'\n]*'|(?!\s|\[(?:secret|path|url|email|token|host|ip|repo|user|user@host|phone|private|workspace)\])(?:\[(?:[^\[\]\n]|\[[^\[\]\n]*\])*\][^\s,;}]*|[^\n,;}]+))")  # a list, nested once, and what's stuck to it  # the whole value: quoted, or to the line's end
 _CRED = r"[\w.-]{0,64}(?:password|passwd|passphrase|secret|token|[_-]keys?|api[_-]?keys?|auth|credentials?)[\w.-]{0,64}"
 # The key's own indent (after a diff's +/-) is \2: list items sit at it or deeper, a block's lines and comments deeper
-YAML_LIST_RE = re.compile(rf"(?im)^([+ -])?([ \t]*)({_CRED}:[ \t]*)\r?\n(?:(?(1)[+ -])\2(?:[ \t]*-|[ \t]+#)[^\n]*(?:\n|$))+")  # password:\n  - a\n  - b
-YAML_BLOCK_RE = re.compile(rf"(?im)^([+ -])?([ \t]*)({_CRED}:[ \t]*)(?:[!&]\S*[ \t]+)*[|>][-+0-9]*[ \t]*(?:#[^\n]*)?\r?\n"
-                           r"(?:(?:[+ -]?[ \t]*\r?\n)*(?(1)[+ -])\2[ \t]+\S[^\n]*(?:\n|$))+")  # password: |\n  value
+YAML_LIST_RE = re.compile(rf"(?im)^([+ -])?([ \t]*)((?:-[ \t]+)?{_CRED}:[ \t]*)\r?\n(?:(?(1)[+ -])\2(?:[ \t]*-|[ \t]+#)[^\n]*(?:\n|$))+")  # password:\n  - a\n  - b
+YAML_BLOCK_RE = re.compile(rf"(?im)^([+ -])?([ \t]*)((?:-[ \t]+)?{_CRED}:[ \t]*)(?:[!&]\S*[ \t]+)*[|>][-+0-9]*[ \t]*(?:#[^\n]*)?\r?\n"
+                           r"(?:(?:(?(1)[+ -])[ \t]*\r?\n)*(?(1)[+ -])\2[ \t]+\S[^\n]*(?:\n|$))+")  # password: |\n  value
 FLAG_RE = re.compile(r"(?i)(--?[\w-]{0,64}(?:password|passwd|passphrase|secret|token|api[_-]?key|auth)[\w-]{0,64})([ \t]+)(?!-)\S+")  # mysql --password hunter2
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]{1,64}@[A-Z0-9-]{1,63}(?:\.[A-Z0-9-]{1,63}){0,8}\.[A-Z]{2,24}\b", re.I)  # audit's, bounded
+KEY_BLOCK_RE = re.compile(r"-----BEGIN (?P<label>(?:[A-Z ]+ )?PRIVATE KEY)-----(?:(?!-----BEGIN ).)*?-----END (?P=label)-----", re.S)
+JWT_RE = re.compile(r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}+\.eyJ[A-Za-z0-9_-]{8,}+\.[A-Za-z0-9_-]{8,}+\b")
 BEARER_RE = re.compile(r"(?i)\b(Bearer|Basic|Token)[ \t]+[\w.~+/=-]{8,}")
 TOKENISH_RE = re.compile(r"\b(?:sk|pk|rk|ghp|gho|ghs|ghu|glpat|xox[abpr]|AKIA)[-_A-Za-z0-9]{12,}\b")
 
@@ -343,14 +345,13 @@ def redact(text: str, terms: tuple[str, ...] = ()) -> tuple[str, int]:
         n += k
         return s
 
-    before = text
-    if "-----END " in text:  # audit's BEGIN…END pass is slow with no END to find; its open-ended rule still takes the key
-        text = audit.redact_secrets(text)
-    else:
-        text = audit.PRIVATE_KEY_OPEN_RE.sub("[private key redacted]", text)
-        for rx, _ in audit.SECRET_RES:
-            text = rx.sub(lambda m: m[0][:4] + "…" if len(m[0]) > 8 else "…", text)
-    n += sum(1 for rx, _ in audit.SECRET_RES for _ in rx.finditer(before))
+    # audit.redact_secrets' patterns, with its two slow ones swapped for bounded copies: a key block stops at the next
+    # BEGIN, and a JWT starts only where a token does
+    text = sub(KEY_BLOCK_RE, "[private key redacted]", text)
+    text = sub(audit.PRIVATE_KEY_OPEN_RE, "[private key redacted]", text)
+    for rx, what in audit.SECRET_RES:
+        text, k = (JWT_RE if what == "a JWT credential" else rx).subn(lambda m: m[0][:4] + "…" if len(m[0]) > 8 else "…", text)
+        n += k
     text = sub(TOKENISH_RE, "[token]", text)
     text = sub(BEARER_RE, r"\1 [secret]", text)
     text = sub(FLAG_RE, r"\1\2[secret]", text)
