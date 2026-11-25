@@ -66,10 +66,12 @@ with mock.patch.object(fake, "batch", return_value={"safe": {"value": True, "pro
     except ValueError as e: assert "nonfinite" in str(e)
     else: assert False, "malformed batch and fallback must fail closed"
 
-# ---- every contract holds: one batch, all four checks asked, ok
+# ---- every contract holds: SafeToPublish in a batch of its own, the diff checks in one batch, all asked, ok
 res = audit.contracts({}, audit.MERGE_CHECKS, goal="bump x", diff=DIFF)
-assert res["ok"] and res["failed"] == [] and calls[0] == ("batch", ["diff_matches_goal", "no_secrets_or_pii", "tests_not_weakened"]), (res, calls)
-assert "Goal:\nbump x" in calls[1][2] and "+x = 2" in calls[1][2]
+assert res["ok"] and res["failed"] == [] and sorted(c[1] for c in calls if c[0] == "batch") == \
+    [["diff_matches_goal", "tests_not_weakened"], ["no_secrets_or_pii"]], (res, calls)
+goal_ctx = next(c[2] for c in calls if c[0] == "bool" and c[2].startswith("Goal:"))
+assert "Goal:\nbump x" in goal_ctx and "+x = 2" in goal_ctx
 # a broken contract above the threshold blocks, named exactly; below it doesn't; a guess (local fallback) never does
 ans[Q["diff_matches_goal"]] = {"value": False, "prob": 0.08, "provider": "jev"}
 res = audit.contracts({}, audit.MERGE_CHECKS, goal="bump x", diff=DIFF)
@@ -310,6 +312,16 @@ assert len(r["checks"]) == 2 * audit.MAXPARTS and len(sizes) > 1 and max(sizes) 
 assert sorted(asked) == sorted(r["checks"])  # every question went to a batch call exactly once (none left to the slow per-call path)
 assert [list(g) for g in audit.batches({"a": {"context": "x" * 5}, "b": {"context": "x" * 5}, "c": {"context": "x" * 20}}, 10)] == \
     [["a", "b"], ["c"]]  # in order, a full group closes, and a question bigger than the budget goes alone
+# every SafeToPublish part is its own call: several big parts in one call answered "not safe" together while each passed alone
+mixed = {"diff_matches_goal": {"context": "x"}, "no_secrets_or_pii": {"context": "x"}, "tests_not_weakened": {"context": "x"},
+         "no_secrets_or_pii@2": {"context": "x"}, "no_secrets_or_pii@3": {"context": "x"}}
+assert [list(g) for g in audit.batches(mixed, 10)] == \
+    [["diff_matches_goal", "tests_not_weakened"], ["no_secrets_or_pii"], ["no_secrets_or_pii@2"], ["no_secrets_or_pii@3"]]
+safe_calls = []
+with mock.patch.object(fake, "batch", side_effect=lambda state, qs: (safe_calls.append(sorted(qs)), _batch(state, qs))[1]):
+    r = audit.contracts({}, ("no_secrets_or_pii",), diff="".join(file_blk(i) for i in range(5)))
+safe_keys = [k for k in r["checks"] if k.startswith("no_secrets_or_pii")]
+assert len(safe_keys) > 1 and sorted(safe_calls) == sorted([k] for k in safe_keys), (safe_keys, safe_calls)
 print("tests/threads ok")
 
 # ---- the outbound scorer: post only high precision, keep medium as drafts, drop weak nits
