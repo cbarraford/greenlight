@@ -2078,10 +2078,24 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// What a pane prints just before it runs tmux: the page sends tmux's wheel events (terminal.html `wheel()`) only after it.
     static let tmuxMark = "\\033]6973;greenlight-tmux\\007"
     /// The pane's command: tmux (or a plain login shell where there's none) in the workspace, here or on GREENLIGHT_HOST over ssh.
-    func paneCmd(session: String, cwd: String, on host: String) -> String {
-        let inner = (cwd.isEmpty ? "cd; " : "cd \(shellQuote(cwd)) 2>/dev/null || cd; ") + "command -v tmux >/dev/null || exec $SHELL -l; "
+    /// `run`: a command too long to type (terminal.html `newPane`). One interactive login shell evals it, then becomes a login shell:
+    /// `trap : INT` keeps a ^C (or a stray quote) from ending the pane, and nothing is left to hand the terminal back to. It's in the
+    /// command once, as `r`. tmux gets it through a temp file, as it refuses a command over 16 KB; a live session (a reconnect that
+    /// raced the mark) ignores it, so none then. No tmux, or no file (`>|`: noclobber), and this shell runs it. `runMark` tells the
+    /// page it's handled, so a reconnect doesn't send it again. Known gap: zsh sets the trap after its rc files, so a ^C while
+    /// `.zshrc` loads ends the pane (click the move again); so does a drop in the instant between the mark and tmux's session.
+    static let runMark = "\\033]6973;greenlight-run\\007"
+    func paneCmd(session: String, cwd: String, on host: String, run: String = "") -> String {
+        let go = { (arg: String) in "exec $SHELL -lic " + shellQuote("trap : INT; eval \"\(arg)\"; exec $SHELL -l") + " greenlight " }
+        let inner = (cwd.isEmpty ? "cd; " : "cd \(shellQuote(cwd)) 2>/dev/null || cd; ")
+            + (run.isEmpty ? "command -v tmux >/dev/null || exec $SHELL -l; "
+                : "r=\(shellQuote(run)); f=; if ! command -v tmux >/dev/null; then :; "
+                + "elif \(App.tmux) has-session -t \(shellQuote("=" + session)) 2>/dev/null; then f=live; "
+                + "elif f=$(mktemp -t greenlight-run.XXXXXX) && printf %s \"$r\" >| \"$f\"; then :; else [ -z \"$f\" ] || rm -f \"$f\"; f=; fi; "
+                + "printf '\(App.runMark)'; [ -n \"$f\" ] || \(go("$1"))\"$r\"; ")
             + "printf '\(App.tmuxMark)'; exec \(App.tmux) start-server \\; "
             + (App.tmuxOpts + App.paneRecorderHooks()).joined(separator: " \\; ") + " \\; new-session -A -s \(shellQuote(session)) -c \"$PWD\""
+            + (run.isEmpty ? "" : " " + shellQuote(go("$(cat \"$1\"; rm -f \"$1\")") + "'") + "\"$f\"" + shellQuote("'"))  // -A onto a live session: tmux ignores it
         if host.isEmpty || host == "local" { return inner }
         // -q: a lost connection still shows (exit 255). ControlPath=none: each pane its own connection, as a wedged ControlMaster
         // (~/.ssh/config's ControlMaster auto) left every new pane hanging; ponytail: a full handshake per pane, fine at tab counts
@@ -2177,7 +2191,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let p = Pty()
             p.onOutput = { [weak web] d in web?.evaluateJavaScript("term.feed(\(tid),'\(d.base64EncodedString())')") }  // safety-ok: base64 alphabet only
             p.onExit = { [weak web] code in web?.evaluateJavaScript("term.exited(\(tid), \(code))") }
-            ptys[id] = p; ptySession[id] = session; p.start(cols: cols, rows: rows, cmd: paneCmd(session: session, cwd: at.cwd, on: at.host))
+            let run = b["run"] as? String ?? ""; if !run.isEmpty { greenlight.active() }  // as a typed command ("in") counts
+            ptys[id] = p; ptySession[id] = session; p.start(cols: cols, rows: rows, cmd: paneCmd(session: session, cwd: at.cwd, on: at.host, run: run))
         case "in":
             ptys[id]?.write(b["d"] as? String ?? ""); greenlight.active()
         case "size": ptys[id]?.resize(cols: cols, rows: rows)
