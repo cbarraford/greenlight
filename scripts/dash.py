@@ -990,7 +990,7 @@ def outside_agent(path):
             paths = [w["path"] for w in importlib.import_module("ade_basement").worktrees()]
         except Exception:  # noqa: BLE001 - without the list it can't be ruled out: say so, Delete asks first
             return "an agent (the worktree list failed, so it can't be ruled out)"
-    return cleanup.outside_agent(path, fresh=False, paths=paths)  # the scan just above is fresh
+    return cleanup.outside_agent(path, fresh=True, paths=paths)  # fresh again: the listing above takes a while
 
 
 def tree_rm(path, force=False, teardown=""):
@@ -1003,7 +1003,8 @@ def tree_rm(path, force=False, teardown=""):
     risks = [*(["it's pinned"] if w.get("isPinned") else []), *([info["error"]] if "error" in info else []),
              *([f"{info['dirty']} uncommitted file{'s' * (info['dirty'] != 1)}"] if info.get("dirty") else []),
              *([f"{info['unpushed']} commit{'s' * (info['unpushed'] != 1)} no remote has (the local branch keeps them)"] if info.get("unpushed") else []),
-             *([f"{ext} runs in it outside Greenlight"] if (ext := info.get("outside")) else [])]  # tree_info's fresh check
+             # tree_info's fresh check; it returns early (no "outside") when git status fails: ask here then
+             *([f"{ext} runs in it outside Greenlight"] if (ext := info["outside"] if "outside" in info else outside_agent(path)) else [])]
     if risks and not force:
         return {"risks": risks}
     warn = None

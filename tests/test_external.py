@@ -232,6 +232,8 @@ def test_basement_delete_warns(monkeypatch):
     import dash
     monkeypatch.setattr(dash, "outside_agent", lambda path: "codex")
     monkeypatch.setattr(dash, "tree", lambda p: (None, {"isPinned": False}))
+    monkeypatch.setattr(dash, "tree_info", lambda p: {"error": "not a git checkout"})  # git status failed: no "outside" in it
+    assert dash.tree_rm("/srv/w/x") == {"risks": ["not a git checkout", "codex runs in it outside Greenlight"]}
     monkeypatch.setattr(dash, "tree_info", lambda p: {"dirty": 0, "unpushed": 0, "outside": dash.outside_agent(p)})
     assert dash.tree_rm("/srv/w/x") == {"risks": ["codex runs in it outside Greenlight"]}  # asks first (the page lists it, tree_info's "outside")
     monkeypatch.undo()
