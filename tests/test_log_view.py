@@ -149,6 +149,18 @@ def test_redact_takes_paths_with_spaces_trailing_slashes_and_bracketed_secrets()
               "password:\n  - a\n  # note\n  - hunter2\n", "password:\r\n  - hunter2\r\n", "password:\r\n  hunter2"):
         assert "hunter2" not in log_view.redact(v)[0], v
     assert log_view.redact("password: |\n  hunter2\nnext: 1")[0].endswith("next: 1")
+    for v in ("+  password: |\n+    hunter2\n+  next: 1", "password: |\n  a\n\n  hunter2\nnext: 1", "password: !!binary |\n  hunter2",
+              "password: &p\n  hunter2", "password: |2\n  hunter2",
+              "password: | # copied from vault\n  hunter2\n", "password: |\n\n  hunter2\n"):
+        assert "hunter2" not in log_view.redact(v)[0], v
+    out = log_view.redact("db:\n  password: |\n    hunter2\n  port: 5432\nother: z")[0]
+    assert out == "db:\n  password: [secret]\n  port: 5432\nother: z", "a block ends where its indent does"
+    assert "# Next steps" in log_view.redact("Auth:\n- fixed login\n# Next steps\n- write docs\n")[0], "a heading ends a list"
+    for slow in ("token" * 20000 + ":", "a_token" * 14000 + "x\n", "x.token" * 14000 + ": |", "a.b" * 30000, "a@b" + ".c" * 40000):
+        t = time.time(); log_view.redact(slow)
+        assert time.time() - t < 2, slow[:20]  # a line past 8000 characters is broken up first
+    for kept in ("DB_PASSWORD=\nAPI_URL=x", "password:\nnext: 1", "$ export TOKEN=\n$ ls"):
+        assert log_view.redact(kept)[0].split("\n")[1] == kept.split("\n")[1], kept
     out, _ = log_view.redact("password:\n  - hunter2\n  - swordfish\nnext: 1")
     assert "hunter2" not in out and "swordfish" not in out and out.endswith("next: 1"), out
     for bad in ("/tmp/x " + "A " * 24999 + "A/", "/tmp/x " + "Ab " * 16666 + "Ab'", "/a/b" + " Ab" * 20000):

@@ -286,9 +286,9 @@ def _mtime(f: Path) -> float:
 
 # ---------- sharing: a privacy-safe copy of the log ----------
 URL_RE = re.compile(r"\b(?:https?|ssh|git|wss?|file|ftp)://[^\s'\"<>]+", re.I)
-SCP_RE = re.compile(r"\b[\w.-]+@[\w.-]+\.\w+:[\w./~-]+")  # git@host:owner/repo.git
-USERHOST_RE = re.compile(r"\b[\w.-]+@[A-Za-z][\w-]*(?:\.[\w-]+)*\b")  # alice@buildbox, a shell prompt's user@host
-HOST_RE = re.compile(r"\b(?:[a-z0-9-]+\.)+(?:local|lan|internal|corp|home|ts\.net)\b", re.I)
+SCP_RE = re.compile(r"\b[\w.-]{1,64}@[\w-]{1,63}(?:\.[\w-]{1,63}){1,8}:[\w./~-]+")  # git@host:owner/repo.git
+USERHOST_RE = re.compile(r"\b[\w.-]{1,64}@[A-Za-z][\w-]{0,62}(?:\.[\w-]{1,63}){0,8}\b")  # alice@buildbox, a shell prompt's user@host
+HOST_RE = re.compile(r"\b(?:[a-z0-9-]{1,63}\.){1,8}(?:local|lan|internal|corp|home|ts\.net)\b", re.I)
 IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _SEG = r"[^\s'\"`:,;)\]]"
 _W = r"[^\s/'\"`:,;)\]]"  # a word of a spaced name: no slash
@@ -297,12 +297,16 @@ PATH_RE = re.compile(rf"(?<![\w.~/-])(?:~(?=/)(?:/{_SEG}*)?|/(?:home|Users|root|
                      rf"(?: (?:{_W}+/{_SEG}*|[A-Z]{_W}*(?: [A-Z0-9]{_W}*){{0,7}}(?:/{_SEG}*|(?=['\"`;,)]|$))|{_W}+(?: {_W}+){{0,5}}(?=['\"`])))*", re.M)  # a home, a known root, or any path with a 2nd slash but the system's own; not
 # /goal; a spaced part goes with it ("my project/plan.pdf", "Jane Doe"): a relative path after it goes too (privacy first)
 # NAME=value / NAME: value where the name says it's a credential, whatever the value looks like
-ASSIGN_RE = re.compile(r"(?i)([\"']?)\b([A-Z0-9_.-]*(?:PASSWORD|PASSWD|PASSPHRASE|SECRET|TOKEN|[_-]KEY|API[_-]?KEY|"
-                       r"CREDENTIALS?|AUTH)[A-Z0-9_.-]*)\1([ \t]*[=:](?:[ \t]*\r?\n[ \t]*(?=[^\s-]))?[ \t]*)(?:\"[^\"\n]*\"|'[^'\n]*'|(?!\s|\[(?:secret|path|url|email|token|host|ip|repo|user|user@host|phone|private|workspace)\])(?:\[(?:[^\[\]\n]|\[[^\[\]\n]*\])*\][^\s,;}]*|[^\n,;}]+))")  # a list, nested once, and what's stuck to it  # the whole value: quoted, or to the line's end
-_CRED = r"[\w.-]*(?:password|passwd|passphrase|secret|token|[_-]keys?|api[_-]?keys?|auth|credentials?)[\w.-]*"
-YAML_LIST_RE = re.compile(rf"(?im)^([ \t]*{_CRED}:[ \t]*)\r?\n(?:[ \t]*[-#][^\n]*(?:\n|$))+")  # password:\n  - a\n  - b
-YAML_BLOCK_RE = re.compile(rf"(?im)^([ \t]*{_CRED}:[ \t]*)[|>][-+]?[ \t]*\r?\n(?:[ \t]+\S[^\n]*(?:\n|$))+")  # password: |\n  value
-FLAG_RE = re.compile(r"(?i)(--?[\w-]*(?:password|passwd|passphrase|secret|token|api[_-]?key|auth)[\w-]*)(\s+)(?!-)\S+")  # mysql --password hunter2
+ASSIGN_RE = re.compile(r"(?i)([\"']?)\b([A-Z0-9_.-]{0,64}(?:PASSWORD|PASSWD|PASSPHRASE|SECRET|TOKEN|[_-]KEY|API[_-]?KEY|"
+                       r"CREDENTIALS?|AUTH)[A-Z0-9_.-]{0,64})\1([ \t]*[=:][ \t]*(?:[!&]\S*[ \t]*)*(?:\r?\n[ \t]*(?=[^\s-])(?![\w.\"'-]+[ \t]*[=:]|\$ ))?[ \t]*)(?:\"[^\"\n]*\"|'[^'\n]*'|(?!\s|\[(?:secret|path|url|email|token|host|ip|repo|user|user@host|phone|private|workspace)\])(?:\[(?:[^\[\]\n]|\[[^\[\]\n]*\])*\][^\s,;}]*|[^\n,;}]+))")  # a list, nested once, and what's stuck to it  # the whole value: quoted, or to the line's end
+_CRED = r"[\w.-]{0,64}(?:password|passwd|passphrase|secret|token|[_-]keys?|api[_-]?keys?|auth|credentials?)[\w.-]{0,64}"
+# The key's own indent (after a diff's +/-) is \2: list items sit at it or deeper, a block's lines and comments deeper
+YAML_LIST_RE = re.compile(rf"(?im)^([+-]?)([ \t]*)({_CRED}:[ \t]*)\r?\n(?:\1?\2(?:[ \t]*-|[ \t]+#)[^\n]*(?:\n|$))+")  # password:\n  - a\n  - b
+YAML_BLOCK_RE = re.compile(rf"(?im)^([+-]?)([ \t]*)({_CRED}:[ \t]*)(?:[!&]\S*[ \t]+)*[|>][-+0-9]*[ \t]*(?:#[^\n]*)?\r?\n"
+                           r"(?:(?:[+-]?[ \t]*\r?\n)*\1?\2[ \t]+\S[^\n]*(?:\n|$))+")  # password: |\n  value
+FLAG_RE = re.compile(r"(?i)(--?[\w-]{0,64}(?:password|passwd|passphrase|secret|token|api[_-]?key|auth)[\w-]{0,64})(\s+)(?!-)\S+")  # mysql --password hunter2
+EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]{1,64}@[A-Z0-9-]{1,63}(?:\.[A-Z0-9-]{1,63}){0,8}\.[A-Z]{2,24}\b", re.I)  # audit's, bounded
+LONG_LINE_RE = re.compile(r"[^\n]{8000}(?=[^\n])")
 BEARER_RE = re.compile(r"(?i)\b(Bearer|Basic|Token)\s+[\w.~+/=-]{8,}")
 TOKENISH_RE = re.compile(r"\b(?:sk|pk|rk|ghp|gho|ghs|ghu|glpat|xox[abpr]|AKIA)[-_A-Za-z0-9]{12,}\b")
 
@@ -340,6 +344,7 @@ def redact(text: str, terms: tuple[str, ...] = ()) -> tuple[str, int]:
         n += k
         return s
 
+    text = LONG_LINE_RE.sub(lambda m: m.group(0) + "\n", text)  # no log line is this long; a pathological one stays fast
     before = text
     text = audit.redact_secrets(text)
     n += sum(1 for rx, _ in audit.SECRET_RES for _ in rx.finditer(before))
@@ -349,15 +354,15 @@ def redact(text: str, terms: tuple[str, ...] = ()) -> tuple[str, int]:
     text, k = URL_RE.subn(_url, text)
     n += k
     text = sub(SCP_RE, "[repo]", text)
-    text = sub(audit.EMAIL_RE, "[email]", text)
+    text = sub(EMAIL_RE, "[email]", text)
     text = sub(USERHOST_RE, "[user@host]", text)
     text = sub(PATH_RE, "[path]", text)
     text = sub(audit.HOME_RE, "[path]", text)  # a Windows home, or one PATH_RE's lookbehind left
     text = sub(IP_RE, "[ip]", text)
     text = sub(HOST_RE, "[host]", text)
     text = sub(audit.PHONE_RE, "[phone]", text)
-    text = sub(YAML_LIST_RE, "\\1[secret]\n", text)
-    text = sub(YAML_BLOCK_RE, "\\1[secret]\n", text)
+    text = sub(YAML_LIST_RE, "\\1\\2\\3[secret]\n", text)
+    text = sub(YAML_BLOCK_RE, "\\1\\2\\3[secret]\n", text)
     text = sub(ASSIGN_RE, r"\1\2\1\3[secret]", text)  # after URLs: a query's token= is the URL's
     for term in sorted({t for t in terms if t and len(t) >= 3}, key=len, reverse=True):  # the workspace's own name and path
         text = sub(re.compile(re.escape(term), re.I), "[workspace]", text)
