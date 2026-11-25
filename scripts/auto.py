@@ -18,7 +18,8 @@
 
 Automations live in ~/.greenlight/automations.json, runs in ~/.greenlight/auto/.
 Schedules are 5-field cron in the machine's local time (*, */n, a-b, a,b; Sunday=0).
-A precheck that exits non-zero means "nothing to do": the run is skipped.
+A precheck that exits 1 means "nothing to do": the run is skipped. Any other non-zero exit (greenlight.py precheck's 2:
+its scan failed) is a failed run, with the precheck's output as its summary.
 The provider (default: the harness --model names, see harness.py, else config agents[0]) runs first; on a usage limit the same prompt goes to the next of config agents.
 Model and effort apply to the provider only. Permissions follow harness.py: safe unless that harness has bypass set.
 An --orchestrator automation ("kind": "orchestrator") runs orchestrate.py tick instead of an agent; its prompt is optional.
@@ -276,8 +277,9 @@ def execute(name):
                         p = subprocess.run(a["precheck"], shell=True, cwd=os.path.expanduser(a.get("cwd") or "~"),  # noqa: S602
                                            text=True, capture_output=True, timeout=300)
                         log.write(f"$ precheck: {a['precheck']}\n{p.stdout}{p.stderr}[exit {p.returncode}]\n")
-                        if p.returncode:
-                            rec |= {"status": "skipped", "summary": (p.stdout or p.stderr).strip()[-200:]}
+                        if p.returncode:  # 1: nothing to do; anything else: the precheck itself broke
+                            rec |= {"status": "skipped" if p.returncode == 1 else "failed",
+                                    "summary": (p.stdout or p.stderr).strip()[-200:] or f"precheck exited {p.returncode}"}
                     except subprocess.TimeoutExpired:
                         log.write(f"$ precheck: {a['precheck']}\n[timed out]\n")
                         rec |= {"status": "failed", "summary": "precheck timed out"}

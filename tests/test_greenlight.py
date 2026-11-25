@@ -220,11 +220,14 @@ assert gl_with(bad("HTTP 401 Unauthorized")) == ("RuntimeError", 1)
 
 # precheck keeps last.json only when no run follows (an actionable run's report diffs against the old one)
 import adopt
-def precheck(owner, adoptions=0):
+import cleanup
+def precheck(owner, adoptions=0, deletable=0, scan=None):
     (greenlight.STATE / "last.json").write_text("old")
     res = {"rows": [row("ws-a", owner)]}
-    with mock.patch.object(greenlight, "scan", return_value=res), mock.patch.object(greenlight.sys, "argv", ["greenlight.py", "precheck"]), \
-            mock.patch.object(adopt, "plan", return_value={"create": [{}] * adoptions}):
+    with mock.patch.object(greenlight, "scan", **({"side_effect": scan} if scan else {"return_value": res})), \
+            mock.patch.object(greenlight.sys, "argv", ["greenlight.py", "precheck"]), \
+            mock.patch.object(adopt, "plan", return_value={"create": [{}] * adoptions}), \
+            mock.patch.object(cleanup, "scan", return_value=[{"verdict": "candidate"}] * deletable + [{"verdict": "keep"}]):
         try:
             greenlight.main()
         except SystemExit as e:
@@ -234,6 +237,33 @@ saved = json.loads(snapshot)
 assert code == 1 and saved["rows"][0] == row("ws-a", "ci") | {"_scan_id": saved["scan_id"]}
 assert precheck("agent") == (0, "old")
 assert precheck("ci", adoptions=2) == (0, "old")  # MRs with no workspace wake the automation too
+# a finished workspace wakes it too: the precheck is one command, no `|| cleanup.py precheck` to hide its exit code
+code, snapshot = precheck("ci", deletable=1)
+assert code == 0 and json.loads(snapshot)["rows"][0]["name"] == "ws-a", "nothing actionable: the snapshot is still kept"
+with mock.patch.object(cleanup, "scan", side_effect=RuntimeError("orca: not running")), \
+        mock.patch.object(greenlight, "scan", return_value={"rows": [row("ws-a", "ci")]}), \
+        mock.patch.object(greenlight.sys, "argv", ["greenlight.py", "precheck"]), mock.patch.object(adopt, "plan", return_value={"create": []}):
+    try:  # a cleanup check that fails counts as none to delete
+        greenlight.main()
+    except SystemExit as e:
+        assert e.code == 1
+# a scan that dies is exit 2 (not 1, "nothing to do"), its one-line cause last on stdout and in scan_error.json; last.json untouched
+import contextlib as _cl, io as _io
+_out = _io.StringIO()
+with _cl.redirect_stdout(_out), _cl.redirect_stderr(_io.StringIO()):
+    code, snapshot = precheck("ci", scan=RuntimeError('glab api projects/acme%2Fx/merge_requests: ERROR\n  Oauth2: "invalid_grant" "grant expired"'))
+assert (code, snapshot) == (2, "old")
+assert _out.getvalue().strip().splitlines()[-1] == \
+    'scan failed (GitLab login expired; run glab auth login --hostname gitlab.com, then ↻): Oauth2: "invalid_grant" "grant expired"', _out.getvalue()
+assert json.loads((greenlight.STATE / "scan_error.json").read_text())["class"] == "auth"
+assert precheck("ci")[0] == 1 and not (greenlight.STATE / "scan_error.json").exists(), "a good precheck scan clears the error"
+with _cl.redirect_stdout(_out), _cl.redirect_stderr(_io.StringIO()):
+    assert precheck("ci", scan=KeyError("rows"))[0] == 2
+assert _out.getvalue().strip().splitlines()[-1] == "scan failed (crashed): 'rows'"
+_gl_err = RuntimeError("glab api projects/acme%2Fsecret/merge_requests: ERROR: Oauth2: invalid_grant")
+_gl_err._gl_tool, _gl_err._gl_class = "glab", "auth"  # as run() raises it: the argv before ": " stays out of the line
+assert greenlight.scan_cause(_gl_err, {"msg": "GitLab login expired"}) == "scan failed (GitLab login expired): ERROR: Oauth2: invalid_grant"
+(greenlight.STATE / "scan_error.json").unlink()
 # a scan that dies says why in scan_error.json (the dashboard footer shows it): tool, class and fix only, never the argv; a good scan clears it
 def scan_dies(exc):
     with mock.patch.object(greenlight, "scan", side_effect=exc), mock.patch.object(greenlight.sys, "argv", ["greenlight.py", "scan"]):
