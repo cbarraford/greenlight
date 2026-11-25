@@ -26,9 +26,16 @@ DIR = os.path.expanduser(os.environ.get("CHAT_DIR") or os.path.join(os.environ.g
 CHAT = os.path.basename(DIR.rstrip("/")) if os.environ.get("CHAT_DIR") else None  # a second L1 window's Chief (CHAT_DIR=chat-<n>): its questions are its own in the decision record
 
 
+WINDOW_SCOPE = "_window"
+LEGACY_SCOPE = re.compile(r"_scope-[0-9a-f]{12}")  # before #168: a hash of the scope; Clear still sweeps those files
+
+
 def scope_suffix():
-    scope = os.environ.get("GREENLIGHT_ONLY")
-    return "_scope-" + hashlib.sha1(scope.encode()).hexdigest()[:12] if scope else ""
+    """A scoped window's session, pending question and decision identity: one per window (CHAT_DIR), kept apart from the
+    every-project conversation (no GREENLIGHT_ONLY) but never keyed on the scope's contents. The window's paths and repos
+    both follow its worktrees, so a hash of them started a new conversation whenever a workspace was created or removed
+    (#168). The scope still filters the BOARD (dash.board) and keys seen.json's scope."""
+    return WINDOW_SCOPE if os.environ.get("GREENLIGHT_ONLY") else ""
 
 
 def asked_path():
@@ -924,6 +931,31 @@ def session_path(engine):
     return os.path.join(DIR, base + scope_suffix())
 
 
+def adopt_legacy_scope_unlocked():
+    """Upgrading from a hash-keyed scope (#168), under scope_lock so a Clear can't interleave: a scoped window resumes the
+    newest of its old sessions (per engine) once. Its old pending questions (an asked file or a delivery marker) are closed
+    and this turn gets the STALE QUESTION notice, so an answer typed after the upgrade never acts on an unchecked approval.
+    Callers set GREENLIGHT_ONLY first: `send` and `compact` both take the window's --only."""
+    if not scope_suffix() or not scope_current_unlocked():
+        return
+    old: dict[str, list[str]] = {}
+    for p in glob.glob(os.path.join(DIR, "session*_scope-*")):
+        if m := LEGACY_SCOPE.search(p):
+            old.setdefault(p[:m.start()], []).append(p)
+    for base, paths in old.items():
+        if not os.path.exists(base + WINDOW_SCOPE):
+            os.replace(max(paths, key=os.path.getmtime), base + WINDOW_SCOPE)
+    suffixes = {m.group(): p for p in glob.glob(os.path.join(DIR, "asked_scope-*")) if (m := LEGACY_SCOPE.search(p))}
+    asked = list(suffixes.values())
+    for suffix in suffixes:
+        decisions.forget_chat(chat=(CHAT or "main") + suffix)
+    deliveries = [p for p in glob.glob(os.path.join(DIR, QUESTION_DELIVERY + "_scope-*")) if LEGACY_SCOPE.search(p)]
+    for p in asked + deliveries:
+        os.remove(p)
+    if asked or deliveries:  # a marker alone is a question already found stale, or one cut off before it was saved
+        _mark_question_stale_unlocked()
+
+
 SCOPE_EXPECTED = None
 SCOPE_SNAPSHOT = None
 SCOPE_DIR = None
@@ -1008,12 +1040,12 @@ def scope_current_unlocked():
     return generation_unlocked() == SCOPE_EXPECTED[0]
 
 
-def check_session_scope(engine, snapshot=None):
+def check_session_scope(engine, snapshot=None, board=True):
     global SCOPE_EXPECTED, SCOPE_SNAPSHOT, SCOPE_DIR
     with scope_lock():
         SCOPE_DIR = DIR
         SCOPE_EXPECTED = (generation_unlocked(), None)
-        if not os.environ.get("GREENLIGHT_ONLY"):
+        if not os.environ.get("GREENLIGHT_ONLY") or not board:
             SCOPE_SNAPSHOT = None
             return False
         if snapshot is None:
@@ -1495,6 +1527,7 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
                         context=0, window=None, ms=None)
         if (sent_in := os.environ.pop(TURN_GEN, "")) and sent_in != generation_unlocked():  # a Clear came after send started it
             return emit(e="done", ok=False, text="Cleared before it started.", context=0, window=None, ms=None)
+        adopt_legacy_scope_unlocked()
         delivery = os.path.join(DIR, QUESTION_DELIVERY + scope_suffix())
         try:
             active = json.load(open(path))
@@ -1657,14 +1690,14 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
         with open(rules) as rf:
             prompt += "\n\nThe user's standing instructions, which override the defaults above:\n" + rf.read().strip()
     snapshot = None
-    if os.environ.get("GREENLIGHT_ONLY"):
+    if os.environ.get("GREENLIGHT_ONLY") and not compact:  # a Compact sends no BOARD: a failed scan mustn't block it
         try:
             import dash
             snapshot = dash.board(with_ids=True)
         except Exception as e:
             return dict(e="done", ok=False, text=f"Scoped board unavailable: {e}", context=0, window=None, ms=None)
     request_snapshot = snapshot
-    if request_snapshot is None:
+    if request_snapshot is None and not compact:
         try:
             import dash
             request_snapshot = dash.board(with_ids=True)
@@ -1673,7 +1706,7 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
     if reservation and not reservation_current(*reservation):
         return {"e": "done", "ok": False, "text": "Stopped", "context": 0, "window": None, "ms": None}
     try:
-        check_session_scope(engine, snapshot)
+        check_session_scope(engine, snapshot, board=not compact)
     except OSError as e:
         return dict(e="done", ok=False, text=f"Chat scope check failed: {e}", context=0, window=None, ms=None)
     if snapshot is not None:
@@ -1965,7 +1998,7 @@ def clear_chat():
             fh.write("resetting")
         scoped = glob.glob(os.path.join(DIR, "members_scope-*")) + glob.glob(os.path.join(DIR, "asked_scope-*")) + \
             glob.glob(os.path.join(DIR, "session*_scope-*"))
-        for suffix in {m.group() for p in scoped if (m := re.search(r"_scope-[0-9a-f]{12}", os.path.basename(p)))}:
+        for suffix in {m.group() for p in scoped if (m := LEGACY_SCOPE.search(os.path.basename(p)))} | {WINDOW_SCOPE}:
             decisions.forget_chat(chat=(CHAT or "main") + suffix)
         decisions.forget_chat(chat=CHAT)
         cancel_running_unlocked()
@@ -1996,9 +2029,13 @@ def stop_chat():
         cancel_running_unlocked()
 
 
-def send_turn(args, opt):
+def apply_only(opt):
     if opt("--only") is not None:  # the window the user is in: its workspaces only, for the BOARD and Chief's own `dash.py board`
         os.environ["GREENLIGHT_ONLY"] = opt("--only")
+
+
+def send_turn(args, opt):
+    apply_only(opt)
     text, files = sys.stdin.read(), None
     if "--attach" in args:
         try:
@@ -2022,6 +2059,9 @@ def dispatch(args):
     elif cmd == "bgstop":
         print(json.dumps({"ok": stop_shell(args[1]) if len(args) > 1 else False}))
     elif cmd == "compact":
+        apply_only(opt)  # the window's own session, as `send` resumes it; without --only, the every-project one
+        with scope_lock():
+            adopt_legacy_scope_unlocked()  # a first Compact after upgrading still finds the window's old session
         if not session("claude"):
             emit(e="done", ok=True, text="Nothing to compact yet.", context=0, window=None, ms=None)
         else:
