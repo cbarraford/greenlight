@@ -498,10 +498,12 @@ const { launchBrowser } = require("./js_harness.cjs");
     return c.right <= next.left;
   }), true, "a long chip stays inside its table cell");
   await p.setViewportSize({ width: 800, height: 500 });
-  // a held card steps its chips down to muted along with the rest of the card
+  // a held card steps its chips (label and glyph both) down to muted along with the rest of the card
   await p.evaluate(() => { stage.refs({ "!12": { tone: "bad", label: "CI failed" } }); stage.text({ md: "- !12 failed" }); stage.hold("Checking…"); });
-  assert.equal(await p.evaluate(() => getComputedStyle(document.querySelector(".chip")).color === getComputedStyle(document.getElementById("s")).color),
-    true, "held chip steps down to the held card's muted colour");
+  assert.equal(await p.evaluate(() => {
+    const s = getComputedStyle(document.getElementById("s")).color;
+    return getComputedStyle(document.querySelector(".chip")).color === s && getComputedStyle(document.querySelector(".chip svg.tone")).color === s;
+  }), true, "held chip and its glyph step down to the held card's muted colour");
   await p.evaluate(() => stage.status(""));
   await p.evaluate(() => stage.refs({ "!12": { tone: "ok", label: "CI passed" }, "!99": { tone: "needs", label: "Needs you" } }));
   await p.evaluate(t => stage.spec(t), { ...tbl([["!12", "passed"]]), title: "Other" });  // another card: drawn fresh

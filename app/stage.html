@@ -36,7 +36,7 @@
 :root[data-look=phosphor]{
   --bg:var(--ds-neutral-1); --card:var(--ds-signal-3); --well:var(--ds-signal-2); --line:var(--ds-signal-6); --track:var(--ds-signal-4);
   --text:var(--ds-signal-11); --text2:var(--ds-signal-11); --dim:var(--ds-signal-10); --faint:var(--ds-signal-8);
-  --accent:var(--ds-signal-12); --accent-fg:var(--ds-signal-12); --font:var(--ds-type-family-mono);
+  --accent:var(--ds-signal-12); --accent-fg:var(--ds-signal-12); --font:var(--ds-type-family-mono); --ok:var(--ds-signal-10);
   --c1:var(--ds-signal-11); --c2:var(--ds-signal-8); --c3:var(--ds-signal-12); --c4:var(--ds-signal-6); --c-rest:var(--ds-signal-5); --bar:var(--ds-signal-8);
 }
 *{box-sizing:border-box}
@@ -148,18 +148,19 @@ ol.life li span{color:var(--dim)}
 #s.held .track i.peak{background:var(--bar)}  /* a held chart steps down too: its accent goes neutral */
 #s.held svg.chart,#s.held .legend i,#s.held svg.tone,#s.held .diff,#s.held pre.hunk,#s.held ol.life{filter:grayscale(1)}
 #s.held .chip{color:var(--dim)}  /* a held chip steps down with the card (and Phosphor's faint green) */
-#s.held .chip svg.tone{filter:none}  /* inherits the chip's muted/faint colour directly (no grey icon on Phosphor) */
+#s.held .chip svg.tone{color:inherit;filter:none}  /* overrides .bad/.now/.needs svg.tone so the glyph steps down too */
 #s.held iframe{filter:grayscale(1);opacity:.6}
 #s.frame.held::before{padding:var(--ds-space-8) var(--ds-space-24) 0}  /* a frame has no padding: the label keeps the gutter */  /* Chief's own page can't take the muted colour: it's dimmed instead */
 .skel{display:flex;flex-direction:column;gap:var(--ds-space-12);max-width:var(--ds-layout-measure)}
 .skel i{display:block;height:var(--ds-space-8);border-radius:var(--ds-radius-xs);background:var(--track)}  /* a step above element.rest, to read on the stage */
 .skel i.lead{height:var(--ds-space-12);margin-bottom:var(--ds-space-4)}  /* 16 to the first line, as the lead to the body */
 /* An MR's live status beside its ref (issue 208): the tone's glyph and a short label, from the snapshot, updated in place. */
-.chip{display:inline-flex;align-items:center;gap:var(--ds-space-4);margin-left:var(--ds-space-8);font:var(--ds-type-label-sm);font-family:var(--font);
+.chip{display:inline-flex;align-items:baseline;gap:var(--ds-space-4);margin-left:var(--ds-space-8);font:var(--ds-type-label-sm);font-family:var(--font);
   color:var(--dim);white-space:nowrap;vertical-align:baseline;font-variant-numeric:tabular-nums;margin-right:var(--ds-space-4)}  /* with the space after it, 8 to the next word */
-.chip svg.tone{margin:0}
+.chip svg.tone{margin:0;align-self:center}  /* the label sits on the text's baseline; only the glyph is centred */
 table.grid:has(.chip){table-layout:fixed}  /* a chip that changes can't resize its column: nothing else on the card moves */
 table.grid td .chip{max-width:calc(100% - var(--ds-space-12));white-space:normal;align-items:flex-start;overflow-wrap:break-word}  /* a long chip wraps inside its cell instead of bleeding into the next column */
+table.grid:has(tr > :nth-child(3)) td .chip{display:flex;margin:var(--ds-space-2) 0 0;max-width:100%}  /* dense tables stack the chip flush-left under its ref */
 table.grid td .chip svg.tone{flex:none;margin-top:1px}
 .chip.bad{color:var(--bad)} .chip.now{color:var(--now)} .chip.ok{color:var(--ok)} .chip.needs{color:var(--needs)}
 /* Phosphor's hand: shell marks in place of the dots and numbers, dashed rules, everything in mono. */
