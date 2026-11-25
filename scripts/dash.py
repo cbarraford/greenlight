@@ -720,7 +720,7 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
             "agent": r["agent"], "mr": mr and {k: mr.get(k) for k in ("iid", "ref", "forge", "web_url", "title", "role", "draft", "author", "state",
                                                      "pipeline", "conflicts", "threads", "approvals", "approvals_required", "mergeable",
                                                      "source_branch", "target_branch", "labels", "milestone", "approved_by",
-                                                     "pipeline_url", "threads_total", "sha", "verify")},
+                                                     "pipeline_url", "threads_total", "sha", "verify", "updated_at")},
             "branch": (w.get("branch") or "").removeprefix("refs/heads/"),
             "host": placement.host_of(w, ms), "away": placement.is_misplaced(w, ms, home, repo_target=repo_target),
             "steward": bool(card.get("steward")),

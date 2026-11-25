@@ -1080,6 +1080,30 @@ func runVoiceEngineUnitTests(check: (String, Bool) -> Void) {
         v.pickOption(0); let once = !c.msgs.contains { $0.text == "Merge it" }
         _ = sentBefore; c.stop(); c.run = nil; c.queue.removeAll(); v.hush()
         check("voice: an option button sends that option once; an index the reply didn't offer does nothing (issue 208)", badIndex && picked && once)
+        // issue 208 phase 6: the idle board from the snapshot, redrawn with each one; "go back" and "go forward" reach the page
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000), isoS = { (d: Date) in ISO8601DateFormatter().string(from: d) }
+        let bp: [[String: Any]] = [
+            ["name": "g/auth", "life": ["pile": "yours", "do": "**!5** is ready: review it"], "mr": ["ref": "!5", "title": "decode `fix`", "updated_at": isoS(t0 - 3 * 3600)]],
+            ["name": "g/retry", "life": ["pile": "working", "why": "CI running"], "mr": ["ref": "!7", "title": "retry", "updated_at": isoS(t0 - 90)]],
+            ["name": "g/quiet", "life": ["pile": "waiting"], "mr": ["ref": "!9", "title": "x"]],
+            ["name": "g/hidden", "hidden": true, "life": ["pile": "yours"], "mr": ["ref": "!10", "title": "y"]],
+            ["name": "g/no-mr", "goal": "Tidy the docs", "life": ["pile": "working"]]]
+        let ib = idleBoard(bp, now: t0)
+        let secs = (ib?["sections"] as? [[String: Any]]) ?? []
+        let r0 = (secs.first?["rows"] as? [[String: String]])?.first, w = (secs.last?["rows"] as? [[String: String]]) ?? []
+        check("voice: the idle board is what needs you, then what's working, from the snapshot: ref, title, age, why; hidden and waiting ones left out (issue 208)",
+              ib?["kind"] as? String == "board" && secs.map { $0["label"] as? String ?? "" } == ["Needs you", "Working"]
+              && r0 == ["ref": "!5", "title": "decode fix", "age": "3h", "why": "!5 is ready: review it"]
+              && w.map { $0["ref"]! } == ["!7", "no-mr"] && w.first?["age"] == "1m" && w.last?["title"] == "Tidy the docs"
+              && idleBoard([["name": "q", "life": ["pile": "waiting"]]]) == nil)
+        check("voice: \"go back\" and \"go forward\" step through the stage's cards (issue 208)",
+              voiceCommand("Go back.") == .back && voiceCommand("show me the last card") == .back && voiceCommand("next card") == .forward
+              && voiceCommand("go back to the PR") == nil)
+        c.pucks = bp; c.run = nil; v.on = true; v.hush(); v.listening(); let boardDrawn = v.boardUp && (v.stageQueued ?? "").contains("\"kind\":\"board\"")
+        var bp2 = bp; bp2[0]["life"] = ["pile": "done"]; bp2[1]["life"] = ["pile": "done"]; bp2[4]["life"] = ["pile": "done"]
+        v.refs(bp2); let emptied = !v.boardUp  // nothing left: back to Listening
+        c.pucks = bp; v.listening(); let br = Run("x?"); c.run = br; v.began(br); let turnEnds = !v.boardUp; c.run = nil; v.hush()
+        check("voice: voice mode starts on the board, a snapshot with nothing left goes back to Listening, a turn takes it over (issue 208)", boardDrawn && emptied && turnEnds)
         try? FileManager.default.removeItem(at: Diag.url)  // the folder is the test run's support folder too
         // the status line (issue 176): after a quiet stretch of a running turn, a line on the strip (the fallback without a key);
         // the same work again shows nothing new; a clear (speech, the turn's end) takes it down and drops a line on its way

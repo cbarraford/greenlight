@@ -185,17 +185,25 @@ final class Voice: NSObject, ObservableObject {
             if !d.isEmpty { js("stage.patch", [d]) }
         } else { js("stage.refs", [now]) }
         refsSent = now
+        board(pucks)
     }
-    func wait(_ title: String, _ sub: String) { instantUp = false; put("stage.wait", [title, sub], by: "app") }  // drawn over any card
+    func wait(_ title: String, _ sub: String) { instantUp = false; boardUp = false; put("stage.wait", [title, sub], by: "app") }  // drawn over any card
     /// Voice mode is up: the listening card, or, partway through a turn, that turn held with what it's doing (#208).
     func listening() {
         refsSent = nil; if let c = core { refs(c.pucks) }  // a new page (or a new voice mode) starts from the whole map
         if let r = core?.run, !r.watch, !r.checkIn { put("stage.hold", [byline(r, now: Date(), lead: true)], by: "app"); statusUp = true }
+        else if let b = core.flatMap({ idleBoard($0.pucks) }) { put("stage.spec", [b], by: "app"); boardUp = true }  // what needs you, not a bare Listening
         else { wait("Listening", "Say something, or “goodbye” to stop.") }
+    }
+    /// The idle board is what the stage shows (#208): each snapshot redraws it in place (the same card: only what changed moves).
+    var boardUp = false
+    func board(_ pucks: [[String: Any]]) {
+        guard on, boardUp, core?.run == nil else { return }
+        if let b = idleBoard(pucks) { js("stage.spec", [b]) } else { wait("Listening", "Say something, or “goodbye” to stop.") }
     }
     func show(_ spec: [String: Any]) {  // a card the app drew (the workspace you switched to): newer than any drawing on its way
         guard on else { return }
-        drawSeq += 1; shown = true; instantUp = true; put("stage.spec", [spec], by: "app", mark: (turnNo, nil))  // you picked it: never a turn's answer, so never timed
+        drawSeq += 1; shown = true; instantUp = true; boardUp = false; put("stage.spec", [spec], by: "app", mark: (turnNo, nil))  // you picked it: never a turn's answer, so never timed
     }
 
     private var claimObs: NSObjectProtocol?, audioObs: NSObjectProtocol?
@@ -411,13 +419,15 @@ final class Voice: NSObject, ObservableObject {
             hush(); if core?.run == nil { core?.queue.removeAll { $0.spoken } }; core?.stop()  // the answer, or a turn waiting on its file; never what was said during the answer
         case .captions(let b): captions = b
         case .reset: hush(); core?.clear()
+        case .back: js("stage.back", [])  // the stage's card history, in the page (#208)
+        case .forward: js("stage.forward", [])
         }
     }
 
     // Core's turn, from start to finish
 
     func began(_ r: Run) {
-        said = 0; chiefDrew = false; shown = false; instantUp = false; muted = false; ending = false; endStream(); stageOptions = []
+        said = 0; chiefDrew = false; shown = false; instantUp = false; boardUp = false; muted = false; ending = false; endStream(); stageOptions = []
         waitWord = waitWords.randomElement()!
         Voice.turnSeq += 1; turnNo = Voice.turnSeq; turnAt = Date(); turnDraws = 0  // per process: each session's Voice shares the trail's `run`
         guard on else { return }

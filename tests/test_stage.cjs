@@ -552,5 +552,48 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.equal(await p.locator(".options .chip").count(), 0);
   assert.deepEqual(await p.$$eval(".doc p a", as => as.map(a => a.getAttribute("href"))), ["https://x/12"]);
   await p.evaluate(() => stage.refs({}));
+  // the idle board and card history (issue 208 phase 6): the board in place of Listening, updated in place; the last cards kept
+  // as they were, stepped through by "go back" and the buttons, a new card the latest again; the board isn't a card
+  const q = await b.newPage(); await q.setViewportSize({ width: 640, height: 720 });
+  await q.goto("file://" + require("path").join(__dirname, "../app/stage.html"));  // a fresh page: its own history
+  const brd = rows => ({ kind: "board", title: "", sections: [{ label: "Needs you", tone: "needs", rows }, { label: "Working", tone: "now", rows: [{ ref: "!7", title: "retry", age: "2h", why: "CI running" }] }] });
+  await q.evaluate(b => { stage.refs({}); stage.wait("Listening", ""); stage.spec(b); }, brd([{ ref: "!5", title: "decode fix", age: "3h", why: "review it" }]));
+  assert.deepEqual(await q.$$eval(".bhead", hs => hs.map(h => [h.textContent, h.querySelector("svg.tone")?.getAttribute("aria-label")])), [["Needs you", "Needs you"], ["Working", "Now"]]);
+  assert.deepEqual(await q.$$eval("ul.board li", ls => ls.map(l => l.textContent)), ["!5decode fix3hreview it", "!7retry2hCI running"]);
+  assert.equal(await q.locator("#s.board h1").count(), 0);
+  await q.evaluate(() => document.querySelectorAll("ul.board li").forEach((l, i) => l._m = i));
+  await q.evaluate(b => stage.spec(b), brd([{ ref: "!5", title: "decode fix", age: "4h", why: "review it" }]));  // the next snapshot
+  assert.deepEqual(await q.$$eval("ul.board li", ls => ls.map(l => l._m)), [0, 1]);  // in place
+  assert.equal(await q.textContent("ul.board li time"), "4h");
+  assert.equal(await q.isVisible("#hist"), false);  // the board isn't a card
+  // three cards, then back twice and forward: each exactly as it was; a new card returns to the latest
+  await q.evaluate(() => { stage.text({ lead: "One.", md: "- a" }); document.getElementById("s")._id = 1;
+    stage.text({ lead: "Two.", md: "- b", live: true }); stage.text({ lead: "Two.", md: "- b\n- c" }); document.getElementById("s")._id = 2;
+    stage.spec({ kind: "list", title: "Three", items: [{ label: "x" }] }); stage.options(["Yes", "No"]); document.getElementById("s")._id = 3; });
+  assert.ok(await q.isVisible("#hist"));
+  assert.equal(await q.textContent("#hist .hn"), "3 of 3");
+  assert.ok(await q.isVisible("#hist .hh"));  // "say go back": on the latest only
+  await q.evaluate(() => stage.back());
+  assert.equal(await q.evaluate(() => document.getElementById("s")._id), 2);  // the same element: exactly as it was
+  assert.equal(await q.textContent("#s.doc"), "Two.bc");
+  assert.equal(await q.locator("#s .caret").count(), 0);
+  assert.equal(await q.textContent("#hist .hn"), "2 of 3");
+  assert.equal(await q.isVisible("#hist .hh"), false);
+  await q.click("#hist [data-go=back]");  // the button does the same
+  assert.equal(await q.evaluate(() => document.getElementById("s")._id), 1);
+  assert.ok(await q.$eval("#hist [data-go=back]", b => b.disabled));
+  await q.click("#hist [data-go=forward]"); await q.click("#hist [data-go=forward]");
+  assert.equal(await q.evaluate(() => document.getElementById("s")._id), 3);
+  assert.ok(await q.isVisible(".options"));  // the latest card's options are live again
+  await q.evaluate(() => stage.back()); assert.equal(await q.isVisible(".options"), false);  // an older card's aren't (body.past)
+  await q.evaluate(() => stage.spec({ kind: "list", title: "Four", items: [{ label: "y" }] }));  // a new card: the latest
+  assert.equal(await q.textContent("#hist .hn"), "4 of 4");
+  // from the board, back shows the latest card and forward returns to the board
+  await q.evaluate(b => stage.spec(b), brd([{ ref: "!5", title: "decode fix", age: "4h", why: "review it" }]));
+  await q.evaluate(() => stage.back()); assert.equal(await q.textContent("#s h1"), "Four");
+  await q.evaluate(() => stage.forward()); assert.equal(await q.locator("#s.board").count(), 1);
+  for (let i = 0; i < 8; i++) await q.evaluate(n => stage.spec({ kind: "list", title: "C" + n, items: [] }), i);  // only the last few are kept
+  assert.equal(await q.textContent("#hist .hn"), "6 of 6");
+  assert.ok(await q.evaluate(() => ![...document.querySelectorAll("#hist button")].some(b => [...b.attributes].some(a => a.name.startsWith("on")))));
   console.log("stage ok"); await b.close();
 })().catch(e => { console.error(e); process.exit(1); });
