@@ -307,3 +307,10 @@ def test_canonical_interactive_and_failover(harness_env, monkeypatch):
     monkeypatch.setattr(greenlight, "orca", lambda *a, **k: {"terminal": {"tail": "You've hit your usage limit."}})
     greenlight.agent_overlay(ws, terms)
     assert ws["next"]["agent"] == "claude" and "agy out of tokens" in ws["next"]["action"]
+
+
+def test_argv_claude_allows_approved_calls(harness_env):
+    cmd, _ = harness.argv("claude", "hi", allow=("Bash(orca host list)", "WebFetch"))
+    assert cmd[-3:] == ["--allowedTools", "Bash(orca host list)", "WebFetch"], cmd  # last: the flag takes every argument after it
+    assert "--allowedTools" not in harness.argv("claude", "hi", allow=("Bash(x)",), tools=False)[0]
+    assert "--allowedTools" not in harness.argv("codex", "hi", allow=("Bash(x)",))[0]

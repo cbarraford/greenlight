@@ -291,6 +291,7 @@ struct MsgView: View, Looked {
                         .font(ui(DS.TypeRole.caption)).foregroundColor(dim)
                 }
                 if !m.options.isEmpty { choices(open, q) }
+                if !m.approvals.isEmpty { approvals }
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -345,6 +346,34 @@ struct MsgView: View, Looked {
             }
         }.padding(open ? DS.Space.s12 : DS.Space.s8).frame(maxWidth: .infinity, alignment: .leading).background(box(open))
     }
+    /// The calls the run was denied (chat.py's approval event). Open: a needs banner with each exact call and Approve & run
+    /// (primary) / Deny. Answered: a hairline box saying which.
+    var approvals: some View {
+        let open = m.decided == nil, d = m.decided ?? "", mark = d == "approved" ? "done" : "close"
+        return VStack(alignment: .leading, spacing: DS.Space.s8) {
+            if open {
+                if mono { Text("-- needs your approval --").font(chatFace(size: DS.TypeRole.body.size, weight: .bold)).foregroundColor(fg) }
+                else { Label { Text("Needs your approval") } icon: { Image(ds: "needs", size: iconSize(DS.TypeRole.label.size)) }.font(ds(DS.TypeRole.label)).foregroundColor(needsInk) }
+            } else {
+                HStack(spacing: DS.Space.s8) {
+                    Image(ds: mark, size: iconSize(DS.TypeRole.label.size)).foregroundColor(dim)
+                    Text(d == "approved" ? "You approved" : d == "denied" ? "You denied" : "No longer pending (a newer reply replaced it)")
+                }.font(ui(DS.TypeRole.label)).foregroundColor(dim)
+            }
+            ForEach(m.approvals) { a in
+                VStack(alignment: .leading, spacing: DS.Space.s4) {
+                    Text(a.tool == "Bash" ? "Run this command" : "Use \(a.tool)").font(ui(DS.TypeRole.caption)).foregroundColor(dim)
+                    Text(a.what).font(ds(DS.TypeRole.code, mono: true)).foregroundColor(open ? fg : dim).textSelection(.enabled).lineLimit(open ? 12 : 2)
+                }
+            }
+            if open {
+                HStack(spacing: DS.Space.s8) {
+                    Button { c.approve(m) } label: { chip("Approve & run", true, primary: true) }.buttonStyle(.plain).disabled(c.run != nil).accessibilityLabel("Approve and run")
+                    Button { c.deny(m) } label: { chip("Deny", true, primary: false) }.buttonStyle(.plain).accessibilityLabel("Deny")
+                }
+            }
+        }.padding(open ? DS.Space.s12 : DS.Space.s8).frame(maxWidth: .infinity, alignment: .leading).background(box(open))
+    }
     @ViewBuilder func box(_ open: Bool) -> some View {
         let r = RoundedRectangle(cornerRadius: mono ? 0 : DS.Radius.md)
         if mono { r.fill(open ? card : .clear).overlay(r.strokeBorder(open ? fg : line, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))) }
@@ -362,9 +391,9 @@ struct MsgView: View, Looked {
         if mono { HStack(alignment: .firstTextBaseline, spacing: 0) { Text("? ").font(prose).foregroundColor(dim); t } } else { t }
     }
     /// One choice; the first is the primary while the question's open (§10.2: one primary per view), the rest secondary.
-    func chip(_ o: String, _ open: Bool) -> some View {
+    func chip(_ o: String, _ open: Bool, primary: Bool? = nil) -> some View {
         // while a run is going the choices wait (disabled, §10.2): element.rest and fg.faint, no accent
-        let off = c.run != nil, p = open && o == m.options.first && !off, n = (m.options.firstIndex(of: o) ?? 0) + 1
+        let off = c.run != nil, p = (primary ?? (open && o == m.options.first)) && !off, n = (m.options.firstIndex(of: o) ?? (primary == false ? 1 : 0)) + 1
         let ink = off ? faint : mono ? (p ? page : fg) : p ? onAccent : fg, fill = mono ? (p ? fg : Color.clear) : p ? accent : off ? card : open ? bg : card
         let r = RoundedRectangle(cornerRadius: mono ? 0 : DS.Radius.sm)
         return Text(mono ? "[\(n)] \(o)" : o).font(ui(DS.TypeRole.label)).foregroundColor(ink)
