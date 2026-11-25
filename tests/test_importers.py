@@ -248,3 +248,10 @@ def test_doctor_flags_a_deprecated_driver(home, monkeypatch):
     monkeypatch.setenv("GREENLIGHT_ADE", "native")
     chk = next(c for c in diag.doctor(quick=True)["checks"] if c["check"] == "ade")
     assert chk["ok"] is True and chk["state"] == "native"
+    assert not any(c["check"] == "ade_config" for c in diag.doctor(quick=True)["checks"])  # no value: nothing to flag
+    monkeypatch.delenv("GREENLIGHT_ADE")
+    (home / "home").mkdir(exist_ok=True)
+    monkeypatch.setenv("GREENLIGHT_HOME", str(home / "home"))
+    (home / "home" / "config.json").write_text(json.dumps({"ade": "basment"}))
+    chk = next(c for c in diag.doctor(quick=True)["checks"] if c["check"] == "ade_config")
+    assert chk["ok"] is False and chk["state"] == "invalid"  # a typo the user should fix
