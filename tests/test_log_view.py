@@ -22,6 +22,7 @@ import log_view  # noqa: E402
 HOME = "/" + "home"
 AT = "@"
 KEY = "sk-" + "proj-" + "abcdefghijklmnopqrstuvwxyz012345"
+BEGIN, END = "-" * 5 + "BEGIN PRIVATE " + "KEY" + "-" * 5, "-" * 5 + "END PRIVATE " + "KEY" + "-" * 5
 
 
 def _write(p: Path, rows):
@@ -115,13 +116,13 @@ def test_redact_takes_out_private_details():
 
 
 def test_redact_takes_a_private_key_with_or_without_its_end():
-    key = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n"
+    key = BEGIN + "\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n"
     jwt = "eyJ" + "hbGciOiJIUzI1" + ".eyJ" + "zdWIiOiIxMjM0" + ".SflKxwRJSMeKKF2QT4"
     assert "SflKx" not in log_view.redact(f"auth {jwt} ok")[0]
-    two = key + "-----END PRIVATE KEY-----\nmid\n" + key + "-----END PRIVATE KEY-----"
+    two = key + END + "\nmid\n" + key + END
     out = log_view.redact(two)[0]
     assert "MIIEv" not in out and "mid" in out, out
-    assert "MIIEv" not in log_view.redact(key + "-----END PRIVATE KEY-----\nafter")[0]
+    assert "MIIEv" not in log_view.redact(key + END + "\nafter")[0]
     assert "MIIEv" not in log_view.redact(key)[0]
 
 
@@ -179,8 +180,8 @@ def test_redact_takes_paths_with_spaces_trailing_slashes_and_bracketed_secrets()
     assert out == "db:\n  password: [secret]\n  port: 5432\nother: z", "a block ends where its indent does"
     assert "# Next steps" in log_view.redact("Auth:\n- fixed login\n# Next steps\n- write docs\n")[0], "a heading ends a list"
     for slow in ("token" * 20000 + ":", "a_token" * 14000 + "x\n", "x.token" * 14000 + ": |", "a.b" * 30000, "a@b" + ".c" * 40000,
-                 "-KEY" * 25000, "--api-key-" * 10000, "-----BEGIN PRIVATE KEY-----\n" * 3600, "eyJ-" * 25000,
-                 "-----BEGIN PRIVATE KEY-----" * 3700 + "-----END ", "password: |\n" + " \n" * 40, " password: |\n" + " \n" * 40 + " next: 1\n"):
+                 "-KEY" * 25000, "--api-key-" * 10000, (BEGIN + "\n") * 3600, "eyJ-" * 25000,
+                 BEGIN * 3700 + "-" * 5 + "END ", "password: |\n" + " \n" * 40, " password: |\n" + " \n" * 40 + " next: 1\n"):
         t = time.time(); log_view.redact(slow)
         assert time.time() - t < 1.5, slow[:20]  # bounded patterns: a pathological 100 KB line, about a second
     for kept in ("DB_PASSWORD=\nAPI_URL=x", "password:\nnext: 1", "$ export TOKEN=\n$ ls"):
