@@ -191,6 +191,13 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
           && cascadeFrame(NSRect(x: 1700, y: 300, width: 800, height: 600), min: .zero, in: right) == NSRect(x: 1730, y: 270, width: 800, height: 600)  // the second monitor's
           && cascadeFrame(NSRect(x: 3700, y: 10, width: 800, height: 600), min: .zero, in: right) == NSRect(x: 3200, y: 0, width: 800, height: 600)
           && cascadeFrame(NSRect(x: 0, y: 0, width: 10, height: 10), min: NSSize(width: 20, height: 20), in: nil) == NSRect(x: 30, y: -40, width: 20, height: 20))
+    check("windows: a floor switch hands the next floor the same frame, grown only to its minimum from the top-left",
+          sharedFrame(NSRect(x: 100, y: 100, width: 1300, height: 900), min: NSSize(width: 801, height: 520)) == NSRect(x: 100, y: 100, width: 1300, height: 900)
+          && sharedFrame(NSRect(x: 1700, y: 300, width: 900, height: 600), min: NSSize(width: 801, height: 520)) == NSRect(x: 1700, y: 300, width: 900, height: 600)  // a second monitor's: stays there
+          && sharedFrame(NSRect(x: 100, y: 300, width: 600, height: 400), min: NSSize(width: 801, height: 520)) == NSRect(x: 100, y: 180, width: 801, height: 520)  // the title bar stays put
+          && sharedFrame(mainScr, min: NSSize(width: 801, height: 520)) == mainScr
+          && sharedFrame(NSRect(x: 1400, y: 30, width: 300, height: 160), min: NSSize(width: 801, height: 520), in: mainScr) == NSRect(x: mainScr.maxX - 801, y: mainScr.minY, width: 801, height: 520)  // grown at a corner: back on its screen
+          && sharedFrame(NSRect(x: 1400, y: 30, width: 900, height: 600), min: NSSize(width: 801, height: 520), in: mainScr) == NSRect(x: 1400, y: 30, width: 900, height: 600))  // not grown: left where you put it
     check("dwim: only words dwim.py knows leave the Chief path", dwimCandidate("park the two auth ones") && dwimCandidate("Kick off CI fixes on the red ones")
           && dwimCandidate("hold #42") && dwimCandidate("don't merge #42") && dwimCandidate("unpark billing") && dwimCandidate("fix the merge conflicts on search")
           && dwimCandidate("fix for CI #42") && dwimCandidate("put #42 on ice")

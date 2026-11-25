@@ -13,7 +13,9 @@ Proves:
   6. Chat E2E (`sendChat` -> deterministic stub reply -> `chatClear` -> `toggleChat`) and Inbox E2E
      (`inboxPing` -> `openInbox` -> `inboxConfirm` -> `clearInbox` -> `closeInbox`) complete cleanly.
   7. Adversarial XSS fixture renders safely inside the real macOS WKWebView with zero execution.
-  8. Zero `webErrors`, zero `consoleErrors`, valid non-blank screenshots, and zero leaked tmux servers
+  8. Center, Basement and Pipe share one window frame (issue 177); with UITEST_FULLSCREEN=1, a full-screen floor's
+     Space is shared by every floor too.
+  9. Zero `webErrors`, zero `consoleErrors`, valid non-blank screenshots, and zero leaked tmux servers
      or Greenlight child processes on teardown.
 """
 import os
@@ -276,6 +278,72 @@ def verify_resize_rescan_and_settings(ui1: uitest.UITestSession, shot_dir: Path)
     print(f"ok  Settings open/tabs/screenshot/close verified ({r_set['width']}x{r_set['height']}, {r_set['bytes']} bytes)")
 
 
+FRAME = ("x", "y", "width", "height")
+
+
+def frames(ui: uitest.UITestSession) -> tuple:
+    w = ui.state()["windows"]
+    return tuple(w["dashboard"][k] for k in FRAME), tuple(w["terminal"][k] for k in FRAME)
+
+
+def verify_shared_frame(ui1: uitest.UITestSession) -> None:
+    """Issue 177: Center, the Basement and the Pipe keep one frame; a resize on any floor carries to the others."""
+    assert ui1.action("floor", to="basement")["ok"]
+    r = ui1.action("resize", window="terminal", width=960, height=600)
+    assert r["ok"], r
+    for to in ("center", "pipe", "basement", "center"):
+        assert ui1.action("floor", to=to)["ok"]
+        center, term = frames(ui1)
+        assert center == term, f"switching to {to} changed the window's frame: Center {center}, terminal {term}"
+    assert center[2:] == (960, 600), f"the terminal's size didn't carry to Center: {center}"
+    r = ui1.action("resize", window="dashboard", width=1000, height=620)
+    assert r["ok"], r
+    assert ui1.action("floor", to="pipe")["ok"]
+    center, term = frames(ui1)
+    assert center == term and term[2:] == (r["width"], r["height"]), f"Center's resize didn't carry to the Pipe: {center} vs {term}"
+    r = ui1.action("resize", window="terminal", width=500, height=300)  # below Center's minimum: the floors share it
+    assert r["ok"] and r["width"] >= 801 and r["height"] >= 520, f"the terminal went below Center's minimum: {r}"
+    assert ui1.action("floor", to="center")["ok"]
+    center, term = frames(ui1)
+    assert center == term, f"a minimum-size terminal and Center differ: {center} vs {term}"
+    print(f"ok  Center, Basement and Pipe share one frame across switches and resizes ({center})")
+
+
+def verify_shared_full_screen(ui1: uitest.UITestSession) -> None:
+    """Issue 177: out of a full-screen floor, the next one joins its Space (no second full-screen window), and back out."""
+    assert ui1.action("floor", to="center")["ok"]
+    normal = frames(ui1)[0]
+    assert ui1.action("fullScreen", window="dashboard")["ok"]
+    try:
+        wait_state(ui1, lambda s: s["windows"]["dashboard"]["fullScreen"], desc="Center full screen", timeout=10)
+    except AssertionError:
+        print("skip full-screen floors: macOS didn't enter full screen (a locked screen or no GUI session)")
+        return
+    time.sleep(1.5)  # the Space's animation
+    if not ui1.state()["windows"]["dashboard"]["fullScreen"]:  # a locked screen lets it in for a moment, then throws it out
+        print("skip full-screen floors: macOS left full screen at once (a locked screen?)")
+        return
+    for to in ("basement", "pipe"):
+        assert ui1.action("floor", to=to)["ok"]
+        s = ui1.state()
+        d, t = s["windows"]["dashboard"], s["windows"]["terminal"]
+        assert s["fsShare"] == {"host": "dashboard", "guest": "terminal"}, (s["fsShare"], s["upstairs"], s["windows"])
+        assert t["visible"] and t["aux"] and not t["fullScreen"] and t["onActiveSpace"], f"{to} isn't in Center's Space: {t}"
+        assert d["fullScreen"] and tuple(t[k] for k in FRAME) == tuple(d[k] for k in FRAME), (d, t)
+    assert ui1.action("floor", to="center")["ok"]
+    s = ui1.state()
+    assert s["fsShare"] == {} and not s["windows"]["terminal"]["visible"] and not s["windows"]["terminal"]["aux"], s
+    assert ui1.action("floor", to="basement")["ok"]
+    assert ui1.action("fullScreen", window="dashboard")["ok"]  # out of full screen from the Basement: it stays the floor you see
+    wait_state(ui1, lambda s: not s["windows"]["dashboard"]["fullScreen"] and not s["windows"]["dashboard"]["visible"], desc="Center out of full screen", timeout=10)
+    s = ui1.state()
+    t = s["windows"]["terminal"]
+    assert t["visible"] and not t["aux"] and s["fsShare"] == {}, s
+    assert tuple(t[k] for k in FRAME) == normal, f"the Basement didn't come back at the floors' frame: {t} vs {normal}"
+    assert ui1.action("floor", to="center")["ok"]
+    print("ok  full-screen Center: the Basement and Pipe join its Space and come back out at the shared frame")
+
+
 def assert_process_gone(pid: int, timeout: float = 5.0) -> None:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -333,6 +401,9 @@ def main() -> None:
 
         # 4. Viewport resize (small/large) + rescan + Settings open/close
         verify_resize_rescan_and_settings(ui1, shot_dir)
+        verify_shared_frame(ui1)
+        if os.environ.get("UITEST_FULLSCREEN"):  # opt in: it takes over the display's Spaces
+            verify_shared_full_screen(ui1)
 
         # 5. Second concurrent instance (adversarial XSS fixture): real macOS WKWebView stays clean & localStorage is isolated
         ui1.eval("dashboard", "localStorage.setItem('uitest_iso', 'from_ui1')")

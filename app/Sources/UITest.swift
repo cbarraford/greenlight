@@ -206,6 +206,11 @@ final class UITestServer {
     /// "view:<name>": a view the main window gave its own window (its pop-out button).
     private func view(_ target: String, app: App) -> NSWindow? { target.hasPrefix("view:") ? app.viewWindows[String(target.dropFirst(5))] : nil }
 
+    /// A window's frame (AppKit's: origin bottom-left) and whether it's full screen, on the active Space, a full-screen auxiliary.
+    static func winState(_ w: NSWindow) -> [String: Any] {
+        ["visible": w.isVisible, "x": Int(w.frame.minX), "y": Int(w.frame.minY), "width": Int(w.frame.width), "height": Int(w.frame.height),
+         "fullScreen": w.styleMask.contains(.fullScreen), "onActiveSpace": w.isOnActiveSpace, "aux": w.collectionBehavior.contains(.fullScreenAuxiliary)]
+    }
     /// Every Greenlight Center window as the app holds it: its projects, title-bar chip, title, frame, and what's saved for a relaunch.
     static func l1State(_ app: App) -> [String: Any] {
         func frame(_ w: NSWindow) -> [Int] { [Int(w.frame.minX), Int(w.frame.minY), Int(w.frame.width), Int(w.frame.height)] }
@@ -264,10 +269,12 @@ final class UITestServer {
                         "domNodes": domNodes,
                     ],
                     "windows": [
-                        "dashboard": ["visible": app.window.isVisible, "width": Int(app.window.frame.width), "height": Int(app.window.frame.height)],
-                        "terminal": ["visible": app.termWindow.isVisible, "width": Int(app.termWindow.frame.width), "height": Int(app.termWindow.frame.height)],
-                        "settings": ["visible": app.settingsWindow.isVisible, "width": Int(app.settingsWindow.frame.width), "height": Int(app.settingsWindow.frame.height)],
+                        "dashboard": UITestServer.winState(app.window),
+                        "terminal": UITestServer.winState(app.termWindow),
+                        "settings": UITestServer.winState(app.settingsWindow),
                     ],
+                    "fsShare": app.fsShare.map { ["host": $0.host === app.window ? "dashboard" : $0.host === app.termWindow ? "terminal" : "other",
+                                                  "guest": $0.guest === app.window ? "dashboard" : $0.guest === app.termWindow ? "terminal" : "other"] } ?? [:],
                 ])
             }
 
@@ -376,6 +383,11 @@ final class UITestServer {
             case "openProjects":  // in --window (dashboard, l1:<id>, view:<name>, terminal): the title-bar chip (--here), else File › Open Projects… (⌘⇧N)
                 let t = req["window"] as? String ?? "dashboard"
                 if req["here"] as? Bool ?? true { app.l1Pick(here: true, in: l1(t, app: app)) } else { app.openProjects(in: window(for: t, app: app)) }
+                done(["ok": true])
+            case "fullScreen":  // --window dashboard|terminal: its green button (Enter or Exit Full Screen)
+                guard let win = window(for: req["window"] as? String ?? "", app: app) else { return done(["ok": false, "error": "no window"]) }
+                if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }  // an accessory app can't have a full-screen Space
+                NSApp.activate(ignoringOtherApps: true); win.toggleFullScreen(nil)
                 done(["ok": true])
             case "setFrame":  // --window l1:<id> --x --y --width --height: a frame as a monitor's layout left it
                 guard let win = window(for: req["window"] as? String ?? "", app: app) else { return done(["ok": false, "error": "no window"]) }
