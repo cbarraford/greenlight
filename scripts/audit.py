@@ -256,22 +256,30 @@ def _ok(q, r):
 
 
 BATCH_CHARS = 4 * MAXC  # context chars in one decide.batch call: a many-part diff is asked in several calls, not one huge prompt
+# Checks whose every question gets its own call. Four 45 K-char SafeToPublish parts in one call came back "not safe" (p=0.90)
+# together while each part passed (p=0.10-0.15) when asked alone: a false block.
+ALONE = ("no_secrets_or_pii",)
 
 
 def batches(qs, n=None):
-    """The questions in groups, in order, each holding at most n context chars (a single larger question goes alone)."""
+    """The questions in groups, in order, each holding at most n context chars (a single larger question goes alone).
+    A question of an ALONE check goes in a group of its own, after the others."""
     n = n or BATCH_CHARS
     out: list[dict] = []
     cur: dict = {}
     size = 0
+    alone: list[dict] = []
     for k, q in qs.items():
+        if re.split(r"[#@]", k)[0] in ALONE:
+            alone.append({k: q})
+            continue
         c = len(q.get("context", ""))
         if cur and size + c > n:
             out.append(cur)
             cur, size = {}, 0
         cur[k] = q
         size += c
-    return out + ([cur] if cur else [])
+    return out + ([cur] if cur else []) + alone
 
 
 def ask(state, qs):
