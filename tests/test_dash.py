@@ -1056,4 +1056,17 @@ with mock.patch.object(dash, "usage_now", return_value=[{"id": "claude", "name":
     finally:
         (dash.greenlight.STATE / "scan_error.json").unlink(missing_ok=True)
         (dash.greenlight.STATE / "last.json").write_text(_last_bak)
+# dash.snapshot passes mr.updated_at from last.json through for the idle board's ages (#208 phase 6)
+_ua_snap = {"ts": 200, "rows": [{"id": "w-ua", "name": "o/ua", "path": "/w/ua", "project": "o/p", "repo": "p", "forge": "gitlab",
+                                  "goal": "Fix", "next": {"owner": "me", "step": "review", "action": "Review it"},
+                                  "agent": {"state": "idle"}, "mr": {"iid": 5, "ref": "!5", "title": "Fix", "state": "opened",
+                                                                     "updated_at": "2026-11-04T21:09:04Z"}}]}
+with mock.patch.object(dash, "live_agents", return_value={"w-ua": ({"displayName": "ua", "path": "/w/ua", "repo": "p"}, {})}), \
+     mock.patch.object(dash, "usage_now", return_value=[]):
+    _ua_bak = (dash.greenlight.STATE / "last.json").read_text()
+    (dash.greenlight.STATE / "last.json").write_text(json.dumps(_ua_snap))
+    try:
+        assert dash.snapshot()["pucks"][0]["mr"]["updated_at"] == "2026-11-04T21:09:04Z"
+    finally:
+        (dash.greenlight.STATE / "last.json").write_text(_ua_bak)
 print("dash usage integration ok")

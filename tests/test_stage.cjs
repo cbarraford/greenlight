@@ -632,6 +632,36 @@ const { launchBrowser } = require("./js_harness.cjs");
   await q3.evaluate(b => { stage.text({ lead: "Only.", md: "x" }); stage.wait("Listening", ""); stage.spec(b); stage.back(); }, brd2("w"));
   assert.ok(await q3.isVisible("#hist")); assert.equal(await q3.$eval("#hist [data-go=forward]", b => b.disabled), false);
   await q3.evaluate(() => stage.forward()); assert.equal(await q3.locator("#s.board").count(), 1);
+  // holding from the idle board draws the skeleton (never "Last answer" over the board)
+  await q3.evaluate(() => stage.hold("Looking up !5"));
+  assert.equal(await q3.locator("#s.skeleton .skel").count(), 1);
+  assert.equal(await q3.locator("#s.board.held").count(), 0);
+  // going back mid-stream, then starting a new turn (hold): ends the off-screen stream so the next stream renders on screen
+  await q3.evaluate(() => { stage.status(""); stage.text({ lead: "P1.", md: "first" }); stage.text({ lead: "P2.", md: "- half", live: true });
+    stage.back(); stage.hold("Next turn"); stage.text({ lead: "P3.", md: "fresh", live: true }); });
+  assert.equal(await q3.textContent("#s .lead"), "P3.");
+  assert.equal(await q3.locator("#s.doc.streaming:not(.held)").count(), 1);
+  await q3.evaluate(() => { stage.back(); }); assert.equal(await q3.textContent("#s .lead"), "P2.");  // P2 kept as it got, no caret
+  assert.equal(await q3.locator("#s .caret").count(), 0);
+  // going back mid-stream while the stream finishes and gets options: options attach to the latest card, not the earlier one
+  await q3.evaluate(() => { stage.forward(); stage.text({ lead: "P3.", md: "done" }); stage.text({ lead: "P4.", md: "- a", live: true });
+    stage.back(); stage.text({ lead: "P4.", md: "- a\n- b" }); stage.options(["Merge", "Wait"]); });
+  assert.equal(await q3.locator("#s .options").count(), 0);
+  await q3.evaluate(() => stage.forward()); assert.equal(await q3.locator("#s .options a.option").count(), 2);
+  // a ref that enters REFS after a card was drawn gets its chip when you navigate back to that card
+  await q3.evaluate(() => { stage.refs({}); stage.text({ lead: "R1.", md: "- Check !77" }); stage.text({ lead: "R2.", md: "other" });
+    stage.patch({ "!77": { tone: "ok", label: "CI passed" } }); stage.back(); });
+  assert.equal(await q3.textContent("#s .chip"), "CI passed");
+  // #hist reserves bottom padding so scrolled-to-bottom options stay clear of the history bar (with and without #status)
+  await q3.setViewportSize({ width: 460, height: 320 });
+  await q3.evaluate(() => { stage.text({ lead: "Tall.", md: Array.from({ length: 14 }, (_, i) => `- item ${i} long detail text`).join("\n") });
+    stage.options(["Merge it", "Rebase first", "Ask reviewer"]); window.scrollTo(0, 9999); document.body.scrollTop = 9999; });
+  for (const st of ["", "Running checks"]) {
+    await q3.evaluate(s => { stage.status(s); window.scrollTo(0, 9999); document.body.scrollTop = 9999; }, st);
+    assert.ok(await q3.evaluate(() => document.querySelector(".options").getBoundingClientRect().bottom <= document.getElementById("hist").getBoundingClientRect().top + 1),
+      `options stay above #hist (status=${JSON.stringify(st)})`);
+  }
+  await q3.evaluate(() => stage.status(""));
   for (let i = 0; i < 8; i++) await q.evaluate(n => stage.spec({ kind: "list", title: "C" + n, items: [] }), i);  // only the last few are kept
   assert.equal(await q.textContent("#hist .hn"), "6 of 6");
   assert.ok(await q.evaluate(() => ![...document.querySelectorAll("#hist button")].some(b => [...b.attributes].some(a => a.name.startsWith("on")))));
