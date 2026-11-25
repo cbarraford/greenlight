@@ -308,6 +308,49 @@ test("L1's project list: each project's paths are the trees this window shows un
   assert.deepEqual([at("p1").repos, at("p2").repos, at("").repos], [["acme/widgets"], [], []], "a repo with a tree filed under another project's folder isn't No Man's Land's");
   assert.deepEqual([at("p1").busy, at("p2").busy, at("").busy], [1, 0, 0], "working agents counted where they're shown");
 });
+// issue 196: a new window shows only once it has drawn, already in its colours and on its floor; a project window's first shell doesn't wait
+async function cold(b, query = ""){
+  const fresh = await b.newPage({viewport: {width: 1200, height: 800}, colorScheme: "light"});
+  await fresh.addInitScript(() => { window.__posts = []; window.webkit = {messageHandlers: {term: {postMessage: m => window.__posts.push(JSON.parse(JSON.stringify(m)))}}};
+    document.addEventListener("readystatechange", () => { if (document.readyState === "interactive" && !window.__early) window.__early = getComputedStyle(document.getElementById("stage")).backgroundColor }) });
+  const errs = []; fresh.on("pageerror", e => errs.push(e.message)); fresh._errs = errs;
+  await fresh.goto(PAGE + query); await fresh.waitForFunction(() => window.__posts.some(m => m.cmd === "ready")); return fresh;
+}
+test("a cold window: painted comes once, after the layout is restored (not at ready); the terminal canvas has its colour from the first frame", async page => {
+  const look = encodeURIComponent(JSON.stringify({background: "#102030", mode: "dark"}));
+  const fresh = await cold(page.context().browser(), "?look=" + look);
+  assert.equal((await posts(fresh, "painted")).length, 0, "ready isn't painted: nothing restored yet");
+  assert.equal(await fresh.evaluate(() => window.__early), "rgb(16, 32, 48)", "the stage wears the look's background before the body script runs");
+  assert.equal(await fresh.evaluate(() => document.documentElement.dataset.appearance), "dark", "and the window's Light/Dark");
+  await fresh.evaluate(() => term.restore(null)); await fresh.waitForFunction(() => window.__posts.some(m => m.cmd === "painted"));
+  await fresh.evaluate(() => term.restore({})); await fresh.waitForTimeout(150);
+  assert.equal((await posts(fresh, "painted")).length, 1, "once");
+  assert.deepEqual(fresh._errs, []); await fresh.close();
+});
+test("a Basement window opens with the sidebar out (?side=1): no slide, and the app is told; term.opens before it shows is a cut", async page => {
+  const b = page.context().browser(), fresh = await cold(b, "?side=1");
+  assert.equal(await fresh.evaluate(() => document.body.classList.contains("noside")), false);
+  assert.deepEqual((await posts(fresh, "side")).pop(), {cmd: "side", open: true});
+  const pipe = await cold(b);
+  await pipe.evaluate(() => term.opens("basement"));
+  assert.deepEqual(await pipe.evaluate(() => [document.body.classList.contains("noside"), document.body.classList.contains("sliding")]), [false, false], "out at once, not sliding");
+  await pipe.evaluate(() => term.restore(null)); await pipe.waitForFunction(() => window.__posts.some(m => m.cmd === "painted"));
+  await pipe.evaluate(() => term.opens("pipe"));
+  assert.equal(await pipe.evaluate(() => document.body.classList.contains("sliding")), true, "once shown, it slides");
+  assert.deepEqual([fresh._errs, pipe._errs], [[], []]); await fresh.close(); await pipe.close();
+});
+test("a one-project window with a default folder opens its first shell at once, without waiting on the trees", async page => {
+  const fresh = await cold(page.context().browser(), "?only=" + encodeURIComponent('["p1"]'));
+  await fresh.evaluate(p => term.projects(p), [{...PROJ[0], dir: "/notes/app"}, PROJ[1]]);
+  await fresh.evaluate(() => term.restore(null));
+  assert.equal((await posts(fresh, "open")).pop()?.ws, "/notes/app", "no 5 s wait");
+  const bare = await cold(page.context().browser(), "?only=" + encodeURIComponent('["p1"]'));
+  await bare.evaluate(p => term.projects(p), PROJ); await bare.evaluate(() => term.restore(null));
+  assert.equal((await posts(bare, "open")).length, 0, "no folder, no host yet: it still waits for the trees");
+  await bare.evaluate(t => term.workspaces(t), TREES);
+  assert.equal((await posts(bare, "open")).length, 1, "the trees come: it opens");
+  assert.deepEqual([fresh._errs, bare._errs], [[], []]); await fresh.close(); await bare.close();
+});
 test("title omits list before term.workspaces arrives so boot never overwrites L1's project list with empty repos/paths", async page => {
   const b = page.context().browser(), fresh = await b.newPage({viewport: {width: 1200, height: 800}, colorScheme: "dark"});
   await fresh.addInitScript(() => { window.__posts = []; window.webkit = {messageHandlers: {term: {postMessage: m => window.__posts.push(JSON.parse(JSON.stringify(m)))}}} });
