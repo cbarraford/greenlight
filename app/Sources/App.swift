@@ -2571,7 +2571,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         guard let v = w.contentView, v.bounds.width > 0, let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { return done(nil) }
         v.cacheDisplay(in: v.bounds, to: rep)
         let base = NSImage(size: v.bounds.size); base.addRepresentation(rep)
-        let webs = ([fluid] + termWebs).filter { $0.window === w && !$0.isHiddenOrHasHiddenAncestor }
+        let webs = ([fluid] + termWebs + (greenlight.canvas.has ? [greenlight.canvas.web] : [])).filter { $0.window === w && !$0.isHiddenOrHasHiddenAncestor }  // the chat's canvas too (#208)
         var parts = [(NSImage, NSRect)](), left = webs.count
         func finish() {
             let over = [inboxHost].filter { $0.window === w && !$0.isHiddenOrHasHiddenAncestor }.compactMap { o -> (NSImage, NSRect)? in  // over the web views, as on screen

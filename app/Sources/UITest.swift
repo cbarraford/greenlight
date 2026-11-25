@@ -184,6 +184,7 @@ final class UITestServer {
         case "dashboard", "mc", "center": return app.fluid
         case "terminal", "term", "basement", "pipe": return app.termWindow.contentView as? WKWebView
         case "stage": return app.greenlight.voice.stageWeb
+        case "canvas": return app.greenlight.canvas.web  // typed chat's canvas (#208)
         default: return l1(target, app: app)?.web ?? view(target, app: app)?.contentView as? WKWebView
         }
     }
