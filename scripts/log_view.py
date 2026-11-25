@@ -7,11 +7,13 @@
 Usage reads the sessions' own transcripts: Claude Code's message usage (deduplicated by message id, since a streamed message
 repeats it) and Codex's last token_count per rollout. Cost is only for Claude models in PRICES, from list prices per million
 tokens, so it is an estimate and is labelled one; Codex reports tokens only, and nothing is invented for it.
-Redaction runs audit.py's secret and personal-data patterns, the owner's leak.re terms, and paths, hosts and URLs.
+Redaction runs audit.py's secret and personal-data patterns, the owner's leak.re terms, this account's name, and paths,
+hosts and URLs.
 Stdlib only.
 """
 from __future__ import annotations
 
+import getpass
 import json
 import re
 import sys
@@ -148,6 +150,13 @@ PATH_RE = re.compile(r"(?<![\w.:/])(?:~(?=/)|/(?:home|Users|root|tmp|private|var
 TOKENISH_RE = re.compile(r"\b(?:sk|pk|rk|ghp|gho|ghs|ghu|glpat|xox[abpr]|AKIA)[-_A-Za-z0-9]{12,}\b")
 
 
+def _user() -> str:
+    try:
+        return getpass.getuser()
+    except (KeyError, OSError):
+        return ""
+
+
 def redact(text: str) -> tuple[str, int]:
     """(text, how many things were replaced). Order matters: secrets before URLs, URLs before paths and hosts."""
     n = 0
@@ -169,6 +178,8 @@ def redact(text: str) -> tuple[str, int]:
     text = sub(IP_RE, "[ip]", text)
     text = sub(HOST_RE, "[host]", text)
     text = sub(audit.PHONE_RE, "[phone]", text)
+    if len(user := _user()) >= 3:  # this account's name outside a path too: a branch, a repo owner, a prompt
+        text = sub(re.compile(rf"(?<![\w-]){re.escape(user)}(?![\w-])", re.I), "[user]", text)
     if (rx := diag.leak(strict=True)) is not None:
         text = sub(rx, "[private]", text)
     return text, n

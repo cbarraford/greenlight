@@ -113,6 +113,14 @@ def test_redact_takes_out_private_details():
     assert n >= 7
 
 
+def test_redact_takes_out_this_accounts_name_but_not_inside_other_words(monkeypatch):
+    monkeypatch.setattr(log_view, "_user", lambda: "pat")
+    out, n = log_view.redact("git push origin pat/fix-retry; Pat said ok; compatible patterns")
+    assert out == "git push origin [user]/fix-retry; [user] said ok; compatible patterns" and n == 2
+    monkeypatch.setattr(log_view, "_user", lambda: "ci")  # too short to be told from ordinary text
+    assert log_view.redact("ci passed")[0] == "ci passed"
+
+
 def test_redact_uses_the_owners_private_terms(tmp_path, monkeypatch):
     monkeypatch.setenv("GREENLIGHT_HOME", str(tmp_path))
     (tmp_path / "leak.re").write_text("zorblax\n")
