@@ -205,9 +205,32 @@ def test_first_run_imports_once_on_native(home, monkeypatch):
     mk.write_text(json.dumps({"ts": "x", "pending": ["orca"], "attempts": "y"}))
     assert importers.first_run() is None  # a hand-mangled marker never raises into a listing
     mk.write_text(json.dumps({"ts": 0, "pending": ["orca"], "attempts": 1}))
-    os.utime(mk, (1, 1))  # written long ago; the user has edited repos.json since
-    ade_basement.remember("/srv/x")
+    ade_common.GOALS.unlink(missing_ok=True)  # only repos.json is in play below
+    ade_basement.remember("/srv/old")
+    os.utime(ade_basement.REPOS, (1, 1))
+    os.utime(mk, (2, 2))  # the marker is newer than every file: a retry is due (the control)
+    assert importers.first_run() is not None
+    mk.write_text(json.dumps({"ts": 0, "pending": ["orca"], "attempts": 1}))
+    os.utime(mk, (2, 2))
+    ade_basement.remember("/srv/x")  # the user edits repos.json after the marker
     assert importers.first_run() is None  # a retry would re-add a repo or goal they removed: none
+
+
+def test_first_run_rechecks_under_the_claim(home, monkeypatch):
+    import contextlib
+    monkeypatch.setattr(ade_basement, "HOME", home / "home")
+    monkeypatch.setenv("GREENLIGHT_ADE", "native")
+    monkeypatch.setattr(importers, "detect", lambda: {"orca": True, "t3": False, "cmux": False, "herdr": False, "folder": True})
+    ran = []
+    monkeypatch.setattr(importers, "_first_import", lambda *a: ran.append(a))
+
+    @contextlib.contextmanager
+    def finished_meanwhile(lock):  # another listing finished its import while this one waited for the claim
+        (home / "home").mkdir(exist_ok=True)
+        (home / "home" / importers.FIRST_RUN).write_text(json.dumps({"ts": 1, "pending": []}))
+        yield True
+    monkeypatch.setattr(importers, "_claimed", finished_meanwhile)
+    assert importers.first_run() is None and ran == []  # decided again under the claim: nothing left to do
 
 
 def test_doctor_flags_a_deprecated_driver(home, monkeypatch):

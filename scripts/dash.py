@@ -1148,9 +1148,10 @@ def tree_new(path, o):
     if gate and gate["pause"]:  # 1.3: ask before anything is made, so a dismissed question leaves nothing behind
         return paused(gate)
     call, w, twins = tree(path, every=True)
-    if native_in_use() and call is not ade_call("native") and any(map(greenlight.is_local, twins)) and (main := main_of(path)):
+    if native_in_use() and call is not ade_call("native") and greenlight.is_local(local_twin(w, twins)) and (main := main_of(path)):
         call, w = ade_call("native"), {**w, "repoId": main}  # native: a new workspace is Greenlight's own, whoever lists the repo
-        # (a repo only on another of Orca's hosts has no checkout here: Orca makes that one, on that host, as before)
+        # (this machine's checkout of the same project only; a repo only on another of Orca's hosts, or a different
+        # project at the same path here, is made by Orca on that host, as before)
     if call is greenlight.orca_cli and len(twins) > 1:  # the page sends a path, not a host, and shows its first row (w):
         w = local_twin(w, twins)  # of several, this machine's checkout of that same project
     args = ["worktree", "create", "--repo", f"id:{w['repoId']}", "--name", name,

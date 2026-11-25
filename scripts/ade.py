@@ -42,6 +42,14 @@ def _home():
     return Path(os.environ.get("GREENLIGHT_HOME") or Path.home() / ".greenlight")
 
 
+def _config_raw_ade():
+    try:
+        cfg = json.loads((_home() / "config.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return cfg.get("ade") if isinstance(cfg, dict) else None
+
+
 def _config_ade():
     try:
         v = json.loads((_home() / "config.json").read_text()).get("ade")
@@ -65,7 +73,10 @@ def name():
         if not (n := canonical(env)):
             raise RuntimeError(f"GREENLIGHT_ADE={env!r}: not one of {', '.join(NAMES)}")
         return n
-    return canonical(_config_ade()) or settle()
+    raw = _config_raw_ade()
+    if raw not in (None, ""):  # set: a backend, or a typo left for the user to fix (diag doctor shows it), answered stably
+        return canonical(raw if isinstance(raw, str) else None) or DEFAULT
+    return settle()
 
 
 def settle():
@@ -73,7 +84,6 @@ def settle():
     flips later. A new install gets DEFAULT (native). One that already ran greenlight (a scan's last.json, log.jsonl,
     decisions.jsonl or history/) ran on Orca, the old default, and keeps it: native is then an explicit switch (README, under Requirements)."""
     home = _home()
-    # anything greenlight itself leaves behind over time (not diag/, which this very process may have just written)
     # what only a past scan or run leaves: not me.json (importing greenlight writes it), state/ (update.py), auto/ (the
     # timer's first tick) or diag/: a brand-new install has those before this is first asked
     ran = any((home / x).exists() for x in ("last.json", "log.jsonl", "decisions.jsonl", "history"))
