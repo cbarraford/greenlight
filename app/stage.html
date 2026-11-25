@@ -165,8 +165,8 @@ table.grid td .chip svg.tone{flex:none;margin-top:1px}
 .chip.bad{color:var(--bad)} .chip.now{color:var(--now)} .chip.ok{color:var(--ok)} .chip.needs{color:var(--needs)}
 /* Links and the reply's options (issue 208). A link opens in the browser; an option is a secondary button whose click
    carries only its index to the app, which knows the text. No pointer cursor on a button (§10.2); links keep theirs. */
-#s a{color:var(--accent-fg);text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:2px}
-#s a:hover{text-decoration-color:currentColor}
+#s a:not(.option){color:var(--accent-fg);text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:2px}
+#s a:not(.option):hover{text-decoration-color:currentColor}
 .options{display:flex;flex-wrap:wrap;gap:var(--ds-space-8);margin-top:var(--ds-space-16)}
 .options a.option{display:inline-flex;align-items:center;height:var(--ds-layout-control-height-md);padding:0 var(--ds-space-12);border-radius:var(--ds-radius-sm);
   background:var(--ds-element-rest);color:var(--text);font:var(--ds-type-label);font-family:var(--font);text-decoration:none;cursor:default;
