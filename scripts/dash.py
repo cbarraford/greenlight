@@ -54,6 +54,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ade  # noqa: E402
 import ade_common  # noqa: E402
+import external  # noqa: E402
 import audit  # noqa: E402
 import blocking  # noqa: E402
 import diag  # noqa: E402
@@ -729,7 +730,9 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
         sg = cached_suggest(r["name"])
         pucks[-1]["suggestion"] = {"label": sg["label"], "prompt": sg["prompt"], "advice": sg.get("advice") or ""} \
             if fresh_suggest(sg, pucks[-1]) and sg.get("prompt") else None
-    add_resume(pucks, [(r["path"], live[r["id"]][1]) for r in rows])
+    # an agent outside Greenlight has no Basement session: it never replaces the one the button reattaches to (no
+    # identity), but it keeps the worktree busy, so the button never starts a second agent beside it (its state stays)
+    add_resume(pucks, [(r["path"], resume_agent(live[r["id"]][1])) for r in rows])
     pucks.sort(key=lambda p: (STATES.index(p["state"]), p["name"]))
     # every other worktree (default branches first): the console's picker reaches all of them, the map stays goals-only
     have = {p["path"] for p in pucks}
@@ -807,6 +810,8 @@ def trees():
             out.append({"ade": name, "project": w.get("repo") or "", "name": w.get("displayName") or Path(w["path"]).name,
                         "path": w["path"], "branch": (w.get("branch") or "").removeprefix("refs/heads/"),
                         "main": bool(w.get("isMainWorktree")), "agent": ag.get("state") or "none",
+                        # any outside agent, even behind our own waiting one: the page's auto-run must not start beside it
+                        **({"external": True} if any(a.get("external") for a in w.get("agents") or []) else {}),
                         "goal": w.get("comment") or "", "pinned": bool(w.get("isPinned")), "active": w.get("lastOutputAt"),
                         "since": ag.get("stateStartedAt"), "created": None if w.get("isMainWorktree") else created(w["path"]),
                         **({"nativeHost": False} if w.get("hostId") not in (None, "", "local") else {})})
@@ -833,7 +838,26 @@ def trees():
                     out[-1]["mr"] = {k: mr.get(k) for k in ("ref", "web_url", "title", "state", "draft", "pipeline", "conflicts",
                                                              "rebase", "threads", "mergeable", "by", "assignees",
                                                              "target_branch", "labels", "milestone", "description", "sha")}
+    mark_external(out)
     return sorted(out, key=lambda x: (x["project"].lower(), not x["main"], x["name"].lower()))
+
+
+def mark_external(rows):
+    """On the native engine, `external` on every row with an agent outside Greenlight's tmux, whichever ADE listed it
+    first (Orca's row for an Orca worktree carries no such flag): the sidebar's "Elsewhere"."""
+    try:
+        if not ade.is_native():
+            return
+    except RuntimeError:
+        return
+    ext = external.by_worktree_safe([r["path"] for r in rows])  # a failed scan marks every row: the page's guards hold
+    for r in rows:
+        if r.get("ade") == "native":
+            continue  # its own row already says (primary_agent: Greenlight's own active agent first, then an outside one)
+        if ext.get(r["path"].rstrip("/")):
+            r["external"] = True
+            if r.get("agent") not in ("working", "waiting"):
+                r["agent"] = "working"  # every page guard (auto-run, auto-merge, Delete) keys on a working agent
 
 
 BIN_RE = re.compile(r"/[\w./@+-]{1,300}")  # fullmatch  # a harness binary the page may type: App.swift resumeOf, terminal.html BIN_OK
@@ -845,6 +869,12 @@ def harness_bin(h):
     c = hs.get(h) if isinstance(hs, dict) else None
     b = c.get("bin") if isinstance(c, dict) else None  # a malformed config.json must not take the snapshot down
     return b if isinstance(b, str) and BIN_RE.fullmatch(b) and ".." not in b else None
+
+
+def resume_agent(ag):
+    """The agent add_resume records: an outside one keeps only its state (busy, so no second agent starts beside it,
+    and no identity, so it never replaces the Basement session the button reattaches to)."""
+    return {"state": ag.get("state")} if ag and ag.get("external") else ag
 
 
 def add_resume(pucks, agents):
@@ -920,8 +950,8 @@ def tree_info(path):
     """The git facts the sidebar's menu shows and Delete checks: uncommitted files, commits no remote has, last commit."""
     git = lambda *a: subprocess.run(["git", "-C", path, *a], capture_output=True, text=True, timeout=20)
     st = git("status", "--porcelain", "--untracked-files=normal")
-    if st.returncode:
-        return {"error": (st.stderr.strip() or "not a git checkout")[:200]}
+    if st.returncode:  # the page's Delete then forces past every risk: it must list the agent here, from this answer
+        return {"error": (st.stderr.strip() or "not a git checkout")[:200], "outside": outside_agent(path)}
     last = git("log", "-1", "--format=%ct").stdout.strip()
     try:
         lp = ports(path)
@@ -937,8 +967,30 @@ def tree_info(path):
     # ports/dirty/unpushed as before; the rest is what Delete lists (first 20 files, 10 commits) and the port rows' process names
     return {"dirty": len(lines), "unpushed": len(ahead), "commit": int(last) * 1000 if last.isdigit() else None, "ports": [p for p, _ in lp],
             "procs": {str(p): c for p, c in lp}, "untracked": sum(l[:2] == "??" for l in lines), "files": [[l[:2].strip(), l[3:]] for l in lines[:20]],
-            "commits": ahead[:10], "teardown": cmd if isinstance(cmd, str) else "",
+            "commits": ahead[:10], "teardown": cmd if isinstance(cmd, str) else "", "outside": outside_agent(path),
             "added": n("insertion"), "removed": n("deletion")}
+
+
+def outside_agent(path):
+    """cleanup.outside_agent, for the Basement's Delete: an agent outside Greenlight in the tree is a risk to confirm."""
+    import cleanup
+    paths = []
+    if not ade.is_native():
+        return None
+    p = external.real(path).rstrip("/")  # resolved, as the agents' folders are (a worktree may be listed through a symlink)
+    try:  # nothing in or under it, of anyone's: no need for the worktree list (it costs git calls per worktree)
+        near = [a for a in external.agents(fresh=True, strict=True)
+                if any(x and (x == p or x.startswith(p + "/")) for x in (external.real(a["cwd"]), a.get("pane") and external.real(a["pane"])))]
+    except external.Unknown:
+        return "an agent (the process check failed, so it can't be ruled out)"
+    if not near:
+        return None
+    if ade.is_native():
+        try:  # every worktree: our agents' ownership depends on the nested ones
+            paths = [w["path"] for w in importlib.import_module("ade_basement").worktrees()]
+        except Exception:  # noqa: BLE001 - without the list it can't be ruled out: say so, Delete asks first
+            return "an agent (the worktree list failed, so it can't be ruled out)"
+    return cleanup.outside_agent(path, fresh=True, paths=paths)  # fresh again: the listing above takes a while
 
 
 def tree_rm(path, force=False, teardown=""):
@@ -950,7 +1002,9 @@ def tree_rm(path, force=False, teardown=""):
     info = tree_info(path)
     risks = [*(["it's pinned"] if w.get("isPinned") else []), *([info["error"]] if "error" in info else []),
              *([f"{info['dirty']} uncommitted file{'s' * (info['dirty'] != 1)}"] if info.get("dirty") else []),
-             *([f"{info['unpushed']} commit{'s' * (info['unpushed'] != 1)} no remote has (the local branch keeps them)"] if info.get("unpushed") else [])]
+             *([f"{info['unpushed']} commit{'s' * (info['unpushed'] != 1)} no remote has (the local branch keeps them)"] if info.get("unpushed") else []),
+             # tree_info's fresh check; it returns early (no "outside") when git status fails: ask here then
+             *([f"{ext} runs in it outside Greenlight"] if (ext := info["outside"] if "outside" in info else outside_agent(path)) else [])]
     if risks and not force:
         return {"risks": risks}
     warn = None

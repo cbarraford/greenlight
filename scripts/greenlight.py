@@ -195,8 +195,9 @@ class PlacementRefused(RuntimeError):
 
 
 def primary_agent(agents):
-    """The live session to show for a workspace. A completed review may be newer than its still-running parent."""
-    return max(agents or [{}], key=lambda a: (a.get("state") in ("working", "waiting"),
+    """The live session to show for a workspace. A completed review may be newer than its still-running parent. An
+    agent outside Greenlight (external.py) shows only when none of its own is active there."""
+    return max(agents or [{}], key=lambda a: (a.get("state") in ("working", "waiting"), not a.get("external"),
                                              a.get("updatedAt") or a.get("stateStartedAt") or 0))
 
 
@@ -1340,6 +1341,8 @@ def screen(ws, terminals):
     return seen
 
 
+EXTERNAL_STALE_H = 6  # an agent outside Greenlight running this long (since its process started: idle can't be seen)
+                      # is the user's to close, not "working"
 SURE = 0.7  # how sure the screen reading must be before it overrides Orca's state or the step's owner
 
 
@@ -1348,6 +1351,20 @@ def agent_overlay(ws, terminals):
     which: logged out, out of usage, looping, a draft left in the box, or a stale "waiting" (a background task's
     or a restored session's alert, while the screen shows it working or done)."""
     nxt, ag, seen = ws["next"], ws["agent"], False  # False: not read yet
+    if ag.get("external") and nxt["owner"] in ("agent", "greenlight"):  # its terminal isn't ours to read or type into
+        # the outside agent's own kind (the shown one may be Greenlight's); none: by_worktree_safe's "the check failed"
+        who, h = ag.get("ext_type") or "an agent", (NOW_MS - ag["since"]) / 3.6e6 if ag.get("since") else 0
+        if not ag.get("ext_type"):
+            nxt.update(owner="working", action="the process check failed, so whether an agent runs here outside Greenlight "
+                                               "can't be told: greenlight holds off until it can (diag.py errors says why)")
+        elif h >= EXTERNAL_STALE_H:  # open for hours: likely done and idle at its prompt, which only the user can close
+            # no hour count in the text: the question's marker is the action, and a changing one re-asks every hour
+            nxt.update(owner="me", action=f"{who} has been running here outside Greenlight for over {EXTERNAL_STALE_H}h: once "
+                                          "it's done, close it (or take it over in the Basement) and greenlight carries on")
+        else:
+            nxt.update(owner="working", action=f"{who} runs here outside Greenlight: nothing is dispatched or merged until "
+                                               "it exits (then take it over in the Basement)")
+        return
     if ag["state"] == "waiting":
         seen = screen(ws, terminals)
         if seen and seen["prob"] >= SURE and seen["state"] == "working":  # still at it: nobody acts on the workspace meanwhile
@@ -1518,6 +1535,9 @@ def scan(save=True, _backfill_retries=0):
             "comment": comment,
             "pinned": w.get("isPinned"), "linked_mr": linked,
             "agent": {"state": ag.get("state", "none"), "type": canonical_agent(ag.get("agentType")),
+                      # any outside agent, even behind our own (an auto-merge must not land under it)
+                      **({"external": True, "since": ext.get("stateStartedAt"), "ext_type": canonical_agent(ext.get("agentType"))}
+                         if (ext := next((a for a in w.get("agents") or [] if a.get("external")), None)) else {}),
                       "pane_key": ag.get("paneKey"),
                       "last": (ag.get("lastAssistantMessage") or "")[-400:],
                       "idle_h": w.get("lastOutputAt") and round((NOW_MS - w["lastOutputAt"]) / 3.6e6, 1)},

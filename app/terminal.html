@@ -1202,10 +1202,11 @@ let delAsk = null;  // the workspace whose Delete waits on that info
 function delWs(ws){ delAsk = ws; post({cmd: "tree", op: "info", path: ws}) }
 function delDialog(o){
   delAsk = null; const ws = o.path, w = wsInfo(ws) || {}, m = w.mr || {}, td = o.teardown && o.teardown === teardown(ws) ? o.teardown : "";
-  const clean = !o.error && !o.dirty && !o.unpushed, rm = force => post({cmd: "tree", op: "rm", path: ws, ...force && {force: true}, ...td && {text: td}});
+  const clean = !o.error && !o.dirty && !o.unpushed && !o.outside, rm = force => post({cmd: "tree", op: "rm", path: ws, ...force && {force: true}, ...td && {text: td}});
   if (clean && noAskDel) return rm(false);
   const pl = (n, s) => `${n} ${s}${n === 1 ? "" : "s"}`, fs = o.files || [], tracked = (o.dirty | 0) - (o.untracked | 0);
   const lost = [o.error && ["r", "Couldn't read its git state", o.error],
+    o.outside && ["r", `${o.outside} runs in it outside Greenlight`, "Its session loses the folder it's working in"],
     tracked > 0 && ["r", pl(tracked, "uncommitted change"), fs.filter(f => f[0] !== "??").map(f => f[1]).join("\n")],
     o.untracked && ["r", pl(o.untracked, "untracked file"), fs.filter(f => f[0] === "??").map(f => f[1]).join("\n")],
     o.unpushed && ["o", pl(o.unpushed, "unpushed commit") + ": the branch keeps them", (o.commits || []).join("\n")]].filter(Boolean);
@@ -1379,6 +1380,7 @@ const pillHTML = (b, cls = "badge") => `<span class="${cls} k-${b[1]}">${g16(FIL
 function badge(w){
   const m = w.mr?.state === "opened" ? w.mr : {};
   if (w.agent === "waiting") return ["Question", "o", G.needs];
+  if (w.external) return ["Elsewhere", "b", G.run];  // an agent another ADE or terminal runs here (issue 195): greenlight keeps off it
   if (w.state === "crashed") return ["Error", "r", G.bad];
   if (m.pipeline === "failed") return ["CI failed", "r", G.bad];
   if (m.conflicts) return ["Conflicts", "r", G.conflict];
@@ -2233,7 +2235,7 @@ function newWsAsk(o){
 }
 function newWsDialog(){
   const repos = trees.filter(w => w.main && w.ade), here = mainOf(curWs) || (activeOnly() && repos.find(inView));  // this workspace's repo, else (a project window) one of its own
-  if (!repos.length) return ask({title: "No repos yet", text: "A repo shows up here once its main checkout is in an ADE, or (GREENLIGHT_ADE=basement) once a Basement shell has been in it.", cancel: false});
+  if (!repos.length) return ask({title: "No repos yet", text: "A repo shows up here once its main checkout is in an ADE, or, with the native engine, once you register it (greenlight.py repos add <path>) or a Basement shell has been in it.", cancel: false});
   const body = el("div", "nwb nws"), two = el("div", "two"), fld = (label, inp, into = body) => { const l = el("label", "fld"); l.append(Object.assign(el("span"), {textContent: label}), inp); into.append(l); return inp };
   body.append(two);
   const sel = fld("Repo", el("select"), two);
@@ -2456,7 +2458,7 @@ function autoRun(){
       }
     }
     const key = x => `${w.path}|${x.kind}|${x.sha}`, x = mv.find(x => x.auto && !autoDone.includes(key(x)));  // the most urgent not yet tried on this head
-    if (!x || here.some(t => t.auto || t.job === x.kind || tabBusy(t)) || w.agent === "working") continue;
+    if (!x || here.some(t => t.auto || t.job === x.kind || tabBusy(t)) || w.agent === "working" || w.external) continue;
     autoDone = [...autoDone, key(x)].slice(-300); save();
     if (x.kind === "merge") { autoMerge.add(w.path); post({cmd: "tree", op: "auto-merge", path: w.path}); continue }
     const was = cur; newTab(w.path, agentCmd(defAgent, x.auto));
