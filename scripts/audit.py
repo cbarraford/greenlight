@@ -145,12 +145,25 @@ MAXC = 45000  # context chars per question; a longer diff is asked in parts (eve
 MAXPARTS = 30  # large multi-file PRs still audit every part; beyond this, an error (blocks), not a partial pass
 DEF = {"threshold": 0.8, "post": 0.75, "draft": 0.45, "require_model": True,
        "push_timeout": 900}  # seconds for the gated git push: the repo's pre-push hook (lint + test-py) runs ~130 s
-CACHE_VERSION = 4  # 3: merge passes scan each commit's added content; 4: identity emails are no longer scanned
+CACHE_VERSION = 5  # 3: merge passes scan each commit's added content; 4: identity emails are no longer scanned;
+#                   5: role (no-reply) emails, decimal/colon-field digits and main-merge commits no longer block
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
 PHONE_RE = re.compile(r"(?<!\w)(?:\+?1[-. ]?)?(?:\([2-9]\d{2}\)|[2-9]\d{2})[-. ]?[2-9]\d{2}[-. ]?\d{4}\b")
+# The gate's phone shape: PHONE_RE's, minus digits that belong to a bigger number: the fraction of a decimal
+# (e.g. a 10-digit float fraction) or one field of a colon-joined numeric list (e.g. name:N:N). PHONE_RE stays the broad
+# one for redaction and for diag's bug-report scrubber, where a false hit only masks text.
+PHONE_GATE_RE = re.compile(r"(?<![\w.])(?<!\d:)(?:\+?1[-. ]?)?(?:\([2-9]\d{2}\)|[2-9]\d{2})[-. ]?[2-9]\d{2}[-. ]?\d{4}\b(?![.:]\d)")
 HOME_RE = re.compile(r"(/(?:home|Users)/|[A-Za-z]:\\+Users\\+)[^/\\\s]+", re.I)
 PERSONAL_RES = ((EMAIL_RE, "an email address"), (PHONE_RE, "a phone number"), (HOME_RE, "a home-directory username"))
+GATE_PERSONAL_RES = ((EMAIL_RE, "an email address"), (PHONE_GATE_RE, "a phone number"), (HOME_RE, "a home-directory username"))
 PUBLIC_EMAIL_DOMAINS = {"example.com", "example.net", "example.org"}  # IANA-reserved documentation domains
+ROLE_LOCALS = {"noreply", "no-reply", "donotreply", "do-not-reply"}  # a bot's role address (Co-Authored-By trailers), no one's mail
+
+
+def public_email(addr):
+    """True for an address that isn't anyone's personal data: a documentation domain, or a no-reply role address."""
+    local, _, domain = addr.rpartition("@")
+    return domain.lower() in PUBLIC_EMAIL_DOMAINS or local.lower() in ROLE_LOCALS
 
 
 def cfg():
@@ -375,7 +388,7 @@ def redact_secrets(text):
 
 def redact_diff_pii(text):
     """Preserve diff structure for semantic checks without sending personal data in full-diff context."""
-    text = EMAIL_RE.sub(lambda m: m[0] if m[0].rsplit("@", 1)[-1].lower() in PUBLIC_EMAIL_DOMAINS else "[email redacted]", text)
+    text = EMAIL_RE.sub(lambda m: m[0] if public_email(m[0]) else "[email redacted]", text)
     text = PHONE_RE.sub("[phone redacted]", text)
     return HOME_RE.sub(r"\1[username redacted]", text)
 
@@ -385,9 +398,9 @@ def secrets(text, diff=False):
     is an exact, known published example isn't one."""
     hits = []
     for line in published_lines(text) if diff else _lf_lines(text):
-        found = [what for rx, what in (*SECRET_RES, *PERSONAL_RES)
-                 if any(m[0] not in EXAMPLE_VALUES and not (what == "an email address" and
-                        m[0].rsplit("@", 1)[-1].lower() in PUBLIC_EMAIL_DOMAINS) for m in rx.finditer(line))]
+        found = [what for rx, what in (*SECRET_RES, *GATE_PERSONAL_RES)
+                 if any(m[0] not in EXAMPLE_VALUES and not (what == "an email address" and public_email(m[0]))
+                        for m in rx.finditer(line))]
         if found:
             masked = redact_diff_pii(redact_secrets(line))  # evidence can contain more than one secret or personal datum
             hits.extend((what, masked.strip()[:120]) for what in found)
@@ -667,6 +680,53 @@ def row_for(path):
     return next((r for r in rows if r.get("path") and os.path.realpath(r["path"]) == path), None)
 
 
+def push_scan_stale(path, row, execute=False):
+    """True when `gate push` would refuse on a stale scan or stale local refs: no goal for this worktree in the last scan, a
+    forge MR head or target that moved since it, or (fetchable) origin refs behind the forge. Only ever a reason to refresh;
+    the gate's own checks still decide."""
+    mr = row.get("mr") or {}
+    if not str(row.get("goal") or "").strip():
+        return True
+    if not (row.get("project") and row.get("forge") and mr.get("iid") and mr.get("target_branch")):
+        return False
+    refs = forge_refs(row["project"], mr["iid"], row["forge"])
+    if not refs or refs[0] != mr.get("sha") or refs[1] != mr["target_branch"] or not refs[2]:
+        return True
+    if (git(path, "rev-parse", f"origin/{mr['target_branch']}") or "").strip() != refs[2]:
+        return True
+    return bool(execute and mr.get("source_branch") and
+                (git(path, "rev-parse", f"refs/remotes/origin/{mr['source_branch']}") or "").strip() != refs[0])
+
+
+def fetch_mr_refs(path, row):
+    """Fetch the MR's target and source branches (or origin's default refs without an MR) into their remote-tracking refs."""
+    mr = row.get("mr") or {}
+    names = [b for b in (mr.get("target_branch"), mr.get("source_branch")) if b and not b.startswith("-") and " " not in b]
+    specs = [f"+refs/heads/{b}:refs/remotes/origin/{b}" for b in dict.fromkeys(names)]
+    return git(path, "fetch", "-q", "origin", *specs, timeout=300) is not None
+
+
+def rescan():
+    """One full greenlight scan (it saves last.json); a failure leaves the old scan, which the gate then refuses as before."""
+    with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+        subprocess.run([sys.executable, str(HERE / "greenlight.py"), "scan"], capture_output=True, timeout=600)
+
+
+def refresh_stale_scan(path, execute=False):
+    """The scan row for path, refreshed once if it's stale: fetch the MR's refs, and rescan when the fetch didn't settle it.
+    Agents used to stop on 'rescan and fetch'; this does it for them, then the gate checks everything as before."""
+    row = row_for(path) or {}
+    if not push_scan_stale(path, row, execute):
+        return row
+    print("audit: the last scan or the local refs are stale; fetching and rescanning once before the push audit")
+    fetch_mr_refs(path, row)
+    if push_scan_stale(path, row, execute):
+        rescan()
+        row = row_for(path) or {}
+        fetch_mr_refs(path, row)  # the rescan may have found the MR the old row lacked
+    return row
+
+
 def origin_push_url(path, project, forge):
     """One effective origin push URL, only if it points to the scanned forge project."""
     raw = git(path, "remote", "get-url", "--push", "--all", "origin")
@@ -755,6 +815,19 @@ def branch_messages(path, target=None, sha="HEAD"):
     return messages + "\n" + identities
 
 
+def history_parent(path, commit, base):
+    """The parent a branch commit's published content is measured against. An ordinary commit: its first parent. A merge
+    that brings the target in (`Merge main into feat`): its parent on the target, so main's own changes, already public,
+    don't count, while the branch's work and every conflict resolution still do. None when git fails."""
+    parents = (git(path, "rev-list", "--parents", "-n", "1", commit) or "").split()[1:]
+    if not parents:
+        return None
+    for p in parents[1:]:
+        if git(path, "merge-base", "--is-ancestor", p, base) is not None:
+            return p
+    return parents[0]
+
+
 def branch_history(path, target=None, sha="HEAD"):
     """Published lines from every branch commit, including content later removed from the final tree."""
     base = base_ref(path, target)
@@ -764,7 +837,7 @@ def branch_history(path, target=None, sha="HEAD"):
         return None
     out = []
     for commit in commits.splitlines():
-        parent = git(path, "rev-parse", f"{commit}^1")
+        parent = history_parent(path, commit, base)
         if not parent:
             return None
         diff = git(path, "-c", "diff.external=", "diff", "--no-ext-diff", "--no-textconv", "--text", "--no-color",
@@ -1420,7 +1493,7 @@ def main(argv=None):
                 return 4
         return 0
     if args[:2] == ["gate", "push"]:
-        row = row_for(path) or {}
+        row = refresh_stale_scan(path, execute)
         mr = row.get("mr") or {}
         try:
             if not str(row.get("goal") or "").strip():
@@ -1656,12 +1729,46 @@ def main(argv=None):
     return 2
 
 
+# Why a gate refused, as a token for the diag trail (never the message): the first AUDIT ERROR's cause, else the first
+# BLOCKED contract (with `.scan` when the deterministic scan, not a model, found it).
+BLOCK_REASONS = (("scanned MR head or local target ref is stale", "stale_scan"), ("local source ref is stale", "stale_source"),
+                 ("local target ref is stale", "stale_target"), ("no principal goal", "no_goal"), ("not clean", "dirty"),
+                 ("diff too large", "too_large"), ("no audited push receipt", "no_receipt"), ("fork", "fork"),
+                 ("destination", "destination"), ("no model answer", "no_model"), ("changed while", "moved"),
+                 ("changed since", "moved"), ("changed during", "moved"), ("HEAD changed", "moved"), ("timed out", "timeout"))
+
+
+def block_reason(out):
+    """The token for a gate's printed output, or None when nothing in it blocked."""
+    for line in out.splitlines():
+        if line.startswith("AUDIT ERROR"):
+            return next((tok for frag, tok in BLOCK_REASONS if frag in line), "other")
+        if m := re.match(r"BLOCKED (\w+) \(\w+(?:#\d+)?(?:@\w+)?, p=[\d.]+, (\w+)\)", line):
+            return m[1] + (".scan" if m[2] == "scan" else "")
+    return None
+
+
+class _Tee(io.TextIOBase):
+    """stdout that also keeps a copy, so the diag span can classify what the gate told the agent."""
+    def __init__(self, inner):
+        self.inner, self.buf = inner, io.StringIO()
+
+    def write(self, s):
+        self.buf.write(s)
+        return self.inner.write(s)
+
+    def flush(self):
+        self.inner.flush()
+
+
 if __name__ == "__main__":
     import diag
     diag.install("audit")
     op = next((a for a in sys.argv[1:] if a in ("checked-merge", "merge", "publish", "gate")), None)  # known ops only: never a value
     gate = next((a for a in sys.argv[sys.argv.index("gate") + 1:][:1] if a in ("post", "pr", "push")), None) if op == "gate" else None
+    tee = sys.stdout = _Tee(sys.stdout)
     with diag.span("audit", op=op, gate=gate) as d:
         rc = main()
-        d.update(rc=rc if isinstance(rc, int) else None, verdict="pass" if not rc else "blocked")
+        d.update(rc=rc if isinstance(rc, int) else None, verdict="pass" if not rc else "blocked",
+                 **({"reason": block_reason(tee.buf.getvalue())} if rc else {}))
     sys.exit(rc)

@@ -6,6 +6,8 @@ from pathlib import Path
 from unittest import mock
 import audit
 import greenlight
+rescans = []
+audit.rescan = lambda: rescans.append(1)  # a gate's stale-scan refresh must never run a real scan (orca) from a test
 
 # ---- a fake decide.py speaking the shared contract; `ans` maps a substring of the question/rubric to its answer
 calls = []
@@ -1070,3 +1072,84 @@ with mock.patch.object(audit, "git", return_value="ref: refs/heads/develop\tHEAD
 with mock.patch.object(audit, "git", return_value=""):
     assert audit.default_target(wt) is None  # unknown remote default cannot silently become main
 print("ok")
+
+# ---- no-reply role addresses: a Co-Authored-By bot trailer isn't anyone's personal data; a person's trailer still is
+bot = "noreply" + "@anthropic.com"
+assert audit.public_email(bot) and audit.public_email("no-reply@" + "forge.test") and not audit.public_email("someone@" + "forge.test")
+assert audit.secrets(f"Co-Authored-By: Claude Opus 5.5 <{bot}>") == []
+assert audit.secrets("Co-Authored-By: Someone <someone" + priv + ">")
+gid("commit", "--allow-empty", "-qm", "bot credit", "-m", f"Co-Authored-By: Claude <{bot}>")
+bot_msg = audit.branch_messages(idwt, "main").split("\ncredit\n")[0]
+assert bot in bot_msg and not audit.secrets(bot_msg), bot_msg
+assert bot in audit.redact_diff_pii(f"<{bot}>")  # kept in the model's context too: nothing to hide
+
+# ---- phone numbers: the digits of a decimal or of a colon-joined numeric list aren't one; a written number still is
+d10, n10 = "39633" + "77774", "99999" + "99999"
+p10 = "55523" + "45678"
+for fp in (f"    l_ = (L + 0.{d10} * a + 0.{'21580' + '37573'} * b) ** 3", f"-vbparams=mweb:{n10}:{n10}", f"v {p10}.5"):
+    assert audit.secrets(fp) == [], fp
+for real in ("call 202-555-" + "0123", "(555) " + "234-5678", "+1 555 " + "234 5678", f"phone:{p10}", f"x={p10}"):
+    assert audit.secrets(real), real
+assert audit.PHONE_RE.search(f"0.{p10}")  # the broad pattern (redaction, diag's scrubber) is unchanged
+
+# ---- branch_history: a merge that brings the target in counts only what it adds beyond the target
+mwt = tempfile.mkdtemp()
+gm = lambda *a: subprocess.run(["git", "-C", mwt, *a], check=True, capture_output=True, text=True).stdout.strip()
+gm("init", "-q", "-b", "main"); gm("config", "user.email", "t@t"); gm("config", "user.name", "t")
+Path(mwt, "a.txt").write_text("base\n"); gm("add", "."); gm("commit", "-qm", "base")
+gm("checkout", "-qb", "feat"); Path(mwt, "f.txt").write_text("feature line\n"); gm("add", "."); gm("commit", "-qm", "feature")
+gm("checkout", "-q", "main"); Path(mwt, "big.txt").write_text("main only content\n" * 50); gm("add", "."); gm("commit", "-qm", "main work")
+Path(mwt, "a.txt").write_text("main side\n"); gm("commit", "-qam", "main edits a")
+gm("update-ref", "refs/remotes/origin/main", gm("rev-parse", "main"))
+gm("checkout", "-q", "feat"); Path(mwt, "a.txt").write_text("feat side\n"); gm("commit", "-qam", "feat edits a")
+subprocess.run(["git", "-C", mwt, "merge", "-q", "main"], capture_output=True)  # conflicts on a.txt
+Path(mwt, "a.txt").write_text("resolved both\n"); gm("add", "."); gm("commit", "-qm", "Merge main into feat")
+merge = gm("rev-parse", "HEAD")
+assert audit.history_parent(mwt, merge, "origin/main") == gm("rev-parse", "main")  # measured against the target side
+assert audit.history_parent(mwt, gm("rev-parse", "HEAD~1"), "origin/main") == gm("rev-parse", "HEAD~2")  # ordinary: first parent
+hist = audit.branch_history(mwt, "main")
+assert "main only content" not in hist and "+resolved both" in hist and "+feature line" in hist, hist
+gm("checkout", "-qb", "side", "HEAD~1"); Path(mwt, "s.txt").write_text("side branch\n"); gm("add", "."); gm("commit", "-qm", "side")
+gm("checkout", "-q", "feat"); gm("merge", "-q", "--no-edit", "side")
+assert audit.history_parent(mwt, gm("rev-parse", "HEAD"), "origin/main") == merge  # not the target: still its first parent
+assert "+side branch" in audit.branch_history(mwt, "main")
+
+# ---- gate push: a stale scan is fetched and rescanned once, then checked as before
+srow = {"path": mwt, "goal": "Merge #1", "project": "o/x", "forge": "github",
+        "mr": {"iid": 7, "sha": "old", "target_branch": "main", "source_branch": "feat"}}
+fresh = {**srow, "mr": {**srow["mr"], "sha": "new"}}
+main_oid = gm("rev-parse", "origin/main")
+rescans.clear()
+with mock.patch.object(audit, "row_for", side_effect=[srow, fresh]), \
+     mock.patch.object(audit, "forge_refs", return_value=("new", "main", main_oid)), \
+     mock.patch.object(audit, "fetch_mr_refs", return_value=True) as fetched, contextlib.redirect_stdout(io.StringIO()):
+    assert audit.refresh_stale_scan(mwt) == fresh and rescans == [1] and fetched.call_count == 2
+rescans.clear()
+with mock.patch.object(audit, "row_for", return_value=fresh), \
+     mock.patch.object(audit, "forge_refs", return_value=("new", "main", main_oid)), \
+     mock.patch.object(audit, "fetch_mr_refs", side_effect=AssertionError("a fresh scan needs no fetch")):
+    assert audit.refresh_stale_scan(mwt) == fresh and not rescans
+assert audit.push_scan_stale(mwt, {**fresh, "goal": ""})  # no goal in the scan: refresh
+assert not audit.push_scan_stale(mwt, {"path": mwt, "goal": "g"})  # no MR: nothing to compare, the gate decides
+with mock.patch.object(audit, "forge_refs", return_value=("new", "main", "f" * 40)):
+    assert audit.push_scan_stale(mwt, fresh)  # local origin/main behind the forge's target
+gm("update-ref", "refs/remotes/origin/feat", gm("rev-parse", "HEAD"))
+with mock.patch.object(audit, "forge_refs", return_value=("new", "main", main_oid)):
+    assert not audit.push_scan_stale(mwt, fresh) and audit.push_scan_stale(mwt, fresh, execute=True)  # source ref only matters to push
+with mock.patch.object(audit, "git", return_value="") as fg:
+    assert audit.fetch_mr_refs(mwt, {"mr": {"target_branch": "main", "source_branch": "-x"}})
+    assert fg.call_args.args[1:] == ("fetch", "-q", "origin", "+refs/heads/main:refs/remotes/origin/main")  # never an option-shaped ref
+
+# ---- the diag reason token for a refused gate: a fixed vocabulary, never the message
+assert audit.block_reason("AUDIT ERROR RuntimeError: scanned MR head or local target ref is stale; rescan and fetch before the push audit: don't push") == "stale_scan"
+assert audit.block_reason("AUDIT ERROR ValueError: diff too large to audit (1 chars, over 30 parts of 45000): don't push") == "too_large"
+assert audit.block_reason("AUDIT ERROR something new and secret-ish: don't push") == "other"
+assert audit.block_reason("BLOCKED SafeToPublish (no_secrets_or_pii, p=1.00, scan): Is this text free") == "SafeToPublish.scan"
+assert audit.block_reason("BLOCKED NoScopeCreep (diff_matches_goal#2, p=0.97, haiku): Does every") == "NoScopeCreep"
+assert audit.block_reason("audit passed: push") is None
+import diag
+assert all(diag.TOKEN.fullmatch(t) for _, t in audit.BLOCK_REASONS) and "reason" in diag.KEYS
+inner = io.StringIO(); tee = audit._Tee(inner)
+assert tee.write("BLOCKED NoScopeCreep (diff_matches_goal, p=0.90, jev): x\n") > 0
+tee.flush(); assert inner.getvalue() == tee.buf.getvalue() and audit.block_reason(tee.buf.getvalue()) == "NoScopeCreep"
+print("unstick ok")

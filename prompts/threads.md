@@ -3,7 +3,7 @@ Resolve the open review threads on {mr} ({url}), "{title}", {branch} → {target
 Open threads:
 {threads}
 
-1. git fetch; make sure {branch} is checked out at {sha} with a clean tree. Stop and tell me if it isn't.
+1. git fetch; make sure {branch} is checked out with a clean tree and its HEAD contains {sha} (`git merge-base --is-ancestor {sha} HEAD`). Commits on top of {sha} are earlier unpushed work: keep them, and carry them through the steps below. Stop and tell me only if the tree isn't clean or HEAD doesn't contain {sha}.
 
 2. For each thread, read the whole discussion (glab or gh, whichever hosts this repo) and the code it points at, as it is now.
 

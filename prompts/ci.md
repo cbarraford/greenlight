@@ -3,7 +3,7 @@ Fix the failed pipeline on {mr} ({url}), {branch} at {sha}: {pipeline_url}. Foll
 Failed jobs:
 {failed_jobs}
 
-1. git fetch; make sure {branch} is checked out at {sha} with a clean tree. Stop and tell me if it isn't.
+1. git fetch; make sure {branch} is checked out with a clean tree and its HEAD contains {sha} (`git merge-base --is-ancestor {sha} HEAD`). Commits on top of {sha} are earlier unpushed work: keep them, and carry them through the steps below. Stop and tell me only if the tree isn't clean or HEAD doesn't contain {sha}.
 
 2. Read each failed job's log (glab ci trace, or gh run view --log-failed). Find the first real error, not the last line.
 
