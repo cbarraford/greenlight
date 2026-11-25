@@ -30,7 +30,7 @@
   --bg:var(--ds-bg-canvas); --surface:var(--ds-bg-surface); --raised:var(--ds-bg-raised); --sunken:var(--ds-bg-sunken);
   --fill:var(--ds-element-rest); --fill-h:var(--ds-element-hover); --fill-a:var(--ds-element-active);
   --line:var(--ds-border-default); --line-h:var(--ds-border-hover); --faint:var(--ds-fg-faint);
-  --field:var(--ds-element-rest); --seg-on:var(--ds-element-active); --seg-e:none;  /* §10.4, §10.3: the dark halves */
+  --field:var(--ds-element-rest); --dfield:var(--sunken); --seg-on:var(--ds-element-active); --seg-e:none;  /* §10.4, §10.3: the dark halves */
   --accent-h:var(--ds-accent-hover); --accent-fg:var(--ds-accent-fg); --accent-sub:var(--ds-accent-subtle); --on-accent:var(--ds-accent-on-solid);
   /* depth */
   --e1:var(--ds-elevation-1); --e2:var(--ds-elevation-2); --e3:var(--ds-elevation-3); --scrim:var(--ds-elevation-scrim); --ring:var(--ds-ring);
@@ -42,8 +42,8 @@
   --r-xs:var(--ds-radius-xs); --r-sm:var(--ds-radius-sm); --r-md:var(--ds-radius-md); --r-lg:var(--ds-radius-lg); --r-full:var(--ds-radius-full);
   --t-fast:var(--ds-duration-fast); --t-base:var(--ds-duration-base); --t-slow:var(--ds-duration-slow); --ease:var(--ds-easing-out);
 }
-@media (prefers-color-scheme: light){:root{color-scheme:light;--field:var(--ds-bg-surface);--seg-on:var(--ds-bg-surface);--seg-e:var(--ds-elevation-1)}}
-:root[data-appearance="light"]{color-scheme:light;--field:var(--ds-bg-surface);--seg-on:var(--ds-bg-surface);--seg-e:var(--ds-elevation-1)} :root[data-appearance="dark"]{color-scheme:dark;--field:var(--ds-element-rest);--seg-on:var(--ds-element-active);--seg-e:none}
+@media (prefers-color-scheme: light){:root{color-scheme:light;--field:var(--ds-bg-surface);--dfield:var(--ds-bg-surface);--seg-on:var(--ds-bg-surface);--seg-e:var(--ds-elevation-1)}}
+:root[data-appearance="light"]{color-scheme:light;--field:var(--ds-bg-surface);--dfield:var(--ds-bg-surface);--seg-on:var(--ds-bg-surface);--seg-e:var(--ds-elevation-1)} :root[data-appearance="dark"]{color-scheme:dark;--field:var(--ds-element-rest);--dfield:var(--sunken);--seg-on:var(--ds-element-active);--seg-e:none}
 html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--fg);font:400 var(--fs-body)/16px var(--font);letter-spacing:var(--ds-type-body-track)}
 body{display:flex}
 #main{display:flex;flex-direction:column;flex:1;min-width:0}
@@ -194,9 +194,9 @@ button:focus-visible,.tab:focus-visible,select:focus-visible,summary:focus-visib
 #lnk button:hover{background:var(--fill)}
 
 /* ---- ⌘J (§10.15 palette): raised, radius lg, elevation 3, a light scrim; frequent, so it opens instantly ---- */
-#pal{position:fixed;inset:0;z-index:10;display:flex;justify-content:center;align-items:flex-start;padding-top:20vh} #pal[hidden]{display:none}
+#pal{position:fixed;inset:0;z-index:10;display:flex;justify-content:center;align-items:flex-start;padding-top:20vh;padding-top:round(down,20vh,1px)} #pal[hidden]{display:none}
 #pal .pbox{width:min(880px,94vw);height:min(560px,72vh);display:flex;flex-direction:column;border-radius:var(--r-lg);overflow:hidden;background:var(--raised);color:var(--fg);box-shadow:var(--e3)}
-#pal .hd{height:44px;flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 8px 0 12px;color:var(--faint);box-shadow:inset 0 -1px 0 var(--hair)}
+#pal .hd{height:44px;flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 16px 0 12px;color:var(--faint);box-shadow:inset 0 -1px 0 var(--hair)}
 #pal input{flex:1;min-width:0;height:32px;border:0;outline:0;background:none;color:var(--fg);font:400 var(--fs-tsm)/20px var(--font)}
 #pal input::placeholder{color:var(--faint)}
 #pal .mode{height:20px;display:flex;align-items:center;padding:0 6px;border-radius:var(--r-xs);background:var(--fill);color:var(--dim);font:500 var(--fs-cap)/14px var(--font)} #pal [hidden]{display:none}
@@ -220,9 +220,9 @@ button:focus-visible,.tab:focus-visible,select:focus-visible,summary:focus-visib
 #pres .nil{display:flex;flex-direction:column;align-items:center;gap:4px;padding:48px 0;color:var(--dim);font-size:var(--fs-lbl)} #pres .nil div{color:var(--fg);font:600 var(--fs-tsm)/20px var(--font)}
 #pv{width:290px;flex-shrink:0;box-sizing:border-box;display:flex;flex-direction:column;gap:16px;padding:16px;overflow:hidden;box-shadow:inset 1px 0 0 var(--hair)}
 #pv .k{color:var(--dim);font:500 var(--fs-lbl)/16px var(--font)}
-#pv dl{display:grid;grid-template-columns:64px minmax(0,1fr);row-gap:8px;margin:0} #pv dt{color:var(--dim);font-size:var(--fs-lbl)} #pv dd{color:var(--fg);margin:0;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere}
+#pv dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:8px 12px;margin:0} #pv dt{color:var(--dim);font-size:var(--fs-lbl)} #pv dd{color:var(--fg);margin:0;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere}
 #pv p{margin:0;font:400 var(--fs-body)/19px var(--font);white-space:pre-line} #pv .sc{margin-top:auto;display:flex;align-items:center;gap:8px;font-size:var(--fs-lbl);color:var(--dim)}
-#pv .tl{flex:0 1 auto;min-height:0;display:flex;flex-direction:column;gap:8px} #pv pre{flex:0 1 auto;min-height:0;display:flex;flex-direction:column;justify-content:flex-end;overflow:hidden;margin:0;padding:8px;border-radius:var(--r-md);background:var(--sunken);font:400 var(--fs-cap)/18px var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
+#pv .tl{flex:0 1 auto;min-height:0;display:flex;flex-direction:column;gap:8px} #pv pre{flex:0 1 auto;min-height:0;display:flex;flex-direction:column;justify-content:flex-end;overflow:hidden;margin:0;padding:8px;border-radius:var(--r-md);background:var(--sunken);font:400 var(--fs-cap)/18px var(--mono);white-space:pre}
 #pal .ft{height:32px;flex-shrink:0;display:flex;align-items:center;gap:16px;padding:0 12px;overflow:hidden;white-space:nowrap;font:400 var(--fs-cap)/14px var(--font);color:var(--dim);box-shadow:inset 0 1px 0 var(--hair)} #pal .ft span{display:flex;align-items:center;gap:4px} #pal .ft .end{margin-left:auto}
 #pres .sd{flex-shrink:0;color:var(--dim);font-size:var(--fs-cap)}
 @media (max-width:640px){#pv{display:none}}
@@ -285,7 +285,7 @@ button:focus-visible,.tab:focus-visible,select:focus-visible,summary:focus-visib
 #card .ports .pr button,#card .ports>button{height:24px;padding:0 8px;border:0;border-radius:var(--r-sm);background:var(--fill);color:var(--fg);font:500 var(--fs-cap)/14px var(--font)} #card .ports .pr button:hover{background:var(--fill-h)}
 
 /* ---- dialogs (§10.15): raised, radius lg, elevation 3, on the scrim; 480 (ask), 640 (forms), 880 (Colours, Diff, Projects) ---- */
-#dlg{position:fixed;inset:0;z-index:11;display:flex;justify-content:center;align-items:flex-start;padding-top:16vh;background:var(--scrim)} #dlg[hidden]{display:none} #dlg:has(form.big){align-items:center;padding-top:0}
+#dlg{position:fixed;inset:0;z-index:11;display:flex;justify-content:center;align-items:flex-start;padding-top:16vh;padding-top:round(down,16vh,1px);background:var(--scrim)} #dlg[hidden]{display:none} #dlg:has(form.big){align-items:center;padding-top:0}
 #dlg form{width:min(480px,90vw);box-sizing:border-box;padding:16px;border-radius:var(--r-lg);background:var(--raised);color:var(--fg);box-shadow:var(--e3);display:grid;gap:12px;animation:pop var(--t-slow) var(--ease)}
 #dlg .ic{display:flex;align-items:center;justify-content:center;width:32px;height:32px}
 #dlg h3{margin:0 0 4px;font:600 var(--fs-t)/22px var(--font);letter-spacing:var(--ds-type-title-track)} #dlg p{margin:0;color:var(--dim);font:400 var(--fs-body)/19px var(--font)} #dlg code{color:var(--fg);font:400 var(--fs-cap)/14px var(--mono)}
@@ -307,8 +307,8 @@ button:focus-visible,.tab:focus-visible,select:focus-visible,summary:focus-visib
 #dlg .dz{display:grid;grid-template-columns:1fr 1fr;gap:8px} #dlg .dz button{height:auto;display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:8px 12px;border-radius:var(--r-md);text-align:left}
 #dlg .dz button[aria-pressed=true]{box-shadow:0 0 0 2px var(--raised),0 0 0 4px var(--focus)} #dlg .dz .dots{display:flex;gap:4px} #dlg .dz i{width:12px;height:12px;border-radius:var(--r-full)}
 #dlg form.wide{width:min(640px,92vw);max-height:72vh;overflow-y:auto} #dlg h4{margin:4px 0 0;color:var(--fg);font:600 var(--fs-body)/16px var(--font)}
-/* inputs (§10.4): 28 tall, sunken, a default border; focus is the accent */
-#dlg input[type=text],#dlg select,#dlg textarea{box-sizing:border-box;width:100%;min-height:28px;padding:0 8px;border:0;border-radius:var(--r-sm);background:var(--sunken);color:var(--fg);font:400 var(--fs-body)/16px var(--font);outline:0;box-shadow:inset 0 0 0 1px var(--line)}
+/* inputs (§10.4): 28 tall, the text background in light and sunken in dark (the dialog is already element.rest's grey), a default border; focus is the accent */
+#dlg input[type=text],#dlg select,#dlg textarea{box-sizing:border-box;width:100%;min-height:28px;padding:0 8px;border:0;border-radius:var(--r-sm);background:var(--dfield);color:var(--fg);font:400 var(--fs-body)/16px var(--font);outline:0;box-shadow:inset 0 0 0 1px var(--line)}
 #dlg input[type=text]:hover,#dlg select:hover,#dlg textarea:hover{box-shadow:inset 0 0 0 1px var(--line-h)}
 #dlg input[type=text]:focus,#dlg select:focus,#dlg textarea:focus{box-shadow:inset 0 0 0 1px var(--focus),var(--ring)} #dlg textarea{padding:8px;resize:vertical;font:400 var(--fs-body)/19px var(--font)}
 #dlg input::placeholder,#dlg textarea::placeholder{color:var(--faint)}
@@ -336,7 +336,7 @@ button:focus-visible,.tab:focus-visible,select:focus-visible,summary:focus-visib
 #dlg .big .seg button:hover:not(:disabled){background:none;color:var(--fg)} #dlg .big .seg [aria-pressed=true],#dlg .big .seg [aria-checked=true]{background:var(--seg-on);color:var(--fg);box-shadow:var(--seg-e)} #dlg .seg kbd{color:var(--faint)}
 /* open projects: a filter, then a tile per project */
 #dlg .nwb{display:grid;align-content:start;gap:12px;padding:0 16px 16px;overflow-y:auto}
-#dlg label.find{gap:8px;height:28px;padding:0 8px;border-radius:var(--r-sm);background:var(--sunken);box-shadow:inset 0 0 0 1px var(--line);color:var(--faint)} #dlg label.find:focus-within{box-shadow:inset 0 0 0 1px var(--focus),var(--ring)}
+#dlg label.find{gap:8px;height:28px;padding:0 8px;border-radius:var(--r-sm);background:var(--dfield);box-shadow:inset 0 0 0 1px var(--line);color:var(--faint)} #dlg label.find:focus-within{box-shadow:inset 0 0 0 1px var(--focus),var(--ring)}
 #dlg .big .find input[type=text]{flex:1;height:26px;padding:0;background:none;box-shadow:none}
 #dlg .nws .fld{display:grid;gap:4px} #dlg .nws .fld>span{color:var(--fg);font:500 var(--fs-lbl)/16px var(--font)} #dlg .nws .chk{display:flex;align-items:center;gap:8px} #dlg .nws [hidden]{display:none} #dlg .nws code{font:400 var(--fs-cap)/14px var(--mono);color:var(--dim)}
 /* Diff: files on the left, the patch on the right; a click on a line opens a note to Claude under it (§10.16) */
@@ -394,7 +394,7 @@ button:focus-visible,.tab:focus-visible,select:focus-visible,summary:focus-visib
 #dlg .big .dz.sm button[aria-pressed=true]{box-shadow:0 0 0 2px var(--raised),0 0 0 4px var(--focus)}
 #dlg .dz.sm .th{display:flex;gap:4px;height:32px;box-sizing:border-box;padding:8px 8px 0} #dlg .dz.sm .th i{width:24px;height:auto;border-radius:var(--r-xs) var(--r-xs) 0 0} #dlg .dz.sm .th i+i{flex:1;background:var(--term-bg)}
 #dlg .dz.sm .nm{display:flex;align-items:center;gap:4px;padding:8px;font:600 var(--fs-cap)/14px var(--font)} #dlg .dz.sm .nm i{width:8px;height:8px}
-#dlg .ask{display:flex;align-items:center;gap:8px;padding:2px 2px 2px 8px;border-radius:var(--r-sm);background:var(--sunken);box-shadow:inset 0 0 0 1px var(--line)} #dlg .ask:focus-within{box-shadow:inset 0 0 0 1px var(--focus),var(--ring)}
+#dlg .ask{display:flex;align-items:center;gap:8px;padding:2px 2px 2px 8px;border-radius:var(--r-sm);background:var(--dfield);box-shadow:inset 0 0 0 1px var(--line)} #dlg .ask:focus-within{box-shadow:inset 0 0 0 1px var(--focus),var(--ring)}
 #dlg .big .ask input[type=text]{flex:1;height:24px;padding:0;background:none;box-shadow:none} #dlg .big .ask button{height:24px;padding:0 8px}
 #dlg details{flex-shrink:0;border-radius:var(--r-md);background:var(--surface);box-shadow:inset 0 0 0 1px var(--hair)} #dlg summary{padding:8px 12px;color:var(--fg);font:600 var(--fs-body)/16px var(--font);border-radius:var(--r-md)}
 #dlg .ev{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:2px 16px;padding:0 12px 8px} #dlg .ev label{min-width:0;gap:8px;padding:4px 0;color:var(--dim);font-size:var(--fs-lbl)} #dlg .ev input[type=color]{flex:0 0 auto;width:24px;height:20px;padding:0;border:0;border-radius:var(--r-xs);background:none}
@@ -404,7 +404,7 @@ button:focus-visible,.tab:focus-visible,select:focus-visible,summary:focus-visib
 #dlg .nwq .q{display:grid;gap:4px;margin-bottom:12px} #dlg .nwq .q>span{font-weight:600} #dlg .nwq .opts{display:flex;flex-wrap:wrap;gap:4px}
 #dlg .nwq .opts button{height:24px;padding:0 8px;border-radius:var(--r-sm);background:var(--fill);color:var(--dim)}
 #dlg .nwq .opts button[aria-pressed=true]{background:var(--accent-sub);color:var(--accent-fg)}
-#dlg .nwq input{height:28px;padding:0 8px;border:0;border-radius:var(--r-sm);background:var(--sunken);box-shadow:inset 0 0 0 1px var(--line);color:inherit;font:inherit}
+#dlg .nwq input{height:28px;padding:0 8px;border:0;border-radius:var(--r-sm);background:var(--dfield);box-shadow:inset 0 0 0 1px var(--line);color:inherit;font:inherit}
 #dlg .nws .two{display:grid;grid-template-columns:1fr 1fr;gap:12px} #dlg .nws .tiles label:first-child{grid-column:auto} #dlg .nws .tile small{white-space:normal}
 #dlg .nws .tile code{display:block;margin:4px 0;padding:2px 6px;border-radius:var(--r-xs);background:var(--sunken);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #dlg .nws .tile.none code{display:inline;margin:0;padding:0 4px} #dlg .tile.none{display:flex;gap:12px;padding:12px;border-radius:var(--r-md);box-shadow:inset 0 0 0 1px var(--hair);color:var(--dim)} #dlg .tile.none[hidden],#dlg .nws [hidden]{display:none} #dlg .dh .stk .sub{white-space:normal} #dlg .tile.none b{color:var(--fg)}
@@ -1173,7 +1173,7 @@ const facts = new Map();  // path → dash.py tree info, so the next open starts
 const dfn = o => o && (o.added || o.removed) ? `+${o.added | 0} −${o.removed | 0}` : "";  // the card's Diff button: branch plus uncommitted, in lines
 const EDITOR = q.get("editor") || "Editor";  // the app's pick: Zed, Cursor or VS Code
 // a small modal: an icon, a title, some text (html) or risk rows, an optional checkbox → {checked} or null
-function ask({icon, title, text, note, rows = [], check, ok = "OK", danger, cancel = "Cancel", safe}){
+function ask({icon, title, text, note, rows = [], check, ok = "Close", danger, cancel = "Cancel", safe}){
   const d = $("dlg"), f = el("form"); f.setAttribute("role", "dialog"); f.setAttribute("aria-label", title);
   f.innerHTML = (icon ? `<span class="ic ${icon === "trash" ? "k-r" : "k-o"}">${icon === "trash" ? IC.trash(17) : IC.warn}</span>` : "")
     + `<div><h3>${esc(title)}</h3>${text ? `<p>${text}</p>` : ""}</div>` + (note ? `<div class="note k-g">${g16(G.ok)}${note}</div>` : "")
@@ -2227,7 +2227,7 @@ function newWsAsk(o){
 }
 function newWsDialog(){
   const repos = trees.filter(w => w.main && w.ade), here = mainOf(curWs) || (activeOnly() && repos.find(inView));  // this workspace's repo, else (a project window) one of its own
-  if (!repos.length) return ask({icon: "warn", title: "No repos yet", text: "A repo shows up here once its main checkout is in an ADE, or (GREENLIGHT_ADE=basement) once a Basement shell has been in it.", cancel: false});
+  if (!repos.length) return ask({title: "No repos yet", text: "A repo shows up here once its main checkout is in an ADE, or (GREENLIGHT_ADE=basement) once a Basement shell has been in it.", cancel: false});
   const body = el("div", "nwb nws"), two = el("div", "two"), fld = (label, inp, into = body) => { const l = el("label", "fld"); l.append(Object.assign(el("span"), {textContent: label}), inp); into.append(l); return inp };
   body.append(two);
   const sel = fld("Repo", el("select"), two);
