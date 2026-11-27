@@ -1021,6 +1021,16 @@ test("new workspace: its row shows at once, and its section and project open if 
   await page.click("#tree .grp.prj:has-text('acme/widgets')"); await page.evaluate(t => term.workspaces({trees: [...t, {ade: "orca", project: "acme/widgets", name: "new-one", path: "/w/new-one", branch: "new-one", main: false, agent: "working"}]}), TREES.trees);
   assert.deepEqual(await row(), [], "shut it yourself afterwards: it stays shut");
 });
+test("new workspace: treeDone attaches to the returned Basement tmux session", async page => {
+  await page.evaluate(() => term.tree({op: "new", path: "/w/new-sess", repo: "/w/widgets", ok: true, session: "mc-1234abcd"}));
+  const opened = (await posts(page, "open")).pop();
+  assert.equal(opened.ws, "/w/new-sess");
+  assert.equal(opened.session, "mc-1234abcd", "attaches to the returned tmux session");
+  await page.evaluate(() => term.tree({op: "new", path: "/w/new-bad", repo: "/w/widgets", ok: true, session: "bad-session"}));
+  const fallback = (await posts(page, "open")).pop();
+  assert.equal(fallback.ws, "/w/new-bad");
+  assert.match(fallback.session, /^mc-/, "invalid session falls back to a fresh mc- session");
+});
 test("Hosts is the first section, above Needs you and Working", async page => {
   await page.evaluate(() => { newTab("/w/fix-login"); newTab("/w/sidebar"); const [a, b] = [...panes.values()]; a.title = "✳ asks"; a.bell = true; b.title = "⠋ busy"; b.st = "work"; render() });
   assert.deepEqual(await page.$$eval("#tree .box", b => b.map(x => x.className).slice(0, 4)), ["box s-host", "box s-need", "box s-work", "box s-ws"]);
