@@ -176,5 +176,7 @@ def dispatch(b, *args):
 
 
 def call(*args, n=None):
-    """dispatch() on the backend in use (or n). Orca takes its own CLI's arguments whole."""
+    """Dispatch live workspace operations only through the native backend."""
+    if n is not None and canonical(n) != DEFAULT:
+        raise RuntimeError(f"{n} is an import source, not a live workspace backend")
     return get(n).call(*args)

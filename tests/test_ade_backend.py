@@ -133,6 +133,9 @@ def test_greenlight_orca_routes_through_the_backend(home, monkeypatch):
     monkeypatch.setenv("GREENLIGHT_ADE", "orca")
     with pytest.raises(RuntimeError, match="live ADE backends are retired"):
         greenlight.orca("worktree", "ps")
+    for source in ade.LEGACY:
+        with pytest.raises(RuntimeError, match="import source"):
+            ade.call("worktree", "create", n=source)
 
 
 def test_orca_adapter_is_import_only(home):
