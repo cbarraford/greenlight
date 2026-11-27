@@ -65,6 +65,7 @@ Then run `/greenlight` in Claude Code, or add a scheduled run with `auto.py add`
 with no LLM session, `auto.py add greenlight --schedule "*/30 * * * *" --orchestrator` runs `orchestrate.py tick`.
 
 Greenlight can run on another machine (a dev box that's always on): put the checkout there, and pick it in the app's **Settings › Hosts** (any `Host` in `~/.ssh/config`; **Test** checks it, then relaunch), or set `GREENLIGHT_HOST`. `scripts/sync.sh` copies a local checkout to that host.
+When a remote host is selected, Greenlight Center combines its workspaces with those on the local Mac, regardless of which host runs Chief or each repo. The Basement also lists workspaces from both machines; its other SSH hosts are shell destinations.
 
 > **Safety.** Agents run with safe permissions by default. Setting `bypass` for a harness (below) lets an agent run any
 > command unattended: only do that on a machine you're comfortable letting an agent drive.
