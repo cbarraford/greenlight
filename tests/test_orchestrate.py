@@ -865,8 +865,8 @@ stale["card"] = "stale-backfill"
 with mock.patch.object(orchestrate, "live_worktree", return_value={"worktreeId": stale["id"], "branch": stale["branch"], "comment": ""}), \
         mock.patch.object(greenlight, "gl", return_value=[{"iid": 2}]), \
         mock.patch.object(greenlight, "orca") as set_worktree:
-    assert "changed since scan" in orchestrate.act_one(stale, stale["name"], {"do": "goal", "goal": "Merge !1: stale"}, {})[0]
-    set_worktree.assert_not_called()
+    assert "backfilled" in orchestrate.act_one(stale, stale["name"], {"do": "goal", "goal": "Merge !1: stale"}, {})[0]
+    set_worktree.assert_not_called()  # native backfill records the goal without adding an Orca link
 live_link = {"worktreeId": stale["id"], "branch": stale["branch"], "comment": "", "linkedGitLabMR": None}
 def link_during_lookup(*a, **kw):
     if a[:2] == ("worktree", "ps"):
@@ -874,11 +874,10 @@ def link_during_lookup(*a, **kw):
     if a[:2] == ("worktree", "show"):
         return {"worktree": live_link}
     raise AssertionError("operator's new link must not be overwritten")
-def lookup_then_link(*a):
-    live_link["linkedGitLabMR"] = 2
-    return [{"iid": 1}]
-with mock.patch.object(greenlight, "orca", side_effect=link_during_lookup), mock.patch.object(greenlight, "gl", side_effect=lookup_then_link):
-    assert "link or goal changed during backfill" in orchestrate.act_one(stale, stale["name"], {"do": "goal", "goal": "Merge !1: stale"}, {})[0]
+live_link["linkedGitLabMR"] = 2
+with mock.patch.object(greenlight, "orca", side_effect=link_during_lookup), mock.patch.object(greenlight, "gl") as lookup:
+    assert "changed since scan" in orchestrate.act_one(stale, stale["name"], {"do": "goal", "goal": "Merge !1: stale"}, {})[0]
+    lookup.assert_not_called()  # native backfill checks the live link without an Orca lookup
 greenlight.orca = fake_orca
 print("act ok")
 

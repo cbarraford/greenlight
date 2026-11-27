@@ -137,7 +137,7 @@ def test_gather_reports_a_failing_source(home, monkeypatch):
 
 
 def test_run_cli_and_dash_ops(home, monkeypatch):
-    monkeypatch.setenv("GREENLIGHT_ADE", "orca")  # the detect answer's `native` below: never the shell's backend
+    monkeypatch.setenv("GREENLIGHT_ADE", "native")
     git_init(home / "code" / "x")
     monkeypatch.setattr(importers, "detect", lambda: {"orca": False, "t3": False, "cmux": False, "herdr": False, "folder": True})
     assert importers.run(["preview"])["repos"] == []  # folder needs a --path: nothing detected to read
@@ -150,7 +150,7 @@ def test_run_cli_and_dash_ops(home, monkeypatch):
     assert p["repos"] == [str((home / "code" / "x").resolve())] and ade_basement.saved() == []
     ask = lambda verb, o: dash.settings(f"import-{verb}", "-", json.dumps(o))
     d = ask("detect", {})
-    assert d["sources"]["folder"] is True and d["native"] is False and d["repos"] == 0  # the first-launch offer's gate
+    assert d["sources"]["folder"] is True and d["native"] is True and d["repos"] == 0
     monkeypatch.setenv("GREENLIGHT_ADE", "native")
     ade_basement.remember(str((home / "code" / "x").resolve()))
     assert ask("detect", {})["native"] is True and ask("detect", {})["repos"] == 1
@@ -175,8 +175,6 @@ def test_first_run_imports_once_on_native(home, monkeypatch):
     monkeypatch.setattr(importers, "detect", lambda: {"orca": True, "t3": False, "cmux": False, "herdr": False, "folder": True})
     calls = []
     monkeypatch.setattr(importers.ade, "get", lambda n: calls.append(n) or fake_backend([{"path": str(r), "repoId": str(r), "comment": "Main goal"}]))
-    monkeypatch.setenv("GREENLIGHT_ADE", "orca")
-    assert importers.first_run() is None and calls == []  # Orca in use: nothing to import into
     monkeypatch.setenv("GREENLIGHT_ADE", "native")
     assert importers.first_run() == {"repos": 1, "goals": 1, "sources": {"orca": {"repos": 1, "goals": 1}}, "pending": [], "attempts": 1}
     assert calls == ["orca", "orca"] and ade_basement.saved() == [str(r.resolve())] and ade_common.goals() == {str(r): "Main goal"}
@@ -244,7 +242,7 @@ def test_doctor_flags_a_deprecated_driver(home, monkeypatch):
     monkeypatch.undo()
     monkeypatch.setenv("GREENLIGHT_ADE", "herdr")
     chk = next(c for c in diag.doctor(quick=True)["checks"] if c["check"] == "ade")
-    assert chk["ok"] is False and chk["state"] == "deprecated"
+    assert chk["ok"] is False and chk["state"] == "invalid"
     monkeypatch.setenv("GREENLIGHT_ADE", "native")
     chk = next(c for c in diag.doctor(quick=True)["checks"] if c["check"] == "ade")
     assert chk["ok"] is True and chk["state"] == "native"

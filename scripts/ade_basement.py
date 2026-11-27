@@ -1,6 +1,6 @@
 """Native backend (GREENLIGHT_ADE=native; `basement` is its old name): greenlight's own engine, ade.py's contract.
 
-No ADE app at all: worktrees are git's, terminals are the Greenlight app's own tmux server (`tmux -L greenlight`), and an
+No ADE app at all: worktrees are managed with Worktrunk, terminals are the Greenlight app's own tmux server (`tmux -L greenlight`), and an
 agent is a pane whose title Claude sets (braille spinner = working, ✳ = idle). Repos are the main checkouts of every pane's
 folder plus the ones listed in ~/.greenlight/repos.json (each worktree this makes adds its repo there). An agent some
 other ADE or terminal runs in a worktree (external.py) is listed too, as working and `external`: never driven, never
@@ -22,7 +22,8 @@ import harness
 import last_agent
 import ade
 import ade_common
-from ade_common import MENU_ITEM_RE, draft, git, git_info, goals, plain, repo_list, screen_state, worktree_add, worktree_remove
+import worktrunk
+from ade_common import MENU_ITEM_RE, draft, git, git_info, goals, plain, repo_list, screen_state
 
 HOME = Path(os.environ.get("GREENLIGHT_HOME") or Path.home() / ".greenlight")
 REPOS, BRIEFS = HOME / "repos.json", HOME / "briefs"
@@ -295,7 +296,7 @@ def remove(worktree_id, force=False):
         raise RuntimeError(f"{worktree_id} is a repo's main checkout: it is never removed")
     if out := outside(ws["path"], [w["path"] for w in trees]):
         raise RuntimeError(f"{out} runs in {worktree_id} outside Greenlight: it isn't removed under it")
-    worktree_remove(ws, force=force)
+    worktrunk.remove(ws["repoId"], ws["path"], force=force)
     ade_common.set_goal(ws["path"], "")
 
 
@@ -311,8 +312,8 @@ def create(repo, name, base=None, comment="", agent=None, prompt=""):
         repo = named[0]
     if not (main := main_checkout(repo)):
         raise RuntimeError(f"not a git checkout: {repo}")
-    path = worktree_add(main, name, base)
     remember(main)
+    path = worktrunk.create(main, name, base)
     if comment:
         ade_common.set_goal(path, comment)
     out: dict = {"worktree": {"id": path, "path": path}}

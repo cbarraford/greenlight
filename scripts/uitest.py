@@ -158,6 +158,40 @@ def _install_stub_harnesses(bindir: Path):
         p.chmod(0o755)
 
 
+def _native_worktrees(root, home, worktrees, rows):
+    """Give the UI fixtures real, isolated Git worktrees for the native backend."""
+    mains, goals, ids = {}, {}, {}
+    for i, w in enumerate(worktrees):
+        path = Path(w["path"])
+        if not path.is_dir():
+            continue  # the corrupt fixture intentionally includes a missing checkout
+        name = str(w.get("repo") or "widgets")
+        if name not in mains:
+            main = root / "repos" / name
+            main.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["git", "init", "-q", "-b", "main", str(main)], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(main), "-c", "user.name=uitest", "-c", "user.email=uitest@localhost",
+                            "commit", "-q", "--allow-empty", "-m", "fixture"], check=True, capture_output=True)
+            mains[name] = main
+        branch = str(w.get("branch") or "").removeprefix("refs/heads/")
+        valid = subprocess.run(["git", "check-ref-format", "--branch", branch], capture_output=True).returncode == 0
+        branch = branch if valid else f"fixture-{i}"
+        path.rmdir()
+        subprocess.run(["git", "-C", str(mains[name]), "worktree", "add", "-q", "-b", branch, str(path), "main"],
+                       check=True, capture_output=True)
+        path.mkdir(parents=True, exist_ok=True)  # a mocked git in a unit test does not create it
+        ids[w["worktreeId"]] = str(path)
+        w.update(id=str(path), worktreeId=str(path), repoId=str(mains[name]), branch=branch)
+        if isinstance(w.get("comment"), str) and w["comment"]:
+            goals[str(path)] = w["comment"]
+    for row in rows:
+        if row.get("id") in ids:
+            row["id"] = ids[row["id"]]
+    (home / "repos.json").write_text(json.dumps([str(p) for p in mains.values()]))
+    (home / "goals.json").write_text(json.dumps(goals))
+    (home / "imported.json").write_text("{}")
+
+
 def _make_fixture(root: Path, fixture: str):
     home = root / "home"
     bindir = root / "bin"
@@ -306,6 +340,7 @@ def _make_fixture(root: Path, fixture: str):
         "llm_harness": "claude",
         "harnesses": stub_harnesses,
     }))
+    _native_worktrees(root, home, worktrees, rows)
     (home / "last.json").write_text(json.dumps({"ts": int(time.time()), "rows": rows}))
 
     # Ensure every worktree entry has id & repoId so both `orca worktree ps` and `orca worktree list` work cleanly.
@@ -495,9 +530,8 @@ class UITestSession:
             "GREENLIGHT_CODE": str(ROOT),
             "GREENLIGHT_WEB_DIR": str(webdir),
             "GREENLIGHT_TMUX_SOCKET": self.tmux_socket,
-            "GREENLIGHT_ADE": "orca",
+            "GREENLIGHT_ADE": "native",
             "GREENLIGHT_USAGE": os.environ.get("GREENLIGHT_USAGE", "off"),
-            "ORCA_CLI_COMMAND": str(bindir / "orca"),
             "PATH": f"{bindir}:{os.environ.get('PATH', '')}",
         }
         env.pop("GREENLIGHT_UITEST_SUITE", None)  # never one inherited from the caller's shell: that would share its defaults

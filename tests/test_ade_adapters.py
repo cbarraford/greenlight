@@ -272,9 +272,9 @@ def test_basement_full_lifecycle(tmp_path):
         mock.patch.object(ade_basement, "tmux", side_effect=tracking_tmux),
         mock.patch.object(ade_basement, "git", return_value="worktree /w/widgets\nworktree /w/feat-1\n"),
         mock.patch.object(ade_basement, "git_info", side_effect=_fake_git_info),
-        mock.patch.object(ade_basement, "worktree_add", return_value="/w/new-wt"),
+        mock.patch.object(ade_basement.worktrunk, "create", return_value="/w/new-wt") as m_create,
         mock.patch.object(ade_basement, "main_checkout", side_effect=lambda r: r),  # /r/widgets is a fake repo
-        mock.patch.object(ade_basement, "worktree_remove") as m_rm,
+        mock.patch.object(ade_basement.worktrunk, "remove") as m_rm,
         mock.patch.object(ade_basement.subprocess, "run", return_value=subprocess.CompletedProcess(["tmux"], 0, stdout="", stderr="")),
         mock.patch.object(ade_basement.time, "sleep"),
     ):
@@ -307,10 +307,11 @@ def test_basement_full_lifecycle(tmp_path):
 
         created = ade_basement.call("worktree", "create", "--repo", "id:/r/widgets", "--name", "new-wt", "--comment", "Goal")
         assert created == {"worktree": {"id": "/w/new-wt", "path": "/w/new-wt"}}
+        m_create.assert_called_once_with("/r/widgets", "new-wt", None)
 
         removed = ade_basement.call("worktree", "rm", "--worktree", "/w/feat-1", "--force")
         assert removed == {"removed": "/w/feat-1"}
-        m_rm.assert_called_once()
+        m_rm.assert_called_once_with("/r/widgets", "/w/feat-1", force=True)
 
         assert ade_basement.call("repo", "list")["repos"][0]["id"] == "/r/widgets"
         with pytest.raises(RuntimeError, match="no native equivalent"):

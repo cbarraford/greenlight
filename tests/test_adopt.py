@@ -3,6 +3,8 @@ import json
 import subprocess
 from unittest import mock
 
+import pytest
+
 import adopt
 import greenlight
 
@@ -292,18 +294,14 @@ def test_create_args_and_git_fetch_calls(gl_home):
     mine = {"role": "author", "iid": 5, "title": "Fix x", "source_branch": "me/x", "repo": REPO_TN, "sha": "abc", "forge": "gitlab"}
     theirs = mine | {"role": "review", "iid": 6, "title": "Add y", "source_branch": "al/y"}
     assert adopt.create_args(mine, "origin/me/x") == [
-        "worktree", "create", "--name", "me/x", "--repo", "id:r-tn", "--base-branch", "origin/me/x",
-        "--gitlab-mr", "5", "--comment", "Merge !5: Fix x", "--setup", "skip",
+        "worktree", "create", "--name", "me/x", "--repo", "r-tn", "--base-branch", "origin/me/x",
+        "--comment", "Merge !5: Fix x", "--setup", "skip",
     ]
     assert adopt.create_args(theirs, "mr-6") == [
-        "worktree", "create", "--name", "mr-6", "--repo", "id:r-tn", "--base-branch", "mr-6",
-        "--gitlab-mr", "6", "--comment", "Review !6: Add y", "--setup", "skip",
+        "worktree", "create", "--name", "mr-6", "--repo", "r-tn", "--base-branch", "mr-6",
+        "--comment", "Review !6: Add y", "--setup", "skip",
     ]
-    with mock.patch.dict(adopt.os.environ, {"GREENLIGHT_ADE": "cmux"}):
-        assert adopt.create_args(theirs, "abc") == [
-            "worktree", "create", "--name", "mr-6", "--repo", "r-tn", "--base-branch", "abc",
-            "--comment", "Review !6: Add y", "--setup", "skip",
-        ]
+    assert adopt.create_args(theirs, "abc")[-4:] == ["--comment", "Review !6: Add y", "--setup", "skip"]
 
     def calls(c):
         with mock.patch.object(adopt, "git") as g, mock.patch.object(greenlight, "orca", return_value={"worktree": {}}) as o:
@@ -313,10 +311,10 @@ def test_create_args_and_git_fetch_calls(gl_home):
     g, o = calls(mine)
     assert g == [("fetch", "origin", "me/x")] and o[o.index("--base-branch") + 1] == "origin/me/x"
     g, o = calls(theirs)
-    assert g == [("fetch", "origin", "+refs/merge-requests/6/head:mr-6")] and o[o.index("--base-branch") + 1] == "mr-6"
-    with mock.patch.dict(adopt.os.environ, {"GREENLIGHT_ADE": "t3"}):
-        g, o = calls(theirs)
     assert g == [("fetch", "origin", "refs/merge-requests/6/head")] and o[o.index("--base-branch") + 1] == "abc"
+    with mock.patch.dict(adopt.os.environ, {"GREENLIGHT_ADE": "t3"}), \
+            pytest.raises(RuntimeError, match="live ADE backends are retired"):
+        calls(theirs)
 
 
 def test_ensure_branch_on_real_git_repo(gl_home, tmp_path):
@@ -398,7 +396,7 @@ def test_github_adopt_and_renamed_repo(gl_home):
     c = p["create"][0]
     assert (c["key"], c["role"], c["name"]) == ("o/r!5", "author", "b5"), c
     args = adopt.create_args(c, "origin/b5")
-    assert "Merge #5: t5" in args and args[args.index("--pr") + 1] == "5", args
+    assert "Merge #5: t5" in args and "--pr" not in args, args
 
     # a renamed GitHub repo: search says new/r, the ADE's remote (and greenlight's rows) still old/r
     def gh_ren(*a):

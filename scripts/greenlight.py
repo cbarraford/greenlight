@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""greenlight: work out the next lifecycle step, and who it's waiting on, for every Orca workspace.
+"""greenlight: work out the next lifecycle step, and who it's waiting on, for every Worktrunk workspace.
 
     greenlight.py scan [--json]   facts + next step per workspace; snapshot saved to ~/.greenlight/last.json. Each row also
                                   carries `life`: its lifecycle stage and sub-stage, who holds it, and the suggested move (lifestage.py)
@@ -18,8 +18,8 @@
     greenlight.py import [detect|preview|apply] [--from orca|t3|cmux|herdr|folder] [--path DIR]  another ADE's repos and
                                  goals into the native engine, read-only on its side (importers.py; preview changes nothing)
     greenlight.py repos [list|add|rm <path>...]  the native engine's repos (repos.json): every worktree of each is a workspace
-    greenlight.py ade <orca args>           an `orca`-shaped call answered by the backend in use (ade.py: native|orca|cmux|herdr|t3), JSON out;
-                                            `worktree create` stays on this machine (place_here; placement.py lists strays)
+    greenlight.py ade <orca-shaped args>    a compatibility JSON call answered by the native backend (ade.py);
+                                            Worktrunk creates and removes the worktrees
 
 Read-only: it never changes anything. The greenlight skill acts on `next.cmd` / `next.owner`.
 Deleting finished workspaces is cleanup.py's job (next to this file); creating workspaces for MRs
@@ -176,9 +176,7 @@ ME = os.environ.get("GREENLIGHT_ME") or CONFIG["me"] or whoami()
 
 
 def orca(*args, timeout=120):
-    """An `orca …`-shaped call, answered by the backend in use (ade.name(): native, orca, or a legacy driver) through
-    ade.py's contract, in Orca's shape. Under Orca, a `worktree create` goes through place_here first, so adopt.py's
-    and dash.py's workspaces stay on this machine too."""
+    """An Orca-shaped compatibility call answered by Greenlight's native backend."""
     if not ade.is_orca():
         return ade.call(*args)
     return orca_placed(*args, timeout=timeout)

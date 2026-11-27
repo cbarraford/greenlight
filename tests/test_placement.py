@@ -1,9 +1,11 @@
 """placement.py and greenlight.place_here: workspaces chief makes stay on its machine, and strays show up (#160)."""
 import json
+import os
 
 import pytest
 
 import dash
+import ade
 import greenlight
 import placement
 
@@ -20,6 +22,10 @@ def wt(name, host=None, agents=True, **k):
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
     monkeypatch.setenv("GREENLIGHT_ADE", "orca")  # placement is Orca's (hosts); native is the default since #195
+    # Exercise the historical host-placement implementation directly; production routes only to native workspaces.
+    monkeypatch.setattr(ade, "name", lambda: ade.canonical(os.environ.get("GREENLIGHT_ADE")) or "native")
+    monkeypatch.setattr(dash, "ades", lambda: tuple(dash.ADES) if dash.ADES else
+                        (("orca", "native") if ade.is_native() else ("orca", "cmux", "herdr", "t3")))
     monkeypatch.delenv("ORCA_ENVIRONMENT", raising=False)
     monkeypatch.setattr(greenlight, "here", lambda: "devbox")
     placement._MACHINES.update(at=0.0, map={})

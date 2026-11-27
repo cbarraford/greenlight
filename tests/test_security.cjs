@@ -28,29 +28,22 @@ const XSS_URL = 'javascript:window.__pwned=6';
       });
       await page.goto("file://" + path.join(ROOT, "app/dashboard.html"));
 
-      // Real dash.py snapshot contract test against fixture GREENLIGHT_HOME + stub orca
-      const home = path.join(dir, "home"), bindir = path.join(dir, "bin");
-      fs.mkdirSync(home, {recursive: true}); fs.mkdirSync(bindir, {recursive: true});
-      const orcaBin = path.join(bindir, "orca");
-      const orcaData = path.join(dir, "orca.json");
-      fs.writeFileSync(orcaData, JSON.stringify({
-        ok: true,
-        result: {
-          worktrees: [{
-            worktreeId: "wt-xss", displayName: "xss-ws-" + XSS_IMG, path: "/w/xss-ws",
-            repo: "widgets", branch: "feat/" + XSS_IMG, comment: "Ship " + XSS_IMG + " " + XSS_ATTR,
-            agents: [{state: "waiting", agentType: "claude", lastAssistantMessage: XSS_IMG, taskTitle: XSS_SCRIPT, toolName: XSS_IMG, toolInput: XSS_ATTR}],
-          }],
-        },
-      }));
-      fs.writeFileSync(orcaBin, `#!/bin/sh\ncat ${JSON.stringify(orcaData)}\n`);
-      fs.chmodSync(orcaBin, 0o755);
+      // Real dash.py snapshot contract test against an isolated native repo
+      const home = path.join(dir, "home");
+      fs.mkdirSync(home, {recursive: true});
+      const repo = path.join(dir, "widgets");
+      fs.mkdirSync(repo, {recursive: true});
+      execFileSync("git", ["init", "-q", "-b", "main", repo]);
+      execFileSync("git", ["-C", repo, "-c", "user.name=test", "-c", "user.email=test@localhost", "commit", "-q", "--allow-empty", "-m", "init"]);
+      fs.writeFileSync(path.join(home, "repos.json"), JSON.stringify([repo]));
+      fs.writeFileSync(path.join(home, "goals.json"), JSON.stringify({[repo]: "Ship " + XSS_IMG + " " + XSS_ATTR}));
+      fs.writeFileSync(path.join(home, "imported.json"), "{}");
       fs.writeFileSync(path.join(home, "last.json"), JSON.stringify({
         ts: 1700000000,
         rows: [{
-          id: "wt-xss",
+          id: repo,
           name: "xss-ws-" + XSS_IMG,
-          path: "/w/xss-ws",
+          path: repo,
           project: "acme/" + XSS_SCRIPT,
           goal: "Ship " + XSS_IMG + " " + XSS_ATTR,
           branch: "feat/" + XSS_IMG,
@@ -60,7 +53,7 @@ const XSS_URL = 'javascript:window.__pwned=6';
         }],
       }));
       const rawSnap = execFileSync("python3", [path.join(ROOT, "scripts/dash.py"), "snapshot"], {
-        env: {...process.env, GREENLIGHT_HOME: home, GREENLIGHT_ADE: "orca", GREENLIGHT_USAGE: "off", ORCA_CLI_COMMAND: orcaBin, PATH: `${bindir}:${process.env.PATH || ""}`}, encoding: "utf8",
+        env: {...process.env, GREENLIGHT_HOME: home, GREENLIGHT_ADE: "native", GREENLIGHT_USAGE: "off"}, encoding: "utf8",
       });
       const snap = JSON.parse(rawSnap);
       await page.evaluate(s => window.mc.update(s), snap);

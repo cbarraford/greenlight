@@ -68,7 +68,7 @@ jobs:
         timeout-minutes: 5
         run: |
           python3 -m venv "$RUNNER_TEMP/venv"
-          "$RUNNER_TEMP/venv/bin/pip" install -q pytest "ruff==0.17.6" "mypy<2" coverage diff-cover
+          "$RUNNER_TEMP/venv/bin/pip" install -q pytest "ruff==0.17.6" "mypy<2" coverage diff-cover "worktrunk==0.83.0"
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
       - name: ruff lint & security
         run: ruff check scripts/ tests/ app/kokoro.py

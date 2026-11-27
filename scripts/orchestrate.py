@@ -40,7 +40,6 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import ade  # noqa: E402
 import diag  # noqa: E402
 import greenlight  # noqa: E402
 import ws_state  # noqa: E402
@@ -819,13 +818,11 @@ def live_worktree(r, snapshot=None):
             return None  # the target disappeared after the tick snapshot
         detail = shown.get("worktree") or {}
     except Exception:
-        if ade.is_orca():
-            raise
         fresh = greenlight.orca("worktree", "ps", "--limit", "10000")["worktrees"]
         row = next((w for w in fresh if w.get("worktreeId") == r["id"]), None)
         if row is None:
             return None
-        detail = {}  # other ADEs supply the live row through ps
+        detail = {}  # the native backend supplies the live row through ps
     return {**row, **detail, "worktreeId": r["id"], "agents": detail.get("agents", row.get("agents", []))}
 
 
@@ -1254,18 +1251,6 @@ def act_one(r, name, a, cards, snapshot=None, peers=()):
             return [f"left {name}: goal changed since scan; backfill skipped"]
         try:
             old_comment = r.get("comment") or ""
-            if r.get("linked_mr") is None and r.get("forge") == "gitlab" and ade.is_orca():
-                branch = (r.get("mr") or {}).get("source_branch") or r["branch"]
-                query = urllib.parse.urlencode({"source_branch": branch, "state": "opened", "per_page": 100})
-                opened = greenlight.gl(f"projects/{greenlight.pid(r['project'])}/merge_requests?{query}")
-                if {m["iid"] for m in opened} != {r["mr"]["iid"]}:
-                    return [f"left {name}: open MR for {branch} changed since scan; backfill skipped"]
-                latest = live_worktree(r)
-                if latest is None or branch_changed(r, latest) or link_changed(r, latest) or \
-                        (latest.get("comment") or "").strip() != (r.get("comment") or "").strip():
-                    return [f"left {name}: workspace link or goal changed during backfill"]
-                greenlight.orca("worktree", "set", "--worktree", f"id:{r['id']}", "--gitlab-mr", str(r["mr"]["iid"]))
-                r["linked_mr"] = r["mr"]["iid"]
             store_backfill(r, a["goal"])
             greenlight.decisions.backfilled_goal(r["id"], (r.get("mr") or {}).get("ref"), a["goal"], r.get("project"), r.get("forge"))
             r["goal"] = a["goal"]  # a later action sees this generated goal; the user's comment remains untouched
