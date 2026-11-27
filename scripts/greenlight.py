@@ -177,17 +177,7 @@ ME = os.environ.get("GREENLIGHT_ME") or CONFIG["me"] or whoami()
 
 def orca(*args, timeout=120):
     """An Orca-shaped compatibility call answered by Greenlight's native backend."""
-    if not ade.is_orca():
-        return ade.call(*args)
-    return orca_placed(*args, timeout=timeout)
-
-
-def orca_placed(*args, timeout=120):
-    """The Orca CLI, with a `worktree create` placed on this machine first (place_here)."""
-    args, why = place_here(args)
-    if why:
-        raise PlacementRefused(why)
-    return orca_cli(*args, timeout=timeout)
+    return ade.call(*args)
 
 
 class PlacementRefused(RuntimeError):

@@ -809,8 +809,9 @@ def ades():
 
 
 def ade_call(n):
-    """The `orca …`-shaped call for backend n: the Orca CLI itself for orca (tree_new places an Orca create its own
-    way, as the user's pick: `call is greenlight.orca_cli`), else n's dispatch."""
+    """Dispatch live workspace calls to native; the legacy path exists for historical tests only."""
+    if ADES is None and n != "native":
+        raise RuntimeError(f"{n} is an import source, not a live workspace backend")
     return greenlight.orca_cli if n == "orca" else ade.get(n).call
 
 

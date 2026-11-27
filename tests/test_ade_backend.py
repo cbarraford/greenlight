@@ -73,10 +73,11 @@ def test_get_modules(home, monkeypatch):
     assert ade.get() is ade_basement
     with pytest.raises(KeyError):
         ade.get("rex")
-    for n in ade.NAMES:  # every backend implements the whole contract and names itself
+    for n in ade.NAMES:
         m = ade.get(n)
         assert n == m.NAME
-        for fn in ("worktrees", "terminals", "read", "send", "launch", "set_goal", "remove", "create", "repos", "call"):
+        for fn in (("worktrees", "terminals", "read", "send", "launch", "set_goal", "remove", "create", "repos", "call")
+                   if n == "native" else ("worktrees", "repos")):
             assert callable(getattr(m, fn)), (n, fn)
 
 
@@ -126,27 +127,22 @@ def test_greenlight_orca_routes_through_the_backend(home, monkeypatch):
     with mock.patch.object(ade_basement, "worktrees", return_value=[{"id": "/w"}]), \
             mock.patch.object(greenlight, "orca_cli", side_effect=AssertionError("Orca called under native")):
         assert greenlight.orca("worktree", "ps", "--limit", "10000") == {"worktrees": [{"id": "/w"}]}
+        with mock.patch.object(ade, "call", return_value={"worktree": {"id": "/w"}}) as native:
+            assert greenlight.orca("worktree", "create", "--repo", "/repo", "--name", "feat") == {"worktree": {"id": "/w"}}
+            native.assert_called_once_with("worktree", "create", "--repo", "/repo", "--name", "feat")
     monkeypatch.setenv("GREENLIGHT_ADE", "orca")
     with pytest.raises(RuntimeError, match="live ADE backends are retired"):
         greenlight.orca("worktree", "ps")
 
 
-def test_orca_adapter_contract(home):
-    with mock.patch.object(greenlight, "orca_cli", return_value={"worktrees": [1], "terminals": [2]}) as oc, \
-            mock.patch.object(greenlight, "place_here", side_effect=lambda a: (list(a), None)):
-        assert ade_orca.worktrees() == [1] and ade_orca.terminals() == [2]
-        ade_orca.set_goal("abc", "Goal")
-        ade_orca.remove("abc", force=True)
-        ade_orca.create("r1", "feat", "main", "Goal", "claude", "go")
-        ade_orca.launch("abc", "codex", "")
-    assert [c.args for c in oc.call_args_list][2:] == [
-        ("worktree", "set", "--worktree", "id:abc", "--comment", "Goal"),
-        ("worktree", "rm", "--worktree", "id:abc", "--force"),
-        ("worktree", "create", "--repo", "id:r1", "--name", "feat", "--base-branch", "main", "--comment", "Goal",
-         "--agent", "claude", "--prompt", "go"),
-        ("agent", "launch", "--worktree", "id:abc", "--agent", "codex")]
-    with mock.patch.object(greenlight, "place_here", return_value=(None, "elsewhere")), pytest.raises(greenlight.PlacementRefused):
-        ade_orca.create("r1", "feat")
+def test_orca_adapter_is_import_only(home):
+    with mock.patch.object(greenlight, "orca_cli", side_effect=[{"worktrees": [1]}, {"repos": [2]}]) as oc:
+        assert ade_orca.worktrees() == [1]
+        assert ade_orca.repos() == {"repos": [2]}
+    assert [c.args for c in oc.call_args_list] == [
+        ("worktree", "ps", "--limit", "10000"), ("repo", "list")]
+    for operation in ("call", "terminals", "read", "send", "launch", "set_goal", "remove", "create"):
+        assert not hasattr(ade_orca, operation)
 
 
 def git(*a, cwd):
@@ -311,6 +307,8 @@ def test_cli_ade_native_end_to_end(home, repo):
 def test_dash_backend_order(home, monkeypatch):
     import dash
     assert dash.ades() == ("native",)
+    with pytest.raises(RuntimeError, match="import source"):
+        dash.ade_call("orca")
     monkeypatch.setenv("GREENLIGHT_ADE", "basement")
     assert dash.ades() == ("native",)
     monkeypatch.setenv("GREENLIGHT_ADE", "orca")
