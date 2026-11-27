@@ -532,7 +532,7 @@ def summary(after, events=None):
         "version": version(),
         "env": {"os": platform.system(), "os_release": platform.release(), "python": platform.python_version(),
                 "ade": ade_name(),
-                "clis": {c: bool(shutil.which(c)) for c in ("glab", "gh", "claude", "codex", "opencode", "pi", "gemini", "agy")}},
+                "clis": {c: bool(shutil.which(c)) for c in ("glab", "gh", "wt", "claude", "codex", "opencode", "pi", "gemini", "agy")}},
         "config": config_shape(),
         "events": len(events),
         "errors_1h": sum(failed(e) for e in events if e.get("ts", 0) > now - 3600),

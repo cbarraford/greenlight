@@ -132,7 +132,7 @@ with tempfile.TemporaryDirectory() as tmp:
     nasty = f'"><img src=x onerror=alert(1)> $(touch {pwn}) `touch {pwn}` \'; echo x'
     home = Path(tmp) / "home"
     home.mkdir()
-    repo = Path(tmp) / "widgets"
+    repo = (Path(tmp) / "widgets").resolve()
     repo.mkdir()
     subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
     subprocess.run(["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@localhost",
@@ -140,14 +140,6 @@ with tempfile.TemporaryDirectory() as tmp:
     (home / "repos.json").write_text(json.dumps([str(repo)]))
     (home / "goals.json").write_text(json.dumps({str(repo): nasty}))
     (home / "imported.json").write_text("{}")
-    bindir = Path(tmp) / "bin"
-    bindir.mkdir()
-    orca = bindir / "orca"
-    orca.write_text("#!/usr/bin/env python3\nimport json\nprint(json.dumps({'ok': True, 'result': {'worktrees': [{"
-                    "'worktreeId': 'wt-1', 'displayName': " + json.dumps(nasty) + ", 'path': '/w/safe-ws', "
-                    "'repo': 'widgets', 'branch': " + json.dumps(nasty) + ", 'comment': " + json.dumps(nasty) + ", "
-                    "'agents': [{'state': 'waiting', 'agentType': 'claude', 'lastAssistantMessage': " + json.dumps(nasty) + "}]}]}}))\n")
-    orca.chmod(0o755)
     last = {
         "ts": 1700000000,
         "rows": [{
@@ -164,7 +156,7 @@ with tempfile.TemporaryDirectory() as tmp:
     }
     (home / "last.json").write_text(json.dumps(last))
     env = {**os.environ, "GREENLIGHT_HOME": str(home), "GREENLIGHT_ADE": "native", "GREENLIGHT_TMUX_SOCKET": f"gl-sec-{os.getpid()}",
-           "GREENLIGHT_USAGE": "off", "ORCA_CLI_COMMAND": str(orca), "PATH": f"{bindir}:{os.environ.get('PATH', '')}"}  # the socket: never the real Basement's
+           "GREENLIGHT_USAGE": "off"}  # the socket: never the real Basement's
     p = subprocess.run([sys.executable, str(ROOT / "scripts" / "dash.py"), "snapshot"],
                        capture_output=True, text=True, env=env, timeout=20)
     assert p.returncode == 0, f"dash.py snapshot failed: {p.stderr}"

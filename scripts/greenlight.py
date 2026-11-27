@@ -2228,7 +2228,7 @@ def note(name, text):
         fh.write(f"- {time.strftime('%Y-%m-%d %H:%M')} {text}\n")
 
 
-SCAN_TOOLS = {"glab": "GitLab", "gh": "GitHub", "orca": "Orca", "orca-ide": "Orca",
+SCAN_TOOLS = {"glab": "GitLab", "gh": "GitHub", "wt": "Worktrunk", "orca": "Orca", "orca-ide": "Orca",
               "tmux": "tmux", "cmux": "cmux", "herdr": "herdr", "t3": "t3"}
 SCAN_WHY = {"auth": "login expired", "rate_limit": "rate limited", "timeout": "timed out", "network": "unreachable",
             "transient": "server error", "permission": "permission denied"}

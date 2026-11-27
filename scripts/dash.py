@@ -11,7 +11,7 @@
     dash.py logextras <ws>                          one JSON line: All output's extras: the sessions' tokens and estimated cost
                                                     (log_view.usage), and the files the branch touched (tree diff branch, else head)
     dash.py logshare <ws> [--req N] < text          one JSON line: {text, removed}: the log text with private details taken out
-    dash.py trees                                   one JSON line: every worktree of every installed ADE (orca, cmux, herdr, t3), for the terminal's sidebar
+    dash.py trees                                   one JSON line: every native Worktrunk workspace, for the terminal's sidebar
                                                     (and `usage`, the footer's plan meters: usage.py)
     dash.py turn <mc-session>                       one JSON line: how a Basement pane's agent ended its turn (ade_common.agent_state)
     dash.py tree info|rm|goal|cfg|new|diff <path> [--force]  the sidebar's workspace menu: git facts and listening ports; remove
@@ -30,7 +30,7 @@
                                                     send it again with answers {id: text}, or force: true to start anyway
 
 Pucks join ~/.greenlight/last.json (lifecycle, MR, next step from greenlight.py scan, refreshed by every greenlight run; the interval is in Greenlight Settings → Dashboard)
-with a live `orca worktree ps` (agent state, seconds old). Never calls GitLab for the overview.
+with live native workspace state (`ade_basement.worktrees()`, agent state, seconds old). Never calls GitLab for the overview.
 Page layouts come from Claude Haiku picking widgets out of CATALOG; the page renders only known
 widgets, so a bad layout degrades to fewer cards, never to executed output.
 """

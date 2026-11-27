@@ -1,7 +1,6 @@
 """ade.py: which backend is in use, its one contract, and the Orca-shaped dispatcher on top of it (#195)."""
 import json
 import os
-import shutil
 import subprocess
 import sys
 import types
@@ -163,7 +162,71 @@ def repo(tmp_path):
     return r
 
 
+def _make_fake_wt(tmp_path):
+    """Minimal executable `wt` stub backed by git worktree so tests never require Worktrunk on PATH."""
+    wt = tmp_path / "wt-stub"
+    wt.write_text(
+        f"#!{sys.executable}\n"
+        "import json, subprocess, sys\n"
+        "from pathlib import Path\n"
+        "args = sys.argv[1:]\n"
+        "repo, i = '.', 0\n"
+        "while i < len(args):\n"
+        "    if args[i] == '-C':\n"
+        "        repo = args[i + 1]; i += 2\n"
+        "    elif args[i] in ('-y', '--yes'):\n"
+        "        i += 1\n"
+        "    elif args[i] == '--config-set':\n"
+        "        i += 2\n"
+        "    else:\n"
+        "        break\n"
+        "sub, rest = args[i], args[i + 1:]\n"
+        "if sub == 'switch':\n"
+        "    base, pos, j = None, [], 0\n"
+        "    while j < len(rest):\n"
+        "        if rest[j] == '--base':\n"
+        "            base = rest[j + 1]; j += 2\n"
+        "        elif rest[j].startswith('-'):\n"
+        "            j += 1\n"
+        "        else:\n"
+        "            pos.append(rest[j]); j += 1\n"
+        "    branch = pos[0]\n"
+        "    r = Path(repo).resolve()\n"
+        "    dest = r.parent / f'{r.name}.{branch.replace(\"/\", \"-\")}'\n"
+        "    cmd = ['git', '-C', str(r), 'worktree', 'add', '-q', '-b', branch, str(dest)]\n"
+        "    if base:\n"
+        "        cmd.append(base)\n"
+        "    p = subprocess.run(cmd, capture_output=True, text=True)\n"
+        "    if p.returncode:\n"
+        "        sys.stderr.write(p.stderr); sys.exit(p.returncode)\n"
+        "    print(json.dumps({'branch': branch, 'path': str(dest)}))\n"
+        "elif sub == 'list':\n"
+        "    p = subprocess.run(['git', '-C', repo, 'worktree', 'list', '--porcelain'], capture_output=True, text=True, check=True)\n"
+        "    items, cur = [], {}\n"
+        "    for line in p.stdout.splitlines() + ['']:\n"
+        "        if line.startswith('worktree '):\n"
+        "            cur = {'worktree': {'path': line[9:]}}\n"
+        "        elif line.startswith('branch '):\n"
+        "            cur['branch'] = line[7:].removeprefix('refs/heads/')\n"
+        "        elif not line and cur:\n"
+        "            items.append(cur); cur = {}\n"
+        "    print(json.dumps({'schema': 2, 'items': items}))\n"
+        "elif sub == 'remove':\n"
+        "    force = '--force' in rest or '-f' in rest\n"
+        "    target = [x for x in rest if not x.startswith('-')][-1]\n"
+        "    cmd = ['git', '-C', repo, 'worktree', 'remove', *(['--force'] if force else []), target]\n"
+        "    p = subprocess.run(cmd, capture_output=True, text=True)\n"
+        "    if p.returncode:\n"
+        "        sys.stderr.write(p.stderr); sys.exit(p.returncode)\n"
+        "else:\n"
+        "    sys.stderr.write(f'unsupported wt subcommand: {sub}\\n'); sys.exit(2)\n"
+    )
+    wt.chmod(0o755)
+    return wt
+
+
 def test_native_registry_and_create_launches_agent(home, repo, monkeypatch):
+    monkeypatch.setenv("WORKTRUNK_BIN", str(_make_fake_wt(home)))
     monkeypatch.setattr(ade_basement, "REPOS", home / "repos.json")
     monkeypatch.setattr(ade_basement.ade_common, "GOALS", home / "goals.json")
     (repo / "sub").mkdir()
@@ -227,10 +290,8 @@ def test_repos_cli(home, repo, monkeypatch, capsys):
 
 
 def test_cli_ade_native_end_to_end(home, repo):
-    """`greenlight.py ade` under GREENLIGHT_ADE=native: a real worktree, its goal, listed, removed. No tmux needed."""
-    wt = shutil.which("wt")
-    if not wt:
-        pytest.skip("Worktrunk is not installed")
+    """`greenlight.py ade` under GREENLIGHT_ADE=native: a real worktree, its goal, listed, removed. No tmux or host wt needed."""
+    wt = str(_make_fake_wt(home))
     env = {"GREENLIGHT_HOME": str(home), "GREENLIGHT_ADE": "native", "GREENLIGHT_TMUX_SOCKET": "gl-test-none",
            "GREENLIGHT_ME": "tester", "WORKTRUNK_BIN": wt, "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home)}
     (home / "imported.json").write_text("{}")  # never this machine's real ADEs (the first-run import)

@@ -160,14 +160,16 @@ def _install_stub_harnesses(bindir: Path):
 
 def _native_worktrees(root, home, worktrees, rows):
     """Give the UI fixtures real, isolated Git worktrees for the native backend."""
+    root = Path(root).resolve()
     mains, goals, ids = {}, {}, {}
     for i, w in enumerate(worktrees):
         path = Path(w["path"])
         if not path.is_dir():
             continue  # the corrupt fixture intentionally includes a missing checkout
+        path = path.resolve()
         name = str(w.get("repo") or "widgets")
         if name not in mains:
-            main = root / "repos" / name
+            main = (root / "repos" / name).resolve()
             main.mkdir(parents=True, exist_ok=True)
             subprocess.run(["git", "init", "-q", "-b", "main", str(main)], check=True, capture_output=True)
             subprocess.run(["git", "-C", str(main), "-c", "user.name=uitest", "-c", "user.email=uitest@localhost",
@@ -180,19 +182,23 @@ def _native_worktrees(root, home, worktrees, rows):
         subprocess.run(["git", "-C", str(mains[name]), "worktree", "add", "-q", "-b", branch, str(path), "main"],
                        check=True, capture_output=True)
         path.mkdir(parents=True, exist_ok=True)  # a mocked git in a unit test does not create it
-        ids[w["worktreeId"]] = str(path)
-        w.update(id=str(path), worktreeId=str(path), repoId=str(mains[name]), branch=branch)
+        real = str(path.resolve())
+        ids[w["worktreeId"]] = real
+        w.update(id=real, worktreeId=real, path=real, repoId=str(mains[name]), branch=branch)
         if isinstance(w.get("comment"), str) and w["comment"]:
-            goals[str(path)] = w["comment"]
+            goals[real] = w["comment"]
     for row in rows:
         if row.get("id") in ids:
-            row["id"] = ids[row["id"]]
+            real = ids[row["id"]]
+            row["id"] = real
+            row["path"] = real
     (home / "repos.json").write_text(json.dumps([str(p) for p in mains.values()]))
     (home / "goals.json").write_text(json.dumps(goals))
     (home / "imported.json").write_text("{}")
 
 
 def _make_fixture(root: Path, fixture: str):
+    root = Path(root).resolve()
     home = root / "home"
     bindir = root / "bin"
     webdir = root / "web"
@@ -501,7 +507,7 @@ class UITestSession:
         self.record_trace = record_trace
         self.trace = []
         self.id = uuid.uuid4().hex[:8]
-        self.root = Path(tempfile.mkdtemp(prefix=f"gl-uitest-{self.id}-"))
+        self.root = Path(tempfile.mkdtemp(prefix=f"gl-uitest-{self.id}-")).resolve()
         self.socket_path = self.root / "ui.sock"
         self.tmux_socket = f"gl-uitest-{self.id}"
         self.proc = None

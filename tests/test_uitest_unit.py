@@ -190,3 +190,24 @@ def test_cli_subcommands(tmp_path, monkeypatch, capsys):
     with mock.patch.object(uitest, "rpc", return_value={"ok": True, "result": False}):
         rc, out = run("wait", "--socket", str(sock), "false", "--timeout", "0.02")
         assert rc == 1 and json.loads(out)["error"] == "timeout"
+
+
+def test_make_fixture_resolves_symlinked_root_for_native_worktrees(tmp_path):
+    """On macOS /var is a symlink to /private/var; fixture ids/paths must match git worktree realpaths."""
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    home, _, _ = uitest._make_fixture(link, "default")
+    repos = json.loads((home / "repos.json").read_text())
+    goals = json.loads((home / "goals.json").read_text())
+    rows = json.loads((home / "last.json").read_text())["rows"]
+    resolved_prefix = str(real.resolve())
+    assert repos and all(r.startswith(resolved_prefix) for r in repos), repos
+    assert goals and all(k.startswith(resolved_prefix) for k in goals), goals
+    assert len(rows) == 2
+    assert all(r["id"].startswith(resolved_prefix) and r["path"] == r["id"] for r in rows), rows
+    porcelain = subprocess.run(["git", "-C", repos[0], "worktree", "list", "--porcelain"],
+                               capture_output=True, text=True, check=True).stdout
+    listed = {ln[9:] for ln in porcelain.splitlines() if ln.startswith("worktree ")}
+    assert {r["id"] for r in rows} <= listed, (rows, listed)

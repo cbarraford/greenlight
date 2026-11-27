@@ -235,10 +235,12 @@ def test_doctor_flags_a_deprecated_driver(home, monkeypatch):
     import diag
     monkeypatch.setenv("GREENLIGHT_ADE", "native")
     checks = {c["check"]: c for c in diag.doctor(quick=True)["checks"]}
-    assert "tmux" in checks and "git" in checks  # native needs both
-    monkeypatch.setattr(diag.shutil, "which", lambda n: None if n == "tmux" else "/usr/bin/" + n)
+    assert "tmux" in checks and "git" in checks and "worktrunk" in checks  # native needs all three
+    monkeypatch.setattr(diag.shutil, "which", lambda n: None if n in ("tmux", "wt") else "/usr/bin/" + n)
+    monkeypatch.delenv("WORKTRUNK_BIN", raising=False)
     checks = {c["check"]: c for c in diag.doctor(quick=True)["checks"]}
     assert checks["tmux"]["ok"] is False and checks["tmux"]["state"] == "missing"
+    assert checks["worktrunk"]["ok"] is False and checks["worktrunk"]["state"] == "missing"
     monkeypatch.undo()
     monkeypatch.setenv("GREENLIGHT_ADE", "herdr")
     chk = next(c for c in diag.doctor(quick=True)["checks"] if c["check"] == "ade")
