@@ -1285,7 +1285,7 @@ final class RulesStore: ObservableObject {
         var obj = [String: String]()
         if let fp = forgePath, !fp.isEmpty { obj["path"] = fp }
         if let co = checkout, !co.isEmpty { obj["checkout"] = co }
-        guard !obj.isEmpty, let d = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]),
+        guard !obj.isEmpty, let d = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys, .withoutEscapingSlashes]),
               let s = String(data: d, encoding: .utf8) else { return "{}" }
         return s
     }
