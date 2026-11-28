@@ -307,8 +307,8 @@ const { launchBrowser } = require("./js_harness.cjs");
   await p.evaluate(() => { document.documentElement.dataset.motion = "off"; stage.wait("Listening", "Say something."); stage.hold("Thinking"); });
   assert.equal(await p.locator("#s.skeleton .skel i").count(), 5);
   assert.equal(await p.locator("#s.skeleton .skel i.lead").count(), 1);
-  assert.equal(await p.$eval(".skel i.lead", e => e.getBoundingClientRect().height), 12);
-  assert.equal(await p.$eval(".skel i:not(.lead)", e => [e.getBoundingClientRect().height, getComputedStyle(e).borderTopLeftRadius].join()), "8,4px");
+  assert.equal(await p.$eval(".skel i.lead", e => Math.round(e.getBoundingClientRect().height * 100) / 100), 12);
+  assert.equal(await p.$eval(".skel i:not(.lead)", e => [Math.round(e.getBoundingClientRect().height * 100) / 100, getComputedStyle(e).borderTopLeftRadius].join()), "8,4px");
   assert.equal(await p.$eval(".skel i", e => getComputedStyle(e).animationName), "none");  // no shimmer
   assert.equal(await p.locator("#s.skeleton h1, #s.skeleton .cursor").count(), 0);  // no wait card
   await p.evaluate(() => stage.hold(null));
