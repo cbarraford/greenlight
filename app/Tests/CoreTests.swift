@@ -1362,15 +1362,19 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     check("trees merge: tmuxOk is false when either host's tmux didn't answer, true when both did or said nothing",
           tmuxOf(["tmuxOk": true], ["tmuxOk": true]) == true && tmuxOf(["tmuxOk": false], ["tmuxOk": true]) == false
           && tmuxOf(["tmuxOk": true], ["tmuxOk": false]) == false && tmuxOf(["trees": [[String: Any]]()], nil) == true
-          && mergeTreesPayload(nil, ["tmuxOk": true], primaryHost: "devbox", secondaryHost: "local")?["hostsPending"] as? Bool == true
-          && mergeTreesPayload(["tmuxOk": true], ["tmuxOk": true], primaryHost: "devbox", secondaryHost: "local")?["hostsPending"] == nil)  // the server's trees not in yet
+          && tmuxOf(nil, ["tmuxOk": true]) == false)  // no server trees: its sessions unknown
     var pubSrv: [String: Any]? = ["trees": [[String: Any]](), "tmuxOk": true], pubMac: [String: Any]? = nil
     let srvOnly = treesToPublish(server: &pubSrv, local: &pubMac, merge: true, primaryHost: "devbox", localPending: true)
     let macFailed = treesToPublish(server: &pubSrv, local: &pubMac, merge: true, primaryHost: "devbox", localPending: false)
     let localOnly = treesToPublish(server: &pubMac, local: &pubSrv, merge: false, primaryHost: "local")
-    check("trees publish: hostsPending while the Mac's first trees are coming; not once its fetch failed or when it never runs, nor for one host alone",
+    var noSrv: [String: Any]? = nil, mac: [String: Any]? = ["trees": [[String: Any]](), "tmuxOk": true]
+    let srvComing = treesToPublish(server: &noSrv, local: &mac, merge: true, primaryHost: "devbox", serverPending: true)
+    mac = ["trees": [[String: Any]](), "tmuxOk": true]
+    let srvFailed = treesToPublish(server: &noSrv, local: &mac, merge: true, primaryHost: "devbox", serverPending: false)
+    check("trees publish: hostsPending while a host's first trees are coming; not once its fetch failed or when it never runs, nor for one host alone",
           srvOnly?["hostsPending"] as? Bool == true && srvOnly?["tmuxOk"] as? Bool == true
-          && macFailed?["hostsPending"] == nil && localOnly?["hostsPending"] == nil)
+          && macFailed?["hostsPending"] == nil && localOnly?["hostsPending"] == nil
+          && srvComing?["hostsPending"] as? Bool == true && srvFailed?["hostsPending"] == nil && srvFailed?["tmuxOk"] as? Bool == false)
     let uDup = mergeSnapshots(["usage": srvUsage], ["usage": srvUsage.map { var m = $0; m["state"] = "failed"; return m }],
                               primaryHost: "devbox", secondaryHost: "local")?["usage"] as? [[String: Any]]
     let rescueWin: [[String: Any]] = [["label": "5h", "pct": 20]]

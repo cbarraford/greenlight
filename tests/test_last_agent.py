@@ -257,3 +257,12 @@ def test_add_resume_says_whether_tmux_answered(home):
     with mock.patch.object(ade_basement.subprocess, "run", side_effect=subprocess.TimeoutExpired("tmux", 20)):
         assert dash.add_resume(pucks, [("/w/a", {})]) is False
     assert "session" not in pucks[0]["resume"]
+
+
+def test_agent_sessions_go_by_what_runs_not_a_lingering_title():
+    tm = [{"session": "mc-a", "cwd": "/w/a/src", "title": "✳ Done", "cmd": "claude"},  # running
+          {"session": "mc-b", "cwd": "/w/a", "title": "✳ Done", "cmd": "-zsh"},  # Claude quit there: its title stays
+          {"session": "mc-c", "cwd": "/w/a", "title": "x", "cmd": "codex"},
+          {"session": "gl-warm-1", "cwd": "/w/a", "title": "", "cmd": "claude"},  # not one of ours
+          {"session": "mc-d", "cwd": "/elsewhere", "title": "", "cmd": "claude"}]
+    assert dash.agent_sessions(tm, ["/w/a", "/w/b"]) == {"/w/a": ["mc-a", "mc-c"]}

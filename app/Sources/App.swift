@@ -2981,6 +2981,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     private func publishTrees() {
         let obj = treesToPublish(server: &serverTreesObj, local: &localTreesObj, merge: !isLocalHost(host), primaryHost: host,
+                                 serverPending: !initialServerTreesDone,
                                  localPending: !initialLocalTreesDone && !uitest && !selftest)  // a Mac fetch that failed or never runs: the server's word
         if let obj, JSONSerialization.isValidJSONObject(obj) {
             lastTreesObj = obj; paneReplay.add(obj["panes"])
@@ -3004,6 +3005,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
                JSONSerialization.isValidJSONObject(obj) {
                 self.serverTreesObj = obj
+            } else {
+                self.serverTreesObj?["tmuxOk"] = false  // this fetch failed: the last trees are stale, its sessions unknown
             }
             self.publishTrees()
         })
@@ -3019,6 +3022,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                     self.localTreesObj = obj
                     self.publishTrees()
                 } else if self.serverTreesObj != nil {
+                    self.localTreesObj?["tmuxOk"] = false  // stale, as the server's above
                     self.publishTrees()  // no Mac trees after all: the server's payload again, its own tmuxOk now (localPending over)
                 }
             })

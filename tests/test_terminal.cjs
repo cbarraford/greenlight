@@ -455,12 +455,10 @@ test("Chief's console opens the live agent session by name or worktree, ahead of
   // a second agent in the same worktree: trees now name its session, but this pane still shows its own agent: kept
   await page.evaluate(t => term.workspaces(t), agentTrees);
   await page.evaluate(() => term.ws("mc-1a2b3c4d"));
-  await page.evaluate(t => term.workspaces({...t, trees: t.trees.map(w => w.path === "/w/review" ? {...w, resume: {harness: "claude", session: "mc-9z9z9z9z"}} : w),
-    panes: {"mc-1a2b3c4d": {state: "working", title: "✳ Busy"}}}), agentTrees);
-  await page.evaluate(t => term.workspaces({...t, trees: t.trees.map(w => w.path === "/w/review" ? {...w, resume: {harness: "claude", session: "mc-9z9z9z9z"}} : w),
-    panes: {}}), agentTrees);  // the other host's publish: none of its panes are agents
+  await page.evaluate(t => term.workspaces({...t, trees: t.trees.map(w => w.path === "/w/review"
+    ? {...w, resume: {harness: "claude", session: "mc-9z9z9z9z"}, agentSessions: ["mc-1a2b3c4d", "mc-9z9z9z9z"]} : w)}), agentTrees);
   await page.evaluate(() => closeTab(latestTab(t => paneOf(t).some(p => p.session === "mc-1a2b3c4d"))));
-  assert.equal((await posts(page, "close")).filter(m => m.session === "mc-1a2b3c4d").pop().keep, true, "its agent still runs (seen on its host): kept");
+  assert.equal((await posts(page, "close")).filter(m => m.session === "mc-1a2b3c4d").pop().keep, true, "its agent still runs there: kept");
   // deleting the workspace ends its sessions, agent or not
   await page.evaluate(t => term.workspaces(t), agentTrees);
   await page.evaluate(() => term.ws("mc-1a2b3c4d"));
@@ -502,6 +500,15 @@ test("trees that never come: after 5 s the waiting request opens as before, once
   await fresh.waitForTimeout(300);
   assert.deepEqual(await fresh.evaluate(() => tabs.map(t => t.ws)), ["/w/review"], "its own tab, no home shell beside it");
   await fresh.close();
+  // a name that matches nothing, with the Basement focused while it waited: the home shell comes after, not a blank window
+  const blank = await b.newPage({viewport: {width: 1200, height: 800}, colorScheme: "dark"});
+  await blank.addInitScript(() => { window.__posts = []; window.webkit = {messageHandlers: {term: {postMessage: m => window.__posts.push(JSON.parse(JSON.stringify(m)))}}} });
+  await blank.goto(page.url()); await blank.waitForFunction(() => window.term);
+  await blank.evaluate(() => { term.ws("no-such-thing"); term.restore({tabs: []}); term.focus() });
+  assert.equal(await blank.evaluate(() => tabs.length), 0);
+  await blank.evaluate(t => term.workspaces(t), TREES);
+  assert.equal(await blank.evaluate(() => tabs.length), 1, "focus's home shell, once the request opened nothing");
+  await blank.close();
 });
 test("a restored kept pane closed before the first trees keeps its agent", async page => {
   const b = page.context().browser(), fresh = await b.newPage({viewport: {width: 1200, height: 800}, colorScheme: "dark"});
