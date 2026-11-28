@@ -2330,9 +2330,10 @@ function gotOut(r){  // mc.transcript: a refresh (no before) or an earlier page 
           if (firstCur) o.more = firstCur.id;
         }
       }
+      const shownWas = outShown(o);
       syncOutTail(list, o.tail);
       syncLookedDivider(); outRefine();
-      const seen = add.filter(e => { const f = o.info.get(e.id); return f && !f.hide }).length;  // a redraw isn't new output
+      const seen = Math.max(0, outShown(o) - shownWas);  // a redraw that replaces the status line isn't new output
       if (o.follow) outBottom(); else if (seen) { o.unseen += seen; outNew() }  // scrolled up: what you're reading stays put
     }
     outMore();
@@ -2473,7 +2474,7 @@ const OUT_KEYS = {e: () => outJump("err", 1), E: () => outJump("err", -1), "]": 
 const OUT_JUMPS = [["looked", 0, "Since you last looked", "L"], ["err", 1, "Next error", "E"], ["err", -1, "Previous error", "⇧E"],
   ["tool", 1, "Next tool call", "]"], ["tool", -1, "Previous tool call", "["], ["prompt", 1, "Next prompt", "P"], ["latest", 0, "Latest output", "End"], ["fold", 0, "Fold or unfold this call", "F"]];
 /* a pane log is the terminal as drawn: blank rows, and a spinner's status line and its single letters, redrawn each tick */
-const STATUS_LINE = /esc to interrupt|^[✻✽✶✳✢·*]?\s?[A-Z][a-z]+ing…(?:\s*\(.*\))?$|^running [A-Z]\w+ hooks…|· [↓↑] [\d.]+k? tokens\)?$|\|.*\btok\/s$/;  // Claude Code's and Codex's spinner and status bar
+const STATUS_LINE = /^[✻✽✶✳✢·*•◦]\s[A-Z][a-z]+…(?:\s*\(.*\))?$|^[✻✽✶✳✢·*•◦]\s.*\(.*esc to interrupt\)$|^running [A-Z]\w+ hooks…|^(?:\d+m )?\d+s · [↓↑] [\d.]+k? tokens\)$|^\+\d+ -\d+ \| .*\btok\/s$/;  // Claude Code's and Codex's spinner, hooks line, token counter and status bar, as drawn
 function outKind(e){
   if (e.role === "user") return "prompt";
   if (e.role === "tool") return "tool";
@@ -2482,17 +2483,18 @@ function outKind(e){
   if (e.role === "line" && TOOL_LINE.test(t)) return "tool";
   if (e.role === "line" && PROMPT_LINE.test(t)) return "prompt";
   if (e.role === "line" && !t.trim()) return "blank";
+  if (e.role === "line" && STATUS_LINE.test(t.trim())) return "status";  // before said: Codex's spinner starts with a bullet
   if (e.role === "line" && SAID_LINE.test(t)) return "said";
   if (e.role === "line" && ERR_LINE.test(t)) return "err";
-  if (e.role === "line" && STATUS_LINE.test(t.trim())) return "status";
-  return e.role === "line" && !/^\s*⎿/.test(t) && t.replace(/\s+/g, "").length <= 3 ? "frag" : "out";  // frag: maybe a spinner's stray letters
+  return e.role === "line" && /^\S/.test(t) && (t.replace(/\s+/g, "").length <= 3 || /^[A-Z][a-z]+…$/.test(t)) ? "frag" : "out";  // frag: maybe a spinner's stray letters or its bare word
 }
 function outAll(o){ return o.tail ? o.entries.concat(o.tail) : o.entries }
+function outShown(o){ let n = 0; if (o.info) for (const f of o.info.values()) if (f.k !== "sep" && !f.hide) n++; return n }
 function outQuiet(es){  // kinds, and what a pane's redraws hide: blank rows; in a session's run of redraws, every status line but its last
-  const ks = es.map(outKind), hide = new Set(), runs = new Map();  // and its stray letters (a run with no status line is real short output)
+  const ks = es.map(outKind), hide = new Set(), runs = new Map();  // and the stray letters after its first (before it, or with none, they're real short output)
   const close = st => { const run = runs.get(st); runs.delete(st); if (!run) return;
     const status = run.filter(x => ks[x] === "status");
-    for (const x of run) if (ks[x] === "frag") { if (status.length) hide.add(x); else ks[x] = "out" }
+    for (const x of run) if (ks[x] === "frag") { if (status.length && status[0] < x) hide.add(x); else ks[x] = "out" }  // only once the spinner has started
     status.slice(0, -1).forEach(x => hide.add(x)) };
   es.forEach((e, i) => { const st = stemOf(e);
     if (ks[i] === "blank") { hide.add(i); return }
@@ -2571,7 +2573,7 @@ function outRefine(){
   const empty = document.getElementById("aout-empty"), none = o.loaded && !shown && (o.filter !== "all" || !!(o.entries.length || o.tail));
   empty.hidden = !none;
   if (none && o.filter === "all") empty.replaceChildren(icon("search", 20), h("h3", {}, "Nothing to show yet"),
-    h("p", {}, "The agent's terminal has only redrawn its status line so far."));
+    h("p", {}, "The agent's terminal has only drawn blank lines so far."));
   else if (none) { const what = {tool: "tool calls", err: "errors", prompt: "prompts"}[o.filter];
     const isErr = o.filter === "err";
     empty.replaceChildren(icon(isErr ? "done" : "search", 20), h("h3", {}, `No ${what} in what's loaded`),
