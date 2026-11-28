@@ -2135,26 +2135,26 @@ struct ChatView: View, Looked {
     var header: some View {
         Group {
             if c.editingName {
-                headerRow(showMeta: false, showState: false, fixedTitle: false)
+                headerRow(showMeta: false, showState: false, fixedTitle: false, showResetLabel: false)
             } else {
                 ViewThatFits(in: .horizontal) {  // narrow pane drops host, then state tag, before truncating the assistant name
                     headerRow(showMeta: true, showState: true, fixedTitle: true)
                     headerRow(showMeta: false, showState: true, fixedTitle: true)
                     headerRow(showMeta: false, showState: false, fixedTitle: true)
-                    headerRow(showMeta: false, showState: false, fixedTitle: false)
+                    headerRow(showMeta: false, showState: false, fixedTitle: false, showResetLabel: false)
                 }
             }
         }.padding(.leading, inset).padding(.trailing, DS.Space.s12).frame(height: DS.Layout.barHeight - 1)  // with its rule, the bar's 44: one hairline across the window
             .background(chrome)
     }
 
-    @ViewBuilder func headerRow(showMeta: Bool, showState: Bool, fixedTitle: Bool) -> some View {
+    @ViewBuilder func headerRow(showMeta: Bool, showState: Bool, fixedTitle: Bool, showResetLabel: Bool = true) -> some View {
         HStack(spacing: DS.Space.s8) {
             HStack(spacing: DS.Space.s8) { title(showState: showState) }.fixedSize(horizontal: fixedTitle, vertical: false)
             if showMeta { HStack(spacing: DS.Space.s8) { meta }.fixedSize() }  // beside the name: where it runs
             Spacer(minLength: DS.Space.s8)
             HStack(spacing: DS.Space.s4) {
-                newChat
+                newChat(showLabel: showResetLabel)
                 if c.session == 0 { VoiceButtons(v: c.voice, c: c) }  // voice and its own window: the main chat's
             }
         }
@@ -2448,11 +2448,11 @@ struct ChatView: View, Looked {
 
     static let newTip = "Start over — clear the context and begin a new conversation"
 
-    var newChat: some View {
+    func newChat(showLabel: Bool) -> some View {
         let hot = c.hint == Self.newTip
         return Button(action: { c.clear() }) {
             Group {
-                if c.voice.on {
+                if c.voice.on || !showLabel {
                     Image(ds: "compose", size: iconSize(DS.TypeRole.body.size)).frame(width: padSize, height: padSize)
                 } else {
                     Label { Text("Start over") } icon: { Image(ds: "compose", size: iconSize(DS.TypeRole.label.size)) }
