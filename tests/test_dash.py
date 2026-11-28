@@ -684,7 +684,16 @@ with mock.patch.object(dash, "live_agents", return_value=_live("q", "m", "d")):
     os.environ["GREENLIGHT_ONLY"] = '["/w/q"]'  # the focused window's workspaces only (an older app: a bare list of paths)
     assert dash.board().splitlines() == ["- q (no MR, o/g): freeform · on agent · q act · do: No agent is running: start one on the goal."], dash.board()
     assert dash.board(only=["/w/m", "/w/d"]).splitlines() == ["- m (no MR, o/g): freeform · on me · m act", "(1 more finished)"]
+    assert len(dash.board(only=False).splitlines()) == 3  # `dash.py board --all`: past the window's scope
     del os.environ["GREENLIGHT_ONLY"]
+# a second checkout of the repo's base branch (a Claude subagent's .claude/worktrees/x on main) has no lifecycle: a scan row
+# from before that rule, or a stale goal on it, isn't on the board as a workspace to rebase or start an agent on
+_main = {"worktreeId": "main", "displayName": "g", "path": "/w/main", "repo": "g", "repoId": "/w/main", "branch": "refs/heads/main", "isMainWorktree": True}
+_copy = _w("voice-echo", comment="Rebase it - merge conflicts with base", repoId="/w/main") | {"branch": "refs/heads/main"}
+_lj.write_text(json.dumps({"ts": 1, "rows": [_b("q", "agent"), _b("voice-echo", "agent")]}))
+with mock.patch.object(dash, "live_agents", return_value=_live("q") | {"main": (_main, {}), "voice-echo": (_copy, {})}):
+    assert [l.split(" ")[1] for l in dash.board().splitlines()] == ["q"], dash.board()
+_lj.write_text(json.dumps({"ts": 1, "rows": [_b("q", "agent"), _b("m", "me"), _b("d", "done", "done")]}))
 # `ade worktree create` started a workspace and its agent after the scan: it's on the board at once, as on the dashboard, with the live
 # agent; one deleted since the scan is gone; and the scan's stale agent state gives way to the live one
 _new = _w("openai-live-voice", comment="Switch voice", agents=[{"state": "working"}])

@@ -328,7 +328,8 @@ def focus(board, query, hits=()):
                 keep.add(i)
     shown = [l for i, l in enumerate(rows) if i in keep]
     more = len(rows) - len(shown)
-    return "\n".join(shown + [f"({more} more unfinished: `python3 {SCRIPTS}/dash.py board` prints them all)"] * bool(more) + tail)
+    every = " (`--all`: past this window too)" if os.environ.get("GREENLIGHT_ONLY") else ""
+    return "\n".join(shown + [f"({more} more unfinished: `python3 {SCRIPTS}/dash.py board` prints them all{every})"] * bool(more) + tail)
 
 
 SEEN = "seen.json"  # what the session in use has been sent: {"key": "<engine>:<sid>", "board", "lines", "context"}

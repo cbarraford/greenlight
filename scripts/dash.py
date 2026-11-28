@@ -11,6 +11,8 @@
     dash.py logextras <ws>                          one JSON line: All output's extras: the sessions' tokens and estimated cost
                                                     (log_view.usage), and the files the branch touched (tree diff branch, else head)
     dash.py logshare <ws> [--req N] < text          one JSON line: {text, removed}: the log text with private details taken out
+    dash.py board [--all]                           the chat's BOARD: each unfinished workspace's step, owner and next move;
+                                                    in a chat window only that window's (GREENLIGHT_ONLY), --all every one
     dash.py trees                                   one JSON line: every native Worktrunk workspace, for the terminal's sidebar
                                                     (and `usage`, the footer's plan meters: usage.py)
     dash.py turn <mc-session>                       one JSON line: how a Basement pane's agent ended its turn (ade_common.agent_state)
@@ -393,11 +395,14 @@ class BoardAllow(dict):
 def board(only=None, with_ids=False):
     """The chat's view of every workspace: one line each with its lifecycle step, who it waits on, and (when it's on you)
     what to do. Blocks on you first, then your moves, then the rest; finished ones only counted. `only` (else $GREENLIGHT_ONLY,
-    JSON the chat sets): the window the user is in, {"paths": its worktrees, "repos": its projects' repos} (a bare list: paths only).
+    JSON the chat sets): the window the user is in, {"paths": its worktrees, "repos": its projects' repos} (a bare list: paths only);
+    False (`dash.py board --all`): every workspace on this host, whatever window the chat is in.
     A workspace in one of its repos counts even when the window listed its worktrees before that one existed.
     Like the dashboard, the scan is joined with a live `worktree ps`: a workspace created since the scan is on the board at once."""
     if only is None and os.environ.get("GREENLIGHT_ONLY"):
         only = json.loads(os.environ["GREENLIGHT_ONLY"])
+    if only is False:  # `dash.py board --all`: Chief asked past its window
+        only = None
     rows, blk = json.loads((greenlight.STATE / "last.json").read_text())["rows"], blocking.cached()
     try:
         live = live_agents()
@@ -641,10 +646,11 @@ def live_rows(rows, live):
     as goal-only rows: those on neither GitLab nor GitHub (greenlight.py skips them), and ones created since the scan (a workspace
     `ade worktree create` just started shows up at once, not at the next scan). Each row gets `repo`, the ADE's repo name: what
     a window's projects are made of."""
-    rows = [r for r in rows if r["id"] in live]
+    bases = greenlight.base_branches([w for w, _ in live.values()])
+    rows = [r for r in rows if r["id"] in live and not greenlight.on_base(live[r["id"]][0], bases)]  # a scan from before on_base
     known = {r["id"] for r in rows}
     for wid, (w, ag) in live.items():  # with an agent or a goal
-        if wid in known or w.get("isMainWorktree") or w.get("isArchived") or not w.get("branch") \
+        if wid in known or w.get("isMainWorktree") or w.get("isArchived") or not w.get("branch") or greenlight.on_base(w, bases) \
                 or not (w.get("agents") or w.get("comment")):
             continue
         rows.append({"id": wid, "name": w["displayName"], "path": w["path"], "project": w.get("repo") or "",
@@ -3077,8 +3083,8 @@ def main():
             oops(a, e)
             out = {"error": str(e)[:200]}
         print(json.dumps({"name": a[1], **({"req": req} if req is not None else {}), **out}))
-    elif a[:1] == ["board"]:
-        print(board())
+    elif a[:1] == ["board"] and a[1:] in ([], ["--all"]):
+        print(board(only=False if a[1:] == ["--all"] else None))  # --all: every workspace, past the window's scope
     elif a[:1] == ["forge"] and (len(a) == 1 or len(a) == 2 and re.fullmatch(r"[\w.-]+(/[\w.-]+)+", a[1])):
         print(forge(a[1] if len(a) == 2 else None))
     elif a[:1] == ["trees"]:
