@@ -141,7 +141,7 @@ def test_the_page_and_the_app_agree_on_the_tmux_mark():
     assert printed == page.replace("\\x1b", "\x1b").replace("\\x07", "\x07")
     source = (ROOT / "app/Sources/App.swift").read_text()
     assert "unset TMUX; printf '\\(App.tmuxMark)'; " in source, "printed before attaching or starting tmux"
-    assert "has-session -t" in source and "attach -t" in source, "an existing session attaches read-write"
+    assert "exec \\(App.tmux) start-server" in source, "our options apply before -A attaches a live session"
 
 
 def test_the_page_and_the_app_agree_on_the_run_mark():

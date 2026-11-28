@@ -439,6 +439,22 @@ test("Chief's console opens the live agent session by name or worktree, ahead of
   await page.evaluate(() => { newTab("/w/review"); term.ws("/w/review") });
   assert.equal(await page.evaluate(() => cur.focus.session), "mc-1a2b3c4d");
   assert.equal((await posts(page, "open")).filter(o => o.session === "mc-1a2b3c4d").length, 1);
+  // closing the agent's own tab detaches (keep), a plain shell's still ends its session; the layout keeps the flag
+  assert.equal(await page.evaluate(() => JSON.parse(snap()).tabs.some(t => t.tree.s === "mc-1a2b3c4d" && t.tree.keep === true)), true);
+  await page.evaluate(() => closeTab(latestTab(t => paneOf(t).some(p => p.session === "mc-1a2b3c4d"))));
+  const closed = (await posts(page, "close")).filter(m => m.session === "mc-1a2b3c4d");
+  assert.equal(closed.length, 1); assert.equal(closed[0].keep, true);
+  await page.evaluate(() => { newTab("/w/review"); closeTab(cur) });
+  assert.equal((await posts(page, "close")).pop().keep, undefined, "a tab's own shell session still ends with it");
+});
+test("Chief's console by a worktree's last part attaches only when one live agent's worktree ends that way", async page => {
+  const mk = (path, session) => ({ade: "orca", project: "acme/" + path.split("/")[1], name: "api", path, branch: "b", main: false, agent: "working",
+    resume: {harness: "claude", session}});
+  await page.evaluate(t => term.workspaces(t), {trees: [mk("/a/api", "mc-aaaa1111"), mk("/b/api", "mc-bbbb2222")]});
+  await page.evaluate(() => term.ws("api"));
+  assert.equal((await posts(page, "open")).filter(o => /^mc-(aaaa1111|bbbb2222)$/.test(o.session)).length, 0, "two …/api: no guess");
+  await page.evaluate(() => term.ws("mc-bbbb2222"));
+  assert.equal((await posts(page, "open")).filter(o => o.session === "mc-bbbb2222").length, 1, "the session name is exact");
 });
 test("title omits list before term.workspaces arrives so boot never overwrites L1's project list with empty repos/paths", async page => {
   const b = page.context().browser(), fresh = await b.newPage({viewport: {width: 1200, height: 800}, colorScheme: "dark"});

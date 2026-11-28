@@ -582,26 +582,21 @@ class TermBridge:
             return [shell, "-l"], False, marks, None
 
         live = self.pool.has_session(session)
-        if live:
-            marks.append(self.tmux_mark.encode("utf-8", errors="replace"))
-            if run:
-                marks.insert(0, self.run_mark.encode("utf-8", errors="replace"))
-            return [self.tmux_bin, "-L", self.socket, "attach", "-t", f"={session}"], False, marks, None
-        if not run and self.pool.claim(cwd, session):
+        if not run and not live and self.pool.claim(cwd, session):
             marks.append(self.tmux_mark.encode("utf-8", errors="replace"))
             return [self.tmux_bin, "-L", self.socket, "attach-session", "-t", f"={session}"], True, marks, None
 
         run_cmd = ""
         tmp_file: str | None = None
         if run:
-            tmp_file = self._write_run_file(run)
+            tmp_file = None if live else self._write_run_file(run)
             marks.append(self.run_mark.encode("utf-8", errors="replace"))
-            if not tmp_file:
+            if not live and not tmp_file:
                 return ["/bin/sh", "-c", _run_shell_cmd(shell, "$1", run)], False, marks, None
             run_cmd = _run_shell_cmd(
                 shell,
                 '$(command cat "$1" 2>/dev/null && command rm -f "$1")',
-                tmp_file,
+                tmp_file or "/dev/null/live",
             )
 
         marks.append(self.tmux_mark.encode("utf-8", errors="replace"))

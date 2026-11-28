@@ -728,6 +728,7 @@ function newTab(ws = curWs || acct()?.dir || "", cmd, fresh, session){  // sessi
   if (HOMES.includes(ws)) uses[ws] = (uses[ws] || 0) + 1;
   const tab = mkTab(ws, {set: fresh ? undefined : cur?.ws === ws ? cur.set : wsTabs(ws).sort((a, b) => b.used - a.used)[0]?.set});
   const {p, mount} = newPane(tab, cmd, session);
+  if (session) p.keep = true;  // the agent's own session: closing this tab detaches, it never ends the agent
   tab.r.append(p.box); tab.focus = p;
   tabs.forEach(x => x.r.hidden = x !== tab);  // lay out at final geometry before mount() so fit() runs once
   mount(); show(tab, true);
@@ -755,7 +756,7 @@ function drag(e, dv, down){
   const up = () => { removeEventListener("mousemove", move); removeEventListener("mouseup", up); removeEventListener("blur", up); dv.classList.remove("drag"); document.body.style.cursor = ""; panes.forEach(p => p.fit.fit()) };
   addEventListener("mousemove", move); addEventListener("mouseup", up); addEventListener("blur", up);
 }
-function kill(p){ clearTimeout(p.scanT); clearTimeout(p.endT); clearTimeout(p.askT); clearTimeout(p.lnkT); pinged.delete(p.id); post({cmd: "close", id: p.id, session: p.session, ws: p.tab.ws}); panes.delete(p.id); p.t.dispose && p.t.dispose() }
+function kill(p){ clearTimeout(p.scanT); clearTimeout(p.endT); clearTimeout(p.askT); clearTimeout(p.lnkT); pinged.delete(p.id); post({cmd: "close", id: p.id, session: p.session, ws: p.tab.ws, ...p.keep ? {keep: true} : {}}); panes.delete(p.id); p.t.dispose && p.t.dispose() }
 function closePane(p){
   kill(p);
   const tab = p.tab, parent = p.box.parentElement;
@@ -1507,7 +1508,8 @@ function openWs(ws, r){
   const latest = latestTab, explicit = ws === "" || ws.startsWith("/") || ws.startsWith("@"), q = ws.toLowerCase();
   const t = latest(t => paneOf(t).some(p => p.session === ws));
   if (t) return show(t);
-  const live = trees.find(w => SESSION_OK(w.resume?.session) && (w.resume.session === ws || w.path === ws || w.path.endsWith("/" + ws)));
+  const agents = trees.filter(w => SESSION_OK(w.resume?.session)), tails = agents.filter(w => w.path.endsWith("/" + ws));
+  const live = agents.find(w => w.resume.session === ws || w.path === ws) || (tails.length === 1 ? tails[0] : null);  // two "…/api": not a guess
   if (live) {
     const existing = latest(t => paneOf(t).some(p => p.session === live.resume.session));
     return existing ? show(existing) : newTab(live.path, undefined, false, live.resume.session) }
@@ -2048,7 +2050,7 @@ $("sdv").onmousedown = e => {
 
 // the layout, saved through the app so restarts (and reboots) bring it back: each pane by its tmux session
 const ser = n => n.classList.contains("pane")
-  ? {s: n._p.session, ...(n._p.st === "work" ? {st: "work"} : {}), ...(n._p.title && isAgent(n._p) ? {title: n._p.title} : {})}
+  ? {s: n._p.session, ...(n._p.keep ? {keep: true} : {}), ...(n._p.st === "work" ? {st: "work"} : {}), ...(n._p.title && isAgent(n._p) ? {title: n._p.title} : {})}
   : {col: n.classList.contains("col"), flex: [n.children[0].style.flex, n.children[2].style.flex], kids: [ser(n.children[0]), ser(n.children[2])]};
 let saveT, lastSaved = "";
 const snap = () => JSON.stringify({cur: tabs.indexOf(cur), side: sideW, shut: [...shut], noAskDel, uses, lights, skin, skinLight, skinHist, acct: acctCfg,
@@ -2062,6 +2064,7 @@ function save(){
 function build(tab, n, mounts){
   if (n.s) {
     const {p, mount} = newPane(tab, undefined, n.s);
+    if (n.keep === true) p.keep = true;
     if (n.st === "work") { p.st = "work"; p.workAt = Date.now() }
     if (typeof n.title === "string") p.title = n.title;
     mounts.push(mount); tab.focus ||= p; return p.box;
@@ -2664,7 +2667,7 @@ window.term = {
   projects: o => { projects = Array.isArray(o) ? o.filter(p => p && typeof p.id === "string" && p.id && Array.isArray(p.repos) && Array.isArray(p.dirs)) : [];
     merge(); setTitle(); render(); if (!$("pal").hidden) palRender() },
   // the window is closing for good: every pane's tmux session, for the app to end; nothing is saved after
-  closeAll: () => { restored = false; clearTimeout(saveT); clearTimeout(focusWsT); focusWsT = 0; lastFocusWs = null; const out = [...panes.values()].map(p => ({session: p.session, ws: p.tab.ws}));
+  closeAll: () => { restored = false; clearTimeout(saveT); clearTimeout(focusWsT); focusWsT = 0; lastFocusWs = null; const out = [...panes.values()].map(p => ({session: p.session, ws: p.tab.ws, ...p.keep ? {keep: true} : {}}));
     panes.forEach(p => { clearTimeout(p.scanT); clearTimeout(p.endT); clearTimeout(p.askT); clearTimeout(p.lnkT); p.t.dispose?.() }); panes.clear(); pinged.clear(); lastPanes = null;
     tabs.forEach(t => { clearTimeout(t.quiet); clearTimeout(t.retry); t.r.remove() }); tabs.length = 0; cur = null; lastScrollTab = lastScrollWs = null; return out },
   workspaces: o => { basementFoot(o?.usage); trees = o?.trees || []; if (Array.isArray(o?.agents) && o.agents[0]) defAgent = normAgent(o.agents[0]); treesIn = true; refreshing(false);

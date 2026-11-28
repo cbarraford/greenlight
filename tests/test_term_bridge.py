@@ -25,18 +25,22 @@ import ade_basement  # noqa: E402
 import term_bridge  # noqa: E402
 
 
-def test_live_session_attaches_read_write_even_with_a_pending_run(tmp_path):
+def test_live_session_attaches_read_write_with_our_options_and_no_run_file(tmp_path):
     bridge = object.__new__(term_bridge.TermBridge)
     bridge.tmux_bin = "/usr/bin/tmux"
     bridge.socket = "greenlight"
     bridge.env = {"SHELL": "/bin/sh"}
-    bridge.pool = SimpleNamespace(has_session=lambda _session: True)
+    bridge.pool = SimpleNamespace(has_session=lambda _session: True, opts_argv=[";", "set", "-g", "status", "off"],
+                                  claim=lambda *_a: pytest.fail("a live session is never a pooled claim"))
     bridge.tmux_mark = term_bridge.DEFAULT_TMUX_MARK
     bridge.run_mark = term_bridge.DEFAULT_RUN_MARK
+    bridge._write_run_file = lambda _run: pytest.fail("a live session's run is ignored by -A: no temp file")
     argv, warm, marks, run_file = bridge._build_launch_argv("mc-agent", str(tmp_path), "echo ignored")
-    assert argv == ["/usr/bin/tmux", "-L", "greenlight", "attach", "-t", "=mc-agent"]
+    new = argv.index("new-session")
+    assert argv[:5] == ["/usr/bin/tmux", "-L", "greenlight", "-f", "/dev/null"] and "status" in argv[:new]
+    assert argv[new:new + 4] == ["new-session", "-A", "-s", "mc-agent"] and "attach" not in argv and "-r" not in argv
     assert warm is False and marks == [bridge.run_mark.encode(), bridge.tmux_mark.encode()]
-    assert run_file is None
+    assert run_file is None and argv[-1].endswith("/dev/null/live")
 
 
 def _read_event(proc: subprocess.Popen[bytes], timeout: float = 5.0) -> dict[str, Any] | None:
