@@ -1464,5 +1464,93 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
           missing.contains("aren't on this Mac") && missing.contains("srv") && !missing.contains("Lost the connection")
           && gone == "Lost the connection to srv (exit 2)." && allLocal == "Lost the connection to this Mac (exit 2).")
     check("project host: tests never prefix Mac-side commands with a backend copy", localBackendPrefix(server: "srv").isEmpty)
+
+    // 10. Chief approvals: lifecycle, queue hold, TTL expiry, harness switch, voiceNote, and deny persistence
+    do {
+        let ac = Core(session: -9099)
+        defer {
+            try? FileManager.default.removeItem(at: ac.transcriptFile)
+            try? FileManager.default.removeItem(at: ac.questionsURL)
+        }
+        ac.model = "claude-opus-5-5"
+        var approveCalls: [(remote: String, stdin: String)] = []
+        var watchCalls = 0
+        responder = { r, _, stdin in
+            if r.contains("autonomy.py gate") { return ([#"{"ok": true}"#], 0) }
+            if r.contains("chat.py send") && stdin.contains("Greenlight's watch") {
+                watchCalls += 1
+                return ([#"{"e":"done","ok":true,"text":"(nothing)"}"#], 0)
+            }
+            if r.contains("chat.py send") {
+                approveCalls.append((r, stdin))
+                if stdin.contains("trigger denial") {
+                    ac.queue.append(Core.Queued(text: "queued follow-up"))
+                    return ([#"{"e":"approval","items":[{"id":"0123456789ab","tool":"Bash","what":"orca host list"}]}"#,
+                             #"{"e":"done","ok":true,"text":"Needs approval."}"#], 0)
+                }
+                return ([#"{"e":"done","ok":true,"text":"Done."}"#], 0)
+            }
+            return ([], 0)
+        }
+        // Denial arrives: holds queued message and blocks watchTurn while pending
+        ac.send("trigger denial")
+        let pendingMsg = ac.msgs.last
+        let heldQueue = ac.hasPendingApproval && pendingMsg?.approvals.count == 1 && pendingMsg?.approvalsAt != nil && ac.queue.count == 1
+        ac.watched([["name": "ws-a", "state": "working"]])
+        ac.watched([["name": "ws-a", "state": "needs", "why": "ci"]])
+        let watchBlocked = watchCalls == 0
+        // deny() ignores non-approval messages, persists "denied", records doneSince, and drains the held queue
+        let plainMsg = Msg(.greenlight, "plain"); ac.deny(plainMsg)
+        let ignoredPlain = plainMsg.decided == nil
+        if let pm = pendingMsg { ac.deny(pm) }
+        let savedData = try? Data(contentsOf: ac.transcriptFile)
+        let savedMsgs = savedData.flatMap { try? JSONDecoder().decode([Msg.Saved].self, from: $0) } ?? []
+        let deniedPersisted = pendingMsg?.decided == "denied" && savedMsgs.contains { $0.decided == "denied" }
+            && ac.queue.isEmpty && approveCalls.last?.remote.contains("--done") == true
+            && approveCalls.last?.remote.contains("Denied: orca host list") == true
+
+        // approve() prepends voiceNote when voice.on is true and sends --approve
+        approveCalls.removeAll()
+        let vm = Msg(.greenlight, "needs"); vm.approvals = [Approval(id: "fedcba987654", tool: "Bash", what: "orca host list")]; vm.approvalsAt = Date()
+        ac.msgs.append(vm); ac.voice.on = true; ac.voice.isLive = false
+        ac.approve(vm)
+        ac.voice.on = false
+        let approvedVoice = vm.decided == "approved" && approveCalls.count == 1
+            && approveCalls[0].remote.contains("--approve") && approveCalls[0].stdin.hasPrefix(voiceNote)
+
+        // Switching away from Claude expires open approvals as expired_harness and blocks approve()
+        approveCalls.removeAll()
+        let hm = Msg(.greenlight, "needs"); hm.approvals = [Approval(id: "111122223333", tool: "Bash", what: "orca host list")]; hm.approvalsAt = Date()
+        ac.msgs.append(hm)
+        ac.model = "codex"
+        let harnessExpired = hm.decided == "expired_harness" && !ac.hasPendingApproval
+        let nonClaudeMsg = Msg(.greenlight, "needs"); nonClaudeMsg.approvals = hm.approvals; nonClaudeMsg.approvalsAt = Date()
+        ac.msgs.append(nonClaudeMsg)
+        ac.approve(nonClaudeMsg)
+        let blockedNonClaude = nonClaudeMsg.decided == nil && approveCalls.isEmpty
+        nonClaudeMsg.decided = "expired_harness"
+        ac.model = "claude-opus-5-5"
+
+        // send() expires open approval immediately as expired_replaced
+        let rm = Msg(.greenlight, "needs"); rm.approvals = [Approval(id: "444455556666", tool: "Bash", what: "orca host list")]; rm.approvalsAt = Date()
+        ac.msgs.append(rm)
+        ac.send("supersede it")
+        let replacedExpired = rm.decided == "expired_replaced"
+
+        // TTL expiry (1h) transitions to expired_ttl, rejects approve(), and unblocks watchTurn()
+        approveCalls.removeAll()
+        let tm = Msg(.greenlight, "needs"); tm.approvals = [Approval(id: "777788889999", tool: "Bash", what: "orca host list")]
+        tm.approvalsAt = Date().addingTimeInterval(-(Core.approvalTTL + 5))
+        ac.msgs.append(tm)
+        let ttlNotPending = !ac.hasPendingApproval
+        ac.approve(tm)
+        let ttlExpired = tm.decided == "expired_ttl" && approveCalls.isEmpty
+        ac.watched([["name": "ws-b", "state": "needs", "why": "ci"]])
+        let watchUnblocked = watchCalls >= 1
+
+        check("core: approvals hold queue, persist deny, support voiceNote, expire on harness/send/TTL, and gate watchTurn",
+              heldQueue && watchBlocked && ignoredPlain && deniedPersisted && approvedVoice
+              && harnessExpired && blockedNonClaude && replacedExpired && ttlNotPending && ttlExpired && watchUnblocked)
+    }
     mainC.clear()
 }

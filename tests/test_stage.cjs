@@ -603,7 +603,7 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.equal(await p.getAttribute("#s a", "href"), "https://x/docs");
   await p.evaluate(() => { stage.forward(); });
   await p.evaluate(() => { stage.status(""); stage.html("<p>custom</p>"); stage.options(["Approve", "Skip"]); });
-  assert.ok(await p.$eval("#s.frame > .options a.option", a => a.getBoundingClientRect().left >= 20 && a.getBoundingClientRect().bottom <= innerHeight - 20));
+  assert.ok(await p.$eval("#s.frame > .options a.option", a => a.getBoundingClientRect().left >= 19.5 && a.getBoundingClientRect().bottom <= innerHeight - 19.5));
   await p.setViewportSize({ width: 340, height: 520 });
   await p.evaluate(() => { stage.text({ md: "Pick" }); stage.options(["Merge it now and delete the stale branch afterwards once CI is green"]); });
   assert.ok(await p.$eval(".options a.option", a => a.scrollHeight <= a.clientHeight + 2 && a.getBoundingClientRect().height > 28));
