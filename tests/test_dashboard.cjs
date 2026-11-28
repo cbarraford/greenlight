@@ -2701,12 +2701,24 @@ test("Agents view: copy session ID and launch new terminal window connected to t
     agent: {...puck(`m-${k}`, `Task ${k}`, "working").agent, type: "claude", state: "working", session_id: sidCl, session_harness: "claude"},
   }));
   await page.evaluate(s => window.mc.update(s), {...SNAP, pucks: many});
-  await page.evaluate(() => { document.querySelector(".acards").scrollTop = 180 });
-  const beforeScroll = await page.evaluate(() => document.querySelector(".acards").scrollTop);
-  assert.ok(beforeScroll > 0, "expected .acards to be scrollable");
+  // Docked: the strip never scrolls on its own; every agent shows and the page scrolls down to the hexes
+  const strip = await page.evaluate(() => {
+    const c = document.querySelector(".acards"), cs = getComputedStyle(c), m = document.getElementById("main");
+    return {n: c.querySelectorAll(".acard").length, maxH: cs.maxHeight, oy: cs.overflowY, sh: c.scrollHeight, ch: c.clientHeight, mainScrolls: m.scrollHeight > m.clientHeight};
+  });
+  assert.equal(strip.n, 10, "every agent gets a card");
+  assert.equal(strip.maxH, "none", "the docked strip has no height cap");
+  assert.equal(strip.oy, "visible", "the docked strip is not a scroll area");
+  assert.ok(strip.sh <= strip.ch + 1, `the docked strip shows all of its cards (scrollHeight ${strip.sh} > clientHeight ${strip.ch})`);
+  assert.ok(strip.mainScrolls, "a tall strip pushes the hexes down and the page scrolls to them");
+  await page.evaluate(() => { const m = document.getElementById("main"); m.scrollTop = m.scrollHeight });
+  assert.ok(await page.evaluate(() => { const hx = document.querySelector("#main .hx"), m = document.getElementById("main").getBoundingClientRect();
+    if (!hx) return false; const r = hx.getBoundingClientRect(); return r.top < m.bottom && r.bottom > m.top }), "scrolling the page brings the hexes into view");
+  const beforeScroll = await page.evaluate(() => document.getElementById("main").scrollTop);
+  assert.ok(beforeScroll > 0, "expected the page to be scrolled");
   await page.click(".acard[data-name='m-9'] button.asid");
-  const afterScroll = await page.evaluate(() => document.querySelector(".acards").scrollTop);
-  assert.ok(afterScroll > 0, `clicking Copy must not reset .acards scrollTop (was ${beforeScroll}, now ${afterScroll})`);
+  const afterScroll = await page.evaluate(() => document.getElementById("main").scrollTop);
+  assert.equal(afterScroll, beforeScroll, "clicking Copy must not reset the page's scroll");
 });
 
 (async () => {

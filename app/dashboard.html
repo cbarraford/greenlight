@@ -188,8 +188,8 @@ body.nohex main{display:flex;flex-direction:column;overflow:hidden;background:va
 .crash{display:inline-flex;align-items:center;gap:var(--sp-1);height:20px;padding:0 var(--sp-2);border-radius:var(--r-full);border:0;background:var(--red-tint);color:var(--red-ink);font-size:var(--fs-1);font-weight:500;white-space:nowrap;flex-shrink:0}
 .crash:hover,.crash.on{box-shadow:inset 0 0 0 1px var(--red-edge)}
 /* cards keep about one size whatever the window: a wide window gets more columns, not wider cards */
-.acards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,420px),1fr));align-items:stretch;gap:var(--sp-2);max-height:240px;overflow-y:auto;padding:2px 2px var(--sp-3);margin:-2px -2px calc(-1*var(--sp-3))}  /* capped when docked: the board stays in view, the strip scrolls */
-.agents.detached>.acards{flex:1;min-height:0;max-height:none;align-content:start;gap:var(--sp-3);padding:var(--sp-4);margin:0}
+.acards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,420px),1fr));align-items:stretch;gap:var(--sp-2)}  /* docked: every agent shows at full height; the page scrolls to the hexes, never the strip */
+.agents.detached>.acards{flex:1;min-height:0;overflow-y:auto;align-content:start;gap:var(--sp-3);padding:var(--sp-4);margin:0}
 .aempty{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--sp-2);padding:var(--sp-6);text-align:center}
 .aempty .aemic{color:var(--faint)}
 .aempty h3{margin:0;font:var(--ds-type-title-sm);letter-spacing:var(--ds-type-title-sm-track);color:var(--text)}
