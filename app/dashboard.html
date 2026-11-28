@@ -2332,7 +2332,8 @@ function gotOut(r){  // mc.transcript: a refresh (no before) or an earlier page 
       }
       syncOutTail(list, o.tail);
       syncLookedDivider(); outRefine();
-      if (o.follow) outBottom(); else if (add.length) { o.unseen += add.length; outNew() }  // scrolled up: what you're reading stays put
+      const seen = add.filter(e => { const f = o.info.get(e.id); return f && !f.hide }).length;  // a redraw isn't new output
+      if (o.follow) outBottom(); else if (seen) { o.unseen += seen; outNew() }  // scrolled up: what you're reading stays put
     }
     outMore();
   }
@@ -2472,7 +2473,7 @@ const OUT_KEYS = {e: () => outJump("err", 1), E: () => outJump("err", -1), "]": 
 const OUT_JUMPS = [["looked", 0, "Since you last looked", "L"], ["err", 1, "Next error", "E"], ["err", -1, "Previous error", "⇧E"],
   ["tool", 1, "Next tool call", "]"], ["tool", -1, "Previous tool call", "["], ["prompt", 1, "Next prompt", "P"], ["latest", 0, "Latest output", "End"], ["fold", 0, "Fold or unfold this call", "F"]];
 /* a pane log is the terminal as drawn: blank rows, and a spinner's status line and its single letters, redrawn each tick */
-const STATUS_LINE = /esc to interrupt|tok\/s\b|[↓↑]\s*[\d.]+k?\s*tokens|^running \w+ hooks…|^\W{0,3}[A-Z][a-z]+ing…(?:\s|$)/i;
+const STATUS_LINE = /esc to interrupt|^[✻✽✶✳✢·*]?\s?[A-Z][a-z]+ing…(?:\s*\(.*\))?$|^running [A-Z]\w+ hooks…|· [↓↑] [\d.]+k? tokens\)?$|\|.*\btok\/s$/;  // Claude Code's and Codex's spinner and status bar
 function outKind(e){
   if (e.role === "user") return "prompt";
   if (e.role === "tool") return "tool";
@@ -2481,30 +2482,31 @@ function outKind(e){
   if (e.role === "line" && TOOL_LINE.test(t)) return "tool";
   if (e.role === "line" && PROMPT_LINE.test(t)) return "prompt";
   if (e.role === "line" && !t.trim()) return "blank";
-  if (e.role === "line" && (STATUS_LINE.test(t.trim()) || t.replace(/\s+/g, "").length <= 3)) return "noise";
   if (e.role === "line" && SAID_LINE.test(t)) return "said";
-  return e.role === "line" && ERR_LINE.test(t) ? "err" : "out";
+  if (e.role === "line" && ERR_LINE.test(t)) return "err";
+  if (e.role === "line" && STATUS_LINE.test(t.trim())) return "status";
+  return e.role === "line" && !/^\s*⎿/.test(t) && t.replace(/\s+/g, "").length <= 3 ? "frag" : "out";  // frag: maybe a spinner's stray letters
 }
 function outAll(o){ return o.tail ? o.entries.concat(o.tail) : o.entries }
-function outQuiet(es){  // each entry's kind; in a run of blank and noise rows only its last status line shows (`show`), a lone short line is output
-  const ks = es.map(outKind), show = new Set();
-  for (let i = 0; i < ks.length;) {
-    if (ks[i] !== "noise" && ks[i] !== "blank") { i++; continue }
-    let j = i; while (j < ks.length && (ks[j] === "noise" || ks[j] === "blank")) j++;
-    const run = []; for (let x = i; x < j; x++) if (ks[x] === "noise") run.push(x);
-    const status = run.filter(x => STATUS_LINE.test(String(es[x].text).trim()));
-    if (run.length === 1 && !status.length) ks[run[0]] = ERR_LINE.test(es[run[0]].text) ? "err" : "out";
-    else if (status.length) show.add(status[status.length - 1]);
-    i = j;
-  }
-  return {ks, show};
+function outQuiet(es){  // kinds, and what a pane's redraws hide: blank rows; in a session's run of redraws, every status line but its last
+  const ks = es.map(outKind), hide = new Set(), runs = new Map();  // and its stray letters (a run with no status line is real short output)
+  const close = st => { const run = runs.get(st); runs.delete(st); if (!run) return;
+    const status = run.filter(x => ks[x] === "status");
+    for (const x of run) if (ks[x] === "frag") { if (status.length) hide.add(x); else ks[x] = "out" }
+    status.slice(0, -1).forEach(x => hide.add(x)) };
+  es.forEach((e, i) => { const st = stemOf(e);
+    if (ks[i] === "blank") { hide.add(i); return }
+    if (ks[i] !== "status" && ks[i] !== "frag") { close(st); return }
+    if (!runs.has(st)) runs.set(st, []); runs.get(st).push(i) });
+  [...runs.keys()].forEach(close);
+  return {ks, hide};
 }
 function outSections(o){  // id → {k, turn, sec}; header id → {k, n, tools}. Pane logs fold by tool call too; transcripts by turn only
   const info = new Map(), heads = new Map(), at = new Map();  // at: each session's open turn and call (another session's lines may come between)
-  const es = outAll(o), {ks, show} = outQuiet(es);
+  const es = outAll(o), {ks, hide} = outQuiet(es);
   for (const [i, e] of es.entries()) {
     const k = ks[i], st = stemOf(e);
-    if (k === "blank" || k === "noise") { const cur = at.get(st) || {}; info.set(e.id, {k, turn: cur.turn, sec: cur.sec, show: show.has(i)}); continue }  // never counted as a call's lines
+    if (k === "blank" || k === "status" || k === "frag") { const cur = at.get(st) || {}; info.set(e.id, {k, turn: cur.turn, sec: cur.sec, hide: hide.has(i)}); continue }  // never counted as a call's lines
     if (!at.has(st)) at.set(st, {turn: null, sec: null});
     const cur = at.get(st); let {turn, sec} = cur;
     const done = () => { cur.turn = turn; cur.sec = sec };
@@ -2526,7 +2528,7 @@ function outSections(o){  // id → {k, turn, sec}; header id → {k, n, tools}.
 function outVisible(o, id, f){
   if (o.filter !== "all") return f.k === o.filter;
   if (o.hitSet && o.hitSet.has(id)) return true;  // a match always shows, folded or not
-  if (f.k === "blank" || (f.k === "noise" && !f.show)) return false;
+  if (f.hide) return false;
   if (f.turn && o.folds.has(f.turn)) return false;
   return !(f.sec && o.folds.has(f.sec));
 }
@@ -2550,7 +2552,7 @@ function outRefine(){
     if (el.dataset.k !== f.k) {
       el.dataset.k = f.k;
       el.classList.toggle("err", f.k === "err"); el.classList.toggle("sec", heads.has(id) && f.k === "tool"); el.classList.toggle("turn", f.k === "prompt");
-      el.classList.toggle("noise", f.k === "noise");
+      el.classList.toggle("noise", f.k === "status" || f.k === "frag");
       const g = el.querySelector(".aog"); if (g) g.replaceChildren(...(f.k === "err" ? [icon("crashed-fill", 12)] : []));  // a rewritten line can change kind
       delete el.dataset.hk;
     }
@@ -2566,9 +2568,11 @@ function outRefine(){
   outStamps(list, heads);
   outFilterBar(o, info);
   document.getElementById("aout-log").classList.toggle("filtered", o.filter !== "all");
-  const empty = document.getElementById("aout-empty"), none = o.loaded && o.filter !== "all" && !shown;
+  const empty = document.getElementById("aout-empty"), none = o.loaded && !shown && (o.filter !== "all" || !!(o.entries.length || o.tail));
   empty.hidden = !none;
-  if (none) { const what = {tool: "tool calls", err: "errors", prompt: "prompts"}[o.filter];
+  if (none && o.filter === "all") empty.replaceChildren(icon("search", 20), h("h3", {}, "Nothing to show yet"),
+    h("p", {}, "The agent's terminal has only redrawn its status line so far."));
+  else if (none) { const what = {tool: "tool calls", err: "errors", prompt: "prompts"}[o.filter];
     const isErr = o.filter === "err";
     empty.replaceChildren(icon(isErr ? "done" : "search", 20), h("h3", {}, `No ${what} in what's loaded`),
       h("p", {}, o.filter === "err" ? "Lines that look like a failure (a traceback, FAILED, error:) show here." : `${cap(what)} show here as the agent makes them.`),
@@ -2644,7 +2648,7 @@ function outFilterBar(o, info){
     fa.disabled = !ids.length || o.filter !== "all";
     if (fa.dataset.all !== String(all)) { fa.dataset.all = String(all); fa.replaceChildren(icon(all ? "expand" : "collapse", 12), all ? "Unfold all" : "Fold all") } }
   const bar = document.getElementById("aout-filter"); if (!bar) return;
-  const n = {all: 0, tool: 0, err: 0, prompt: 0}; for (const f of info.values()) { if (f.k !== "sep" && f.k !== "blank" && (f.k !== "noise" || f.show)) n.all++; if (f.k in n) n[f.k]++ }
+  const n = {all: 0, tool: 0, err: 0, prompt: 0}; for (const f of info.values()) { if (f.k !== "sep" && !f.hide) n.all++; if (f.k in n) n[f.k]++ }
   const key = OUT_FILTERS.map(([k]) => n[k]).join() + o.filter + o.loaded; if (bar.dataset.key === key) return; bar.dataset.key = key;
   const had = bar.contains(document.activeElement) && document.activeElement.dataset.f;
   bar.replaceChildren(...OUT_FILTERS.map(([k, label]) => h("button", {"data-f": k, "aria-pressed": String(o.filter === k), onclick: () => outFilter(k)},
@@ -2755,7 +2759,7 @@ function outJump(kind, dir = 1){  // from the last jump while it's in view, else
 }
 /* stuck and looping: a banner under the strip, only while it's true; dismissed, it stays away until things change */
 function outLoop(o){  // the last lines are one block of 1–6 lines said again and again
-  const es = o.entries.filter(e => (e.role === "line" || e.role === "tool") && /[A-Za-z]/.test(e.text || "")).slice(-90);
+  const es = o.entries.filter(e => (e.role === "line" || e.role === "tool") && /[A-Za-z]/.test(e.text || "") && !o.info?.get(e.id)?.hide).slice(-90);  // a spinner's redraws aren't a loop
   const norm = es.map(e => e.text.replace(/\b\d+(?:\.\d+)?\s*(?:ms|s|sec|secs|seconds?|m|min|minutes?|h)\b|\b\d{1,2}:\d\d(?::\d\d)?\b/g, "#").trim()), n = norm.length;  // a timer or a clock doesn't count; a test id does
   for (let k = 1; k <= 6; k++) {
     let r = 1;

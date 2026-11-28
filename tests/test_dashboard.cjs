@@ -1506,6 +1506,29 @@ test("All output, pane log: blank rows and spinner fragments drop out, a status 
   await page.click("#aout-back");
 });
 
+test("All output, pane log: real short output, errors, replies and program output that looks like a status line all stay", async page => {
+  await page.evaluate(() => { ui.agentsFolded = false; render() });
+  await page.click(".acard[data-name='plan-b'] button.aline");
+  const t0 = Date.now() - 60_000;
+  const L = (id, text) => ({id, role: "line", text, ts: t0, kind: "pane"});
+  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: null, source: "pane", entries: [
+    L("a.g0:0", "● Bash(seq 3)"), L("a.g0:1", "  ⎿  1"), L("a.g0:2", "     2"), L("a.g0:3", "     3"), L("a.g0:4", ""),
+    L("a.g0:5", "  ⎿  42"), L("a.g0:6", "✻ Thinking… (esc to interrupt)"), L("b.g0:0", "ok"), L("a.g0:7", "✗ a"), L("a.g0:8", "✗ b"),
+    L("a.g0:9", "● OK"), L("a.g0:10", "run 1: 50.2 tok/s"), L("a.g0:11", "run 2: 51.0 tok/s"), L("a.g0:12", "Compiling… crate foo"), L("a.g0:13", "Compiling… crate bar")]});
+  const hidden = await page.$$eval("#aout-list > .aoe.line[hidden]", es => es.map(e => e.dataset.id));
+  assert.deepEqual(hidden, ["a.g0:4"], "only the blank row goes: short results, another session's line, errors, a short reply and real output stay");
+  assert.match(await page.textContent("#aout-filter [data-f='err']"), /Errors\s*2/, "short error lines are still errors");
+  assert.equal(await page.$eval("#aout-list [data-id='a.g0:9']", e => e.dataset.k), "said", "a short reply is the agent talking, and ends the call");
+  await page.evaluate(() => { ui.out.inflight = true });
+  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: null, source: "pane", entries: []});
+  await page.click("#aout-back");
+  await page.click(".acard[data-name='plan-b'] button.aline");
+  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: null, source: "pane", entries: [L("c.g0:0", ""), L("c.g0:1", "· Calculating…"), L("c.g0:2", "g"), L("c.g0:3", "Calculating…")]});
+  assert.equal(await page.isVisible("#aout-empty"), false, "the latest status line still shows");
+  assert.deepEqual(await page.$$eval("#aout-list > .aoe.line:not([hidden])", es => es.map(e => e.dataset.id)), ["c.g0:3"]);
+  await page.click("#aout-back");
+});
+
 test("custom lifecycle stages show step_meta requirements and pre-MR signoff button without an MR", async page => {
   const custom = {...puck("pre-rfc", "Write RFC", "idle"), state: "needs", owner: "me", step: "rfc", mr: {},
     steps: ["rfc", "mr_open", "qa", "e2e", "merge"], step_index: 0,
