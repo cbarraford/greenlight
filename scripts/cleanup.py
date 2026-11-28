@@ -256,6 +256,8 @@ def evaluate(wt, repo, busy):
 
     if git(path, "status", "--porcelain", "--untracked-files=normal"):
         return "skip", f"{reason}, but has uncommitted/untracked changes"
+    if any(a.get("state") == "waiting" and not a.get("external") for a in wt.get("agents") or []):
+        return "skip", f"{reason}, but its agent is stopped on a prompt waiting for you"  # quiet, so the busy check misses it
     if any(i in busy for i in wt.get("ids") or [wt["id"]]):
         return "skip", f"{reason}, but a terminal was active in the last {ACTIVE_MINUTES}m"
     if (ext := outside_agent(path)):

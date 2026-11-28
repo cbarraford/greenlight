@@ -141,11 +141,69 @@ BUSY_RE = re.compile(r"esc to interrupt|esc interrupt|\(esc to cancel\b|ctrl\+c 
 ASK_RE = re.compile(r"^\s*(?:[❯›●▸]\s*\d\.\s+\S|Do you want to|Allow (?:execution|command|this)|"
                     r"Waiting for (?:your )?(?:approval|confirmation|input))|(?:\(y/n\)|\[Y/n\]|\[y/N\])\s*$", re.I | re.M)
 HEURISTIC_P = 0.75  # a pattern hit: above the 0.7 that greenlight acts on, as the regexes it replaces were acted on
+PROMPT_P = 0.9  # a known harness prompt with its options on the bottom rows: the agent is stopped until the user answers
+
+# Every harness's known blocking prompt, in one place: (harness, kind, a line of the prompt). A prompt is live when one of
+# these lines sits at most PROMPT_SPAN rows above the screen's last numbered option, and at most PROMPT_TAIL passive rows
+# (key hints, a status bar) follow that option: no composer, no newer output.
+PROMPTS = (
+    ("codex", "command", r"Would you like to run the following command\?"),
+    ("codex", "edit", r"Would you like to (?:make|apply) the following edits\?"),
+    ("codex", "approval", r"Press enter to confirm or esc to cancel"),
+    ("codex", "update", r"Update available!?"),
+    ("agy", "trust", r"Do you trust the contents of this (?:project|folder|workspace|directory)\?"),
+    ("agy", "command", r"Requesting permission for:?"),
+    ("agy", "command", r"Run this command\?"),
+    ("claude", "trust", r"Do you trust the files in this folder\?"),
+    ("claude", "permission", r"Do you want to (?:proceed|make this edit|create|allow|run)\b.*\?"),
+)
+PROMPT_RES = [(h, k, re.compile(r"^\s*[^\w\s]{0,3}\s*" + rx, re.I)) for h, k, rx in PROMPTS]
+PROMPT_SPAN, PROMPT_TAIL = 15, 3
+OPTION_RE = re.compile(r"^\s*(?:[❯›●▸>]\s*)?\d+\.\s+\S")
+CMD_RE = re.compile(r"^\s*\$\s+(\S.*)$|^\s*(?:Bash|Shell|Run)\((.+)\)\s*$")
+RULE_RE = re.compile(r"[\s╌┄┈─━═\-]+")
+CMD_HEAD_RE = re.compile(r"^\s*(?:Requesting permission for:?|Bash command|Command)\s*$", re.I)
+
+
+def prompt_ask(lines):
+    """The known prompt (PROMPTS) the agent is stopped on at the bottom of its screen, else None:
+    {agent, kind, text (its question), cmd (the command it asks to run, when it shows one)}."""
+    rows = [BOX_RE.sub("", t).rstrip() if BOX_RE.search(t := plain(str(x)).strip()) else t for x in lines]
+    rows = [x for x in rows if x.strip() and not re.fullmatch(r"[\s─━═\-–—╭╮╰╯]+", x)][-60:]
+    last = max((i for i, x in enumerate(rows) if OPTION_RE.match(x)), default=-1)
+    if last < 0 or len(rows) - 1 - last > PROMPT_TAIL:
+        return None
+    if any(BUSY_RE.search(x) or x.strip()[:1] in "❯›>" for x in rows[last + 1:]):  # busy again, or back at its composer
+        return None
+    lo = max(0, last - PROMPT_SPAN)
+    hits = [(i, h, k) for i in range(lo, len(rows)) for h, k, rx in PROMPT_RES if rx.search(rows[i])]
+    if not hits:
+        return None
+    # the question nearest the options (an older, answered one may still be in view), not codex's key-hint footer
+    i, agent, kind = ([x for x in hits if x[2] != "approval" and x[0] < last] or hits)[-1]
+    cmd = ""
+    for j in [*range(i, last), *range(i - 1, max(-1, i - 25), -1)]:  # below the question (codex, agy), else above (claude)
+        if OPTION_RE.match(rows[j]):
+            continue
+        if m := CMD_RE.match(rows[j]):
+            cmd = (m[1] or m[2]).strip()
+            break
+        if CMD_HEAD_RE.match(rows[j]):
+            # Claude: its header, a description, a ╌ rule, then the command; else the command is the next row
+            k = next((k + 1 for k in range(j + 1, min(j + 4, last)) if RULE_RE.fullmatch(rows[k])), j + 1)
+            if k < last and not OPTION_RE.match(rows[k]) and not any(rx.search(rows[k]) for _, _, rx in PROMPT_RES):
+                cmd = rows[k].strip()
+                break
+    return {"agent": agent, "kind": kind, "text": rows[i].strip()[:200], "cmd": cmd[:300]}
 
 
 def screen_state(lines):
     """The deterministic reading, for when no System One model is set up: patterns every harness's TUI shares."""
     ls = [plain(str(x)).rstrip() for x in lines][-60:]
+    if ask := prompt_ask(ls):  # a known harness prompt: stopped on the user, whatever else the screen shows
+        rest = round((1 - PROMPT_P) / (len(STATES) - 1), 4)
+        return {"state": "waiting_for_user", "prob": PROMPT_P, "probs": {k: (PROMPT_P if k == "waiting_for_user" else rest) for k in STATES},
+                "provider": "local", "ask": ask}
     nonblank = [x for x in ls if x.strip()]
     at = lambda rx: max((i for i, x in enumerate(nonblank) if rx.search(x)), default=-1)
     busy = at(BUSY_RE)

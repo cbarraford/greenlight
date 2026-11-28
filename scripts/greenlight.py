@@ -1479,7 +1479,21 @@ def screen(ws, terminals):
                                  r"(?:The (?:fix|changes|work|task)|Everything) (?:is|are) (?:in place|done|complete|ready))\b", visible[-2], re.I)
             seen["idle_complete"] = bool(idle_prompt and completed)
     ws["agent"]["screen"] = {k: seen[k] for k in ("state", "prob", "provider")}
+    if seen.get("ask"):
+        ws["agent"]["asking"] = seen["ask"]
     return seen
+
+
+def prompt_text(ag):
+    """What the agent's prompt asks (its question, and the command it wants to run), for an action line; "" if none."""
+    p = ag.get("asking") or {}
+    return f"{p.get('text') or ''} `{p['cmd']}`".strip() if p.get("cmd") else (p.get("text") or "")
+
+
+def waiting_action(ag, where=""):
+    """The "waiting on you" action for an agent stopped on a prompt, naming what it asks when that's known."""
+    what = prompt_text(ag)
+    return f"agent is waiting on you{where}: {what[:300]}" if what else f"agent is waiting on you{where}"
 
 
 EXTERNAL_STALE_H = 6  # an agent outside Greenlight running this long (since its process started: idle can't be seen)
@@ -1523,16 +1537,18 @@ def agent_overlay(ws, terminals):
             nxt.update(owner="me", action=f"agent logged out: /login in {ag['terminal']}, then greenlight re-dispatches")
             return
         else:
-            nxt.update(owner="me", action=f"agent is waiting on you: {ag['last'][:200]}")
+            where = f" in {ag['terminal']}" if ag.get("terminal") else ""
+            nxt.update(owner="me", action=waiting_action(ag, where) if ag.get("asking") else f"agent is waiting on you: {ag['last'][:200]}")
             return
     if nxt["owner"] == "greenlight" and ag["state"] == "working":
         seen = screen(ws, terminals) if seen is False else seen
         if seen and seen["prob"] >= SURE and seen["state"] in ("logged_out", "rate_limited", "unsent_draft", "waiting_for_user", "stuck_looping"):
-            ag["state"] = "done"
+            ag["state"] = "waiting" if isinstance(seen, dict) and seen.get("state") == "waiting_for_user" else "done"  # a prompt is never done
+            asks = f": {prompt_text(ag)[:300]}" if ag.get("asking") else ""
             action = {"logged_out": f"agent logged out: /login in {ag['terminal']} before greenlight continues",
                       "rate_limited": f"agent rate limited in {ag['terminal']}: inspect before greenlight continues",
                       "unsent_draft": f"a draft sits unsent in {ag['terminal']}: send or clear it before greenlight continues",
-                      "waiting_for_user": f"agent is waiting on you in {ag['terminal']} before greenlight continues",
+                      "waiting_for_user": f"agent is waiting on you in {ag['terminal']} before greenlight continues{asks}",
                       "stuck_looping": f"agent looks stuck in a loop in {ag['terminal']}: inspect before greenlight continues"}[seen["state"]]
             nxt.update(owner="me", action=action)
             return
@@ -1570,7 +1586,8 @@ def agent_overlay(ws, terminals):
     elif seen["state"] == "unsent_draft":
         nxt.update(owner="me", action=f"a draft sits unsent in {h}'s input box: send or clear it, then greenlight dispatches")
     elif seen["state"] == "waiting_for_user":
-        nxt.update(owner="me", action=f"agent is waiting on you in {h}")
+        ag["state"] = "waiting"  # stopped on a prompt: never idle, so nothing dispatches over it or cleans it up
+        nxt.update(owner="me", action=waiting_action(ag, f" in {h}"))
 
 
 def backfills_load():
@@ -1681,6 +1698,7 @@ def scan(save=True, _backfill_retries=0):
                          if (ext := next((a for a in w.get("agents") or [] if a.get("external")), None)) else {}),
                       "pane_key": ag.get("paneKey"),
                       "last": (ag.get("lastAssistantMessage") or "")[-400:],
+                      **({"asking": ag["asking"]} if isinstance(ag.get("asking"), dict) else {}),  # the prompt it's stopped on
                       "idle_h": w.get("lastOutputAt") and round((NOW_MS - w["lastOutputAt"]) / 3.6e6, 1)},
         })
     if superseded_backfills and save:
@@ -1805,7 +1823,8 @@ def scan(save=True, _backfill_retries=0):
         except Exception as e:
             r["mr"], r["next"] = None, {"step": "error", "owner": "me", "action": f"greenlight couldn't evaluate: {e}"}
             life = lifestage.place(r)
-        r["life"] = lifestage.now(life, r["agent"]["state"], "logged out" in r["next"].get("action", ""), lifestage.block_of(r, roster))
+        r["life"] = lifestage.now(life, r["agent"]["state"], "logged out" in r["next"].get("action", ""), lifestage.block_of(r, roster),
+                                   r["agent"].get("asking"))
         return r
 
     prev_file = STATE / "last.json"

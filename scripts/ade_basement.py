@@ -23,7 +23,7 @@ import last_agent
 import ade
 import ade_common
 import worktrunk
-from ade_common import MENU_ITEM_RE, draft, git, git_info, goals, plain, repo_list, screen_state
+from ade_common import MENU_ITEM_RE, draft, prompt_ask, git, git_info, goals, plain, repo_list, screen_state
 
 HOME = Path(os.environ.get("GREENLIGHT_HOME") or Path.home() / ".greenlight")
 REPOS, BRIEFS = HOME / "repos.json", HOME / "briefs"
@@ -96,6 +96,8 @@ def state(title, tail=None, cmd=""):
     kind = agent_type(title, cmd)
     if not kind:
         return None
+    if tail and prompt_ask(tail):  # a known permission/trust/approval prompt (ade_common.PROMPTS): stopped on the user
+        return "waiting"
     if kind == "claude":
         g, lines = (title or "")[:1], [x.strip() for x in (tail or [])[-15:]]
         if "⠀" <= g <= "⣿" or (g == "✳" and any(SPIN.match(x) for x in lines)):
@@ -125,7 +127,7 @@ def pane_states():
     rec_paths = _path_map(recs) if recs else None
     for p in panes():
         owner = _owner_of(p["cwd"], rec_paths) if rec_paths else None
-        kind, s = _pane_agent(p, owner, recs, now_ms)
+        kind, s, _ask = _pane_agent(p, owner, recs, now_ms)
         if not kind or not s:
             continue
         pref = _TITLE_PREFIX.get(kind, "")
@@ -230,11 +232,12 @@ def worktrees():
         mine = owned.get(path, [])
         ags = []
         for p in mine:
-            kind, s = _pane_agent(p, path, recs, now_ms)
+            kind, s, ask = _pane_agent(p, path, recs, now_ms)
             if kind and s:
                 at_ms = int(p["at"] or 0) * 1000
                 ags.append({"state": s, "agentType": kind, "updatedAt": at_ms, "stateStartedAt": at_ms,
-                            "handle": p["handle"], "session": p.get("session"), "paneKey": f"basement:{p['handle']}"})
+                            "handle": p["handle"], "session": p.get("session"), "paneKey": f"basement:{p['handle']}",
+                            **({"asking": ask} if ask else {})})
         # passive coexistence: busy, not ours to drive. updatedAt 0: an agent of ours here that's active still comes first
         ags += [{"state": "working", "agentType": e["agent"], "external": True, "pid": e["pid"], "updatedAt": 0,
                  "stateStartedAt": e["start"] * 1000 if e.get("start") else None} for e in ext.get(path, [])]
@@ -304,21 +307,25 @@ def _pane_kind(p, owner=None, recs=None, now_ms=None):
 
 
 def _pane_agent(p, owner=None, recs=None, now_ms=None):
-    """Identify (kind, state) for a Basement tmux pane, falling back to last_agent for starting or wrapped harnesses."""
+    """Identify (kind, state, prompt) for a Basement tmux pane, falling back to last_agent for starting or wrapped harnesses;
+    prompt: the known prompt it's stopped on (ade_common.prompt_ask), else None."""
     title, cmd = p["title"], p.get("cmd", "")
     direct = agent_type(title, cmd)
     rec = _pane_rec(p, owner, recs)
     fresh_rec = _is_fresh_rec(rec, now_ms)
     kind = direct or _pane_kind(p, owner, recs, now_ms)
     if not kind:
-        return None, None
+        return None, None, None
     if not direct and rec is not None and last_agent.cmd(p) not in last_agent.CMDS.get(rec["harness"], ()):
-        return kind, "working"
+        return kind, "working", None
     needs_tail = kind != "claude" or not ("⠀" <= title[:1] <= "⣿")
-    s = state(title, screen(p["handle"]) if needs_tail else None, kind)
+    tail = screen(p["handle"]) if needs_tail else None
+    if ask := prompt_ask(tail or []):
+        return kind, "waiting", ask
+    s = state(title, tail, kind)
     if s == "done" and fresh_rec and rec is not None and last_agent.cmd(p) in last_agent.CMDS.get(rec["harness"], ()):
         s = "working"
-    return kind, s
+    return kind, s, None
 
 
 def outside(path, paths=None):

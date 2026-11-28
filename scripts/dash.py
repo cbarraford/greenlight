@@ -408,6 +408,7 @@ def board(only=None, with_ids=False):
         for r in rows:
             if ag := live[r["id"]][1]:  # the live agent, not the scan's: one started since shows as working
                 r["agent"] = {**r["agent"], "state": ag.get("state", r["agent"]["state"])}
+                live_asking(r["agent"], ag)
     if any(not r.get("card") for r in rows):
         import ws_state
         rows = ws_state.keyed(rows, migrate=False)  # a pre-upgrade scan still needs stable question targets
@@ -532,11 +533,20 @@ def forge(repo=None):
     return "\n".join(out + [f"(couldn't ask {e})" for e in errs]) or "Nothing open."
 
 
+def live_asking(row_agent, ag):
+    """The prompt the live agent is stopped on (ade_basement's `asking`) onto the row's agent; an answered one goes."""
+    if ag.get("state") == "waiting" and isinstance(ag.get("asking"), dict):
+        row_agent["asking"] = ag["asking"]
+    elif ag.get("state") != "waiting":
+        row_agent.pop("asking", None)
+
+
 def state_of(r, blk=None):
     """(state, why) from greenlight's next step plus the live agent and what I'm blocking."""
     nxt, ag = r["next"], r["agent"]
     if ag["state"] == "waiting":
-        return "needs", "agent is waiting on your answer"
+        what = greenlight.prompt_text(ag)
+        return "needs", f"agent is waiting on your answer: {what[:200]}" if what else "agent is waiting on your answer"
     if nxt["step"] == "error" or "logged out" in nxt.get("action", ""):
         return "crashed", nxt.get("action", "")
     if b := block_of(r, blk):
@@ -713,6 +723,7 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
                               last=(ag.get("lastAssistantMessage") or r["agent"]["last"] or "")[-(20000 if full else 400):],
                               task=(ag.get("taskTitle") or ag.get("prompt") or "")[:160], tool=ag.get("toolName") or "",
                               input=(ag.get("toolInput") or "")[:160], since=ag.get("stateStartedAt"))
+            live_asking(r["agent"], ag)
         r["agent"]["idle_h"] = w.get("lastOutputAt") and round((now - w["lastOutputAt"]) / 3.6e6, 1)
         r["agent"]["last_output_at"] = w.get("lastOutputAt")
         state, why = state_of(r, blk)
@@ -743,7 +754,8 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
             "blocking": (block_of(r, blk) or {}).get("reason"),  # the reason I'm blocking its MR, if I am
             # lifestage.py: lifecycle stage and sub-stage, who holds it, the suggested move (the hover card's line and button label),
             # with the agent's state as of now rather than the scan's
-            "life": lifestage.now(r.get("life") or lifestage.place(r), r["agent"]["state"], "logged out" in r["next"].get("action", ""), block_of(r, blk)),
+            "life": lifestage.now(r.get("life") or lifestage.place(r), r["agent"]["state"], "logged out" in r["next"].get("action", ""), block_of(r, blk),
+                                          r["agent"].get("asking")),
         })
         att = ws_state.stage_attempts(card, r, check_local=True)
         if att:

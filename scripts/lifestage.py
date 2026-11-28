@@ -426,15 +426,19 @@ def block_of(r, roster):
 WAS = ("pile", "by", "holder", "do", "why", "suggestion", "blocker", "stage", "stage_name", "sub", "sub_name", "at")
 
 
-def now(life, agent_state, logged_out=False, block=None):
-    """`life` with what's true right now applied: a waiting agent makes it yours, a working one means it's in hand, and
-    an MR the roster says I'm blocking (block: blocking.py's entry for it) is mine whatever the threads' last authors say."""
+def now(life, agent_state, logged_out=False, block=None, asking=None):
+    """`life` with what's true right now applied: a waiting agent makes it yours (asking: the prompt it's stopped on,
+    ade_common.prompt_ask's), a working one means it's in hand, and an MR the roster says I'm blocking (block:
+    blocking.py's entry for it) is mine whatever the threads' last authors say."""
     life = {k: v for k, v in life.items() if k != "_was"} | life.get("_was", {})  # undo an earlier now()
     was = {k: life.get(k) for k in WAS}
     if agent_state == "waiting":
         life = life | {"pile": "yours", "by": "you", "holder": "you", "why": "your agent is waiting on your answer",
                        "do": "Your agent asked you a question and has stopped until you answer it.",
                        "suggestion": {"label": "Answer your agent", "kind": "answer"}}
+        if isinstance(asking, dict) and asking.get("text"):
+            asks = asking["text"] + (f" `{asking['cmd']}`" if asking.get("cmd") else "")
+            life["do"] = f"Your agent is stopped on a prompt until you answer it: {asks[:300]}"
     elif block and life["pile"] != "done" and life["by"] not in HOLDER:  # my side doesn't know it holds this one
         if block.get("reason") == "discussion" and life["sub"] == "re-review":
             life = life | at("review", "respond")  # a thread is waiting on me after all
