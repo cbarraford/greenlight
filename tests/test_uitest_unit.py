@@ -1,5 +1,6 @@
 """Unit tests for scripts/uitest.py (cross-platform: RPC framing, session lifecycle, CLI, fixtures)."""
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -211,3 +212,76 @@ def test_make_fixture_resolves_symlinked_root_for_native_worktrees(tmp_path):
                                capture_output=True, text=True, check=True).stdout
     listed = {ln[9:] for ln in porcelain.splitlines() if ln.startswith("worktree ")}
     assert {r["id"] for r in rows} <= listed, (rows, listed)
+    origin = subprocess.run(["git", "-C", repos[0], "remote", "get-url", "origin"],
+                            capture_output=True, text=True, check=True).stdout.strip()
+    assert origin == "https://github.com/acme/widgets.git", origin
+
+
+def test_default_fixture_survives_native_rescan_with_visible_pucks(tmp_path):
+    """After greenlight.py scan runs in --uitest, default fixture pucks must remain active (not shelved quiet)."""
+    home, bindir, _ = uitest._make_fixture(tmp_path, "default")
+    env = {
+        "PATH": f"{bindir}:{os.environ.get('PATH', '')}",
+        "HOME": str(tmp_path),
+        "GREENLIGHT_HOST": "local",
+        "GREENLIGHT_HOME": str(home),
+        "GREENLIGHT_CODE": str(ROOT),
+        "GREENLIGHT_TMUX_SOCKET": f"gl-unit-none-{tmp_path.name}",
+        "GREENLIGHT_ADE": "native",
+        "GREENLIGHT_USAGE": "off",
+    }
+    scan = subprocess.run([sys.executable, str(ROOT / "scripts" / "greenlight.py"), "scan"],
+                          env=env, capture_output=True, text=True)
+    assert scan.returncode == 0, (scan.stdout, scan.stderr)
+    snap = subprocess.run([sys.executable, str(ROOT / "scripts" / "dash.py"), "snapshot"],
+                          env=env, capture_output=True, text=True, check=True)
+    pucks = json.loads(snap.stdout)["pucks"]
+    by_name = {p["name"]: p for p in pucks}
+    assert set(by_name) >= {"fix-auth", "add-metrics"}, by_name
+    for name in ("fix-auth", "add-metrics"):
+        assert by_name[name]["project"] == "acme/widgets", by_name[name]
+        assert by_name[name]["state"] not in ("quiet", "done"), by_name[name]
+
+
+def test_adversarial_fixture_seeds_waiting_agent_and_keeps_xss_name_across_rescan(tmp_path):
+    """Adversarial fixture must keep its XSS workspace name and waiting agent state after native rescan."""
+    sess = uitest.UITestSession(fixture="adversarial", binary=tmp_path / "fake")
+    try:
+        sess.home, bindir, _ = uitest._make_fixture(sess.root, "adversarial")
+        sess._seed_fixture_agents()
+        env = {
+            "PATH": f"{bindir}:{os.environ.get('PATH', '')}",
+            "HOME": str(tmp_path),
+            "GREENLIGHT_HOST": "local",
+            "GREENLIGHT_HOME": str(sess.home),
+            "GREENLIGHT_CODE": str(ROOT),
+            "GREENLIGHT_TMUX_SOCKET": sess.tmux_socket,
+            "GREENLIGHT_ADE": "native",
+            "GREENLIGHT_USAGE": "off",
+        }
+        scan = subprocess.run([sys.executable, str(ROOT / "scripts" / "greenlight.py"), "scan"],
+                              env=env, capture_output=True, text=True)
+        assert scan.returncode == 0, (scan.stdout, scan.stderr)
+        snap = subprocess.run([sys.executable, str(ROOT / "scripts" / "dash.py"), "snapshot"],
+                              env=env, capture_output=True, text=True, check=True)
+        pucks = json.loads(snap.stdout)["pucks"]
+        assert len(pucks) == 1, pucks
+        assert 'onerror="window.__pwned=1"' in pucks[0]["name"], pucks[0]
+        assert pucks[0]["state"] not in ("quiet", "done"), pucks[0]
+        if uitest.shutil.which("tmux"):
+            assert pucks[0]["agent"]["state"] == "waiting", pucks[0]
+    finally:
+        sess.stop()
+
+
+def test_seed_fixture_agents_handles_missing_rows(tmp_path):
+    sess = uitest.UITestSession(fixture="adversarial", binary=tmp_path / "fake")
+    try:
+        sess.home = sess.root / "home"
+        sess.home.mkdir(parents=True, exist_ok=True)
+        (sess.home / "last.json").write_text(json.dumps({"rows": []}))
+        with mock.patch.object(uitest.subprocess, "run") as m_run:
+            sess._seed_fixture_agents()
+        m_run.assert_not_called()
+    finally:
+        sess.stop()

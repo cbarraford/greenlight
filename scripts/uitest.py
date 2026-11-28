@@ -172,6 +172,8 @@ def _native_worktrees(root, home, worktrees, rows):
             main = (root / "repos" / name).resolve()
             main.mkdir(parents=True, exist_ok=True)
             subprocess.run(["git", "init", "-q", "-b", "main", str(main)], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(main), "remote", "add", "origin", f"https://github.com/acme/{name}.git"],
+                           check=True, capture_output=True)
             subprocess.run(["git", "-C", str(main), "-c", "user.name=uitest", "-c", "user.email=uitest@localhost",
                             "commit", "-q", "--allow-empty", "-m", "fixture"], check=True, capture_output=True)
             mains[name] = main
@@ -218,7 +220,7 @@ def _make_fixture(root: Path, fixture: str):
         worktrees, rows = [], []
     elif fixture == "adversarial":
         xss = '"><img src=x onerror="window.__pwned=1">'
-        ws_path = str(wsdir / "xss-ws")
+        ws_path = str(wsdir / f"xss-{xss}")
         Path(ws_path).mkdir(exist_ok=True)
         worktrees = [{
             "worktreeId": "wt-xss", "displayName": f"xss-{xss}", "path": ws_path,
@@ -518,7 +520,30 @@ class UITestSession:
     def start(self):
         binary = self.binary = self.binary or build_test_binary()
         self.home, bindir, webdir = _make_fixture(self.root, self.fixture)
+        self._seed_fixture_agents()
         return self._launch(binary, bindir, webdir)
+
+    def _seed_fixture_agents(self):
+        """Start isolated tmux agent panes needed after native rescan (e.g. adversarial waiting agent)."""
+        if self.fixture != "adversarial" or not self.home or not shutil.which("tmux"):
+            return
+        rows = json.loads((self.home / "last.json").read_text()).get("rows") or []
+        if not rows or not Path(rows[0]["path"]).is_dir():
+            return
+        ws_path = rows[0]["path"]
+        subprocess.run([
+            "tmux", "-L", self.tmux_socket, "new-session", "-d", "-s", "uitest-wait", "-c", ws_path,
+            "sh", "-c", "printf '\\033]2;✳ Claude\\007  ❯ 1. Proceed\\n    2. Hold\\n'; exec sleep 600",
+        ], check=True, capture_output=True)
+        subprocess.run(["tmux", "-L", self.tmux_socket, "select-pane", "-t", "uitest-wait", "-T", "✳ Claude"],
+                       check=True, capture_output=True)
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            cap = subprocess.run(["tmux", "-L", self.tmux_socket, "capture-pane", "-p", "-t", "uitest-wait"],
+                                 capture_output=True, text=True)
+            if "❯ 1." in cap.stdout:
+                break
+            time.sleep(0.02)
 
     def relaunch(self):
         """Quit the app (its windows save what they show) and start it again on the same home, fixture and defaults."""
