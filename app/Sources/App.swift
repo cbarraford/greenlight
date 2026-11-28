@@ -1093,7 +1093,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             NSLog("greenlight page error: %@", String(describing: b["m"] ?? ""))
             Diag.event("js_error", ["page": "dashboard", "name": b["name"] ?? NSNull(), "line": b["line"] ?? NSNull(), "col": b["col"] ?? NSNull()])
         } else if cmd != "ready" && cmd != "context" { Diag.event("action", ["cmd": cmd]) }  // the command, never its payload
-        if ["run", "merge", "undraft", "signoff", "ask", "answer", "answerPing", "park", "task", "basement", "editPrompt", "steward", "askChief", "resetAttempts"].contains(cmd) { greenlight.active() }
+        if ["run", "merge", "undraft", "signoff", "ask", "answer", "answerPing", "park", "task", "basement", "connectSession", "editPrompt", "steward", "askChief", "resetAttempts"].contains(cmd) { greenlight.active() }
         if cmd == "detach", let v = b["view"] as? String { detach(v) }
         if cmd == "unpick" {  // a click on a lit hex clears them in every window (on its chat's)
             if let gone = b["gone"] as? [String] {  // a refresh dropped these: every window already let go of them, so just forget them, or a reload lights them again
@@ -1128,6 +1128,16 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         // A workspace's Basement button: down to B1, on that worktree.
         if cmd == "basement", let path = b["path"] as? String, path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") { toWorkspace(path, resume: resumeOf(b["resume"])) }
+        // Agents view Connect button: a new Terminal window in the workspace with the session-resume command typed and submitted.
+        if cmd == "connectSession", let path = b["path"] as? String,
+           path.range(of: #"^/[\w./@+-]{1,300}\z"#, options: .regularExpression) != nil, !path.contains("..") {
+            let r = resumeOf(b["resume"])
+            if let h = r["harness"], let sid = r["sessionId"] {
+                var clean = ["harness": h, "sessionId": sid]
+                if let bin = r["bin"] { clean["bin"] = bin }
+                openSessionWindow(path: path, resume: clean, only: l.map(\.only) ?? sharedOnly, from: from.window)
+            }
+        }
         if cmd == "showChat", l == nil { setChat(hidden: false) }  // a second window's chat is always in its pane
         if cmd == "settings" { appSettings() }  // the top bar's gear: its own window, to the front
         if cmd == "inbox" { greenlight.settingsOpen = false; if l != nil { show(); greenlight.inboxOpen = true } else { greenlight.inboxOpen.toggle() } }  // one inbox, the main window's
@@ -1931,6 +1941,19 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if let web = w.contentView as? WKWebView { revealOnPaint(w, web) }
         w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
+    var pendingTermLaunch = [Int: (path: String, resume: [String: String])]()  // new Terminal windows opened directly on a workspace + session command
+    /// Open a brand-new Terminal window in `path` and run the validated agent-session resume command in it.
+    func openSessionWindow(path: String, resume: [String: String], only: [String]?, from: NSWindow?) {
+        var saved = ud.array(forKey: "termWindows") as? [[String: Any]] ?? []
+        let nid = (saved.compactMap { $0["id"] as? Int } + termWins.keys).max().map { $0 + 1 } ?? 1
+        saved.append(["id": nid]); ud.set(saved, forKey: "termWindows")
+        try? FileManager.default.removeItem(at: termState(nid))  // never restore an orphaned layout from a prior crash
+        pendingTermLaunch[nid] = (path, resume)
+        let w = makeTermWindow(nid, only: only)
+        if let f = from?.frame { w.setFrameTopLeftPoint(NSPoint(x: f.minX + 30, y: f.maxY - 30)); onScreen(w) }
+        if let web = w.contentView as? WKWebView { revealOnPaint(w, web) }
+        presentWindow(w)
+    }
     /// The windows New window made, as they were at quit.
     func reopenTermWindows() {
         for d in ud.array(forKey: "termWindows") as? [[String: Any]] ?? [] {
@@ -1952,7 +1975,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             }
             for k in self.ptys.keys where k.hasPrefix("\(wid):") { self.ptys.removeValue(forKey: k)?.stop(); self.ptySession[k] = nil }
             self.dropShare(w)
-            self.paintedWebs.remove(ObjectIdentifier(web)); self.termWins[wid] = nil; self.floors[wid] = nil; self.floorGo[ObjectIdentifier(w)] = nil; self.termBadges[wid] = nil
+            self.paintedWebs.remove(ObjectIdentifier(web)); self.termWins[wid] = nil; self.pendingTermLaunch[wid] = nil; self.floors[wid] = nil; self.floorGo[ObjectIdentifier(w)] = nil; self.termBadges[wid] = nil
             ud.set((ud.array(forKey: "termWindows") as? [[String: Any]] ?? []).filter { $0["id"] as? Int != wid }, forKey: "termWindows")
             try? FileManager.default.removeItem(at: self.termState(wid))
             web.configuration.userContentController.removeScriptMessageHandler(forName: "term")  // it holds the app, not the page, but the page would linger
@@ -2024,12 +2047,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// ponytail: the key window's tabs only; a tab in another Basement window isn't found
     func toConsole(_ w: String) { toWorkspace(w) }
     var wantWs: String?, wantResume: [String: String] = [:]  // the worktree a dashboard Basement button asked for, if the terminal page wasn't loaded yet
-    /// A puck's `resume` (dash.py add_resume) as the page may get it: a harness greenlight knows, a tmux session's name and a plain absolute binary path, nothing else.
+    /// A puck's `resume` (dash.py add_resume / connectSession) as the page may get it: a harness greenlight knows, a tmux session's name, an agent session ID, and a plain absolute binary path, nothing else.
     func resumeOf(_ o: Any?) -> [String: String] {
         let d = o as? [String: Any] ?? [:]
         var out: [String: String] = [:]
         if let h = d["harness"] as? String, ["claude", "codex", "opencode", "gemini", "pi", "agy"].contains(h) { out["harness"] = h }
         if let s = d["session"] as? String, s.range(of: #"^mc-[\w-]{1,64}\z"#, options: .regularExpression) != nil { out["session"] = s }  // as open's; \z: not before a final newline
+        if let sid = d["sessionId"] as? String, sid.range(of: #"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\z"#, options: .regularExpression) != nil { out["sessionId"] = sid }
         if let b = d["bin"] as? String, b.range(of: #"^/[\w./@+-]{1,300}\z"#, options: .regularExpression) != nil, !b.contains("..") { out["bin"] = b }
         return out
     }
@@ -2285,6 +2309,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             if let obj = paneReplay.replay(lastTreesObj) { web?.callJS("window.term && term.workspaces", [obj]) }
             // a Basement button's worktree before the layout: restore opens it (pendingWs) in place of a first shell
             if wid == 0 { wantFloor = nil; if let p = wantWs { wantWs = nil; web?.callJS("term.ws", [p, wantResume]); wantResume = [:] } }
+            if let launch = pendingTermLaunch.removeValue(forKey: wid) { web?.callJS("window.term && term.ws", [launch.path, launch.resume]) }
             web?.evaluateJavaScript("term.restore(\(file(termState(wid))))")  // safety-ok: the file only if it parses as JSON
             if lastTreesObj == nil || Date().timeIntervalSince(treesAt) > 5 { pushTrees() }
         case "painted": break  // its restored layout has drawn: userContentController reveals the window

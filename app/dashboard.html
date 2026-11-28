@@ -238,6 +238,16 @@ body.nohex main{display:flex;flex-direction:column;overflow:hidden;background:va
 .ameta{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-1) var(--sp-3);margin-top:auto;font:var(--ds-type-caption);color:var(--text3);font-variant-numeric:tabular-nums}
 .ameta .asig{display:inline-flex;align-items:center;gap:var(--sp-1);white-space:nowrap}
 .ameta .asig.bad{color:var(--red-ink)} .ameta .asig.run{color:var(--blue-ink)} .ameta .asig.hi{color:var(--text2)}
+.afoot{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-1) var(--sp-2);margin-top:auto;min-width:0}
+.afoot .ameta{margin-top:0;flex:1 1 auto;min-width:0}
+.asess{display:inline-flex;align-items:center;gap:var(--sp-1);margin-left:auto;min-width:0;max-width:100%;flex-shrink:0}
+.asid,.aconn{display:inline-flex;align-items:center;gap:var(--sp-1);height:var(--ds-layout-control-height-sm);padding:0 var(--sp-2);border:0;border-radius:var(--ds-radius-sm);background:var(--ds-element-rest);color:var(--text2);font:var(--ds-type-label);min-width:0;max-width:100%;white-space:nowrap;transition:transform var(--t-press) var(--ease)}
+.asid:hover,.aconn:hover{background:var(--ds-element-hover);color:var(--text)}
+.asid:active,.aconn:active{background:var(--ds-element-active);transform:scale(.97)}
+.asid .mono{font:var(--ds-type-code);overflow:hidden;text-overflow:ellipsis}
+.asid.ok{color:var(--accent-fg)}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+#aout .aostrip .asess{margin-left:0}
 .el{font:var(--ds-type-caption);color:var(--text3);font-variant-numeric:tabular-nums}
 .aline{display:flex;align-items:center;gap:var(--sp-2);min-width:0;padding:var(--sp-1) var(--sp-2);border-radius:var(--r-0);background:var(--ds-bg-sunken)}
 .agents.detached .aline{padding:var(--sp-2) var(--sp-3)}
@@ -452,7 +462,7 @@ button.aline:hover .aexp,button.aline:focus-visible .aexp{opacity:1}
 .fan.open .hub{left:var(--cx);top:var(--cy);transform:scale(var(--hs,.55))}
 .badge{position:absolute;left:50%;bottom:14%;transform:translateX(-50%);min-width:16px;height:16px;padding:0 5px;border-radius:var(--ds-radius-full);background:color-mix(in srgb,currentColor 14%,transparent);color:var(--hink);
   font:var(--ds-type-label-sm);line-height:16px;font-variant-numeric:tabular-nums;text-align:center}  /* a count badge in the hex's own ink (§10.5) */
-@media (prefers-reduced-motion: reduce){.fan .fp,.fan .backdrop,.fan .hub,.fieldwrap>.cell,.fan,.btn,.acard,.acard .open,button.aline,button.aline .aexp,.hx .halo{transition:none}
+@media (prefers-reduced-motion: reduce){.fan .fp,.fan .backdrop,.fan .hub,.fieldwrap>.cell,.fan,.btn,.acard,.acard .open,.asid,.aconn,button.aline,button.aline .aexp,.hx .halo{transition:none}
   .hx .pulse,.stagepop,.spin,#hcard,#hcard .gl.working,.rescan.on,#hcard .mg .go i{animation:none}}
 
 /* docks: the chat's context (right) and the park (left) */
@@ -815,7 +825,7 @@ body.hasdock:not(.nohex) .empty{right:var(--dock-w)}
 .lnk{padding:0;border:0;background:none;color:var(--accent-fg);font:inherit}
 body:has(>main.ov){background:var(--canvas)}
 /* toast: the one inverted surface, so it reads as passing (DESIGN.md §10.14) */
-.toast{position:fixed;left:50%;transform:translateX(-50%);z-index:40;display:flex;align-items:center;flex-wrap:wrap;gap:var(--sp-2) var(--sp-3);width:max-content;max-width:min(560px,calc(100vw - 32px));padding:var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-3);border-radius:var(--r-2);background:var(--text);color:var(--bg);box-shadow:var(--elev);font-size:var(--fs-3);animation:tin var(--t-base) var(--ease)}
+.toast{position:fixed;left:50%;transform:translateX(-50%);z-index:90;display:flex;align-items:center;flex-wrap:wrap;gap:var(--sp-2) var(--sp-3);width:max-content;max-width:min(560px,calc(100vw - 32px));padding:var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-3);border-radius:var(--r-2);background:var(--text);color:var(--bg);box-shadow:var(--elev);font-size:var(--fs-3);animation:tin var(--t-base) var(--ease)}
 @keyframes tin{from{opacity:0;translate:0 8px}}
 @media (prefers-reduced-motion: reduce){.toast,.sheet{animation:none}}
 .toast .tbadge{width:20px;height:20px;flex-shrink:0;display:flex;align-items:center;justify-content:center;color:inherit} .toast.bad .tbadge{color:inherit}
@@ -914,7 +924,7 @@ const STEP_GOALS = {mr_open:"MR open", ci_green:"CI green", no_conflicts:"No con
 const STEP_NAMES = {mr_open:"Open MR", ci_green:"CI pending", no_conflicts:"Conflicts", verified:"Verify", review_bot:"Add review bot", milestone:"Set milestone",
   ready:"Undraft", threads:"Threads", approved:"Needs approval", merge:"Merge", review:"Your review", freeform:"Goal", done:"Done", error:"Error", parked:"Parked"};
 const ui = {view: localGet("view") === "list" ? "list" : "overview",  // a view no longer offered (the old CI view) opens on Overview
-  listBy: localGet("listBy") || "state", listOnly: null, paths: null, showDone: false, showParked: false, parking: {}, acting: {}, agentsFolded: localGet("agentsFolded") === "1", q: "", snap: null, page: null, at: 0, ask: {}, answering: null, fullAsk: {}, picked: new Set(), out: null, stage: null};
+  listBy: localGet("listBy") || "state", listOnly: null, paths: null, showDone: false, showParked: false, parking: {}, acting: {}, agentsFolded: localGet("agentsFolded") === "1", q: "", snap: null, page: null, at: 0, ask: {}, answering: null, fullAsk: {}, picked: new Set(), out: null, stage: null, copiedSid: null, copiedSidTimer: 0};
 const CONN = {tries: 0, last: 0, failed: false, t: 0};  // no snapshot yet: after 15s say so, and offer Retry
 function armConn(){ clearTimeout(CONN.t); clearTimeout(CONN.t5); CONN.last = Date.now(); CONN.failed = CONN.slow = false;
   CONN.t5 = setTimeout(() => { if (!ui.snap) { CONN.slow = true; renderMain() } }, 5000);  // 5s in: Settings is offered while it keeps waiting
@@ -1296,8 +1306,65 @@ function unStages(e){  // a real leave forgets it; the 5s re-render's removal bl
 // what the agent is doing, as a button: it opens All output over the whole window
 const outLine = (p, act, cls, ...kids) => h("button", {class:"aline" + (cls ? " " + cls : ""), id: `ol-${cssId(p.name)}`, type:"button", "aria-haspopup":"dialog", "aria-label": `Show all output: ${short(act, 160)}`,
   onclick: () => openOut(p.name)}, ...kids, h("span", {class:"aexp", "aria-hidden":"true"}, icon("expand", 12)));
+const SESSION_ID_OK = s => typeof s === "string" && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(s);
+const SESSION_BIN_OK = b => typeof b === "string" && /^\/[\w./@+-]{1,300}$/.test(b) && !b.includes("..");
+const RESUME_ID = {claude: id => `claude --resume ${id}`, codex: id => `codex resume ${id}`, opencode: id => `opencode -s ${id}`, gemini: id => `gemini --resume ${id}`, pi: id => `pi --session ${id}`, agy: id => `agy --resume ${id}`};
+const HARNESS_ALIAS = {antigravity: "agy", "claude-code": "claude", "claude code": "claude", "gemini-cli": "gemini"};
+function sessionInfo(p){
+  const a = p && p.agent || {}, id = SESSION_ID_OK(a.session_id) ? a.session_id : "";
+  if (!id) return null;
+  const rawH = String(a.session_harness || a.type || "").trim().toLowerCase(), h = Object.hasOwn(HARNESS_ALIAS, rawH) ? HARNESS_ALIAS[rawH] : rawH;
+  const harness = Object.hasOwn(RESUME_ID, h) ? h : "";
+  const bin = SESSION_BIN_OK(a.session_bin) ? a.session_bin : "";
+  const base = harness ? RESUME_ID[harness](id) : "";
+  const cmd = base && bin ? base.replace(/^\S+/, bin) : base;
+  return {id, harness, bin, cmd};
+}
+const shortSid = id => id.length > 10 ? id.slice(0, 8) + "…" : id;
+function announceStatus(text){
+  let el = document.getElementById("sr-status");
+  if (!el) { el = h("div", {id:"sr-status", class:"sr-only", role:"status", "aria-live":"polite", "aria-atomic":"true"}); document.body.append(el) }
+  el.textContent = "";
+  setTimeout(() => { el.textContent = text }, 10);
+}
+function copySessionId(text, key, kind = "id"){
+  if (!text) return;
+  post({cmd: "copyText", text});
+  clearTimeout(ui.copiedSidTimer);
+  const st = {key, text, kind};
+  ui.copiedSid = st;
+  announceStatus(kind === "cmd" ? "Copied connect command" : "Copied session ID");
+  ui.copiedSidTimer = setTimeout(() => {
+    if (ui.copiedSid === st) { ui.copiedSid = null; if (!key.startsWith("ao:")) renderMain(); if (ui.out) outHead() }
+  }, 1850);
+  if (!key.startsWith("ao:")) renderMain();
+  if (ui.out) outHead();
+}
+function connectSession(p){
+  const s = sessionInfo(p);
+  if (!s || !s.harness || !p || typeof p.path !== "string" || !p.path) return;
+  if (!/^\/[\w./@+-]{1,300}$/.test(p.path) || p.path.includes(".."))
+    return note("Couldn't open terminal", "Greenlight can't open a terminal at this path (spaces or unusual characters).", true);
+  post({cmd: "connectSession", path: p.path, resume: {harness: s.harness, sessionId: s.id, ...(s.bin ? {bin: s.bin} : {})}});
+}
+function sessionControls(p, scope){
+  const s = sessionInfo(p); if (!s) return null;
+  const key = `${scope}:${p.name}`, copied = !!(ui.copiedSid && ui.copiedSid.key === key && (ui.copiedSid.text === s.id || ui.copiedSid.text === s.cmd));
+  const copyTip = s.cmd ? `Copy session ID: ${s.id}\nShift-click to copy: ${s.cmd}` : `Copy session ID: ${s.id}`;
+  const copyAria = copied ? (ui.copiedSid.kind === "cmd" ? "Copied connect command" : "Copied session ID")
+    : `Copy session ID ${s.id}${s.cmd ? ". Shift-click to copy connect command" : ""}`;
+  return h("div", {class:"asess"},
+    h("button", {type:"button", class:"asid" + (copied ? " ok" : ""), id: `${scope}-sid-${cssId(p.name)}`, "data-sid": s.id,
+      title: copyTip, "aria-label": copyAria,
+      onclick: e => copySessionId(e && e.shiftKey && s.cmd ? s.cmd : s.id, key, e && e.shiftKey && s.cmd ? "cmd" : "id")},
+      icon(copied ? "check" : "copy", 12), h("span", {class: copied ? null : "mono"}, copied ? (ui.copiedSid.kind === "cmd" ? "Copied cmd" : "Copied") : shortSid(s.id))),
+    p.path && s.cmd ? h("button", {type:"button", class:"aconn", id: `${scope}-conn-${cssId(p.name)}`,
+      title: `Open new terminal in ${p.name} and run: ${s.cmd}`, "aria-label": `Connect to ${p.name} session in new terminal`,
+      onclick: () => connectSession(p)},
+      icon("terminal", 12), "Connect") : null);
+}
 const CI_GLYPH = {success: ["done", ""], failed: ["crashed", "bad"], running: ["working", "run"], pending: ["queued", ""], canceled: ["queued", ""]};
-function agentCard(p){  // one size everywhere: title + action, status + step bar, current question or tool output, then quiet MR signals
+function agentCard(p){  // one size everywhere: title + action, status + step bar, current question or tool output, then quiet MR signals and session actions
   const a = p.agent, wait = asking(p), ag = agentMeta(a.type), mr = p.mr || {}, crash = p.state === "crashed" && !wait && a.state !== "working";
   const said = String(a.last || "").split("\n").filter(Boolean).pop() || "";
   const act = a.tool ? `${a.tool}${a.input ? ": " + a.input : ""}` : short(said || "Working", 160);
@@ -1313,6 +1380,7 @@ function agentCard(p){  // one size everywhere: title + action, status + step ba
     mr.threads_total ? sig("threads", `${mr.threads || 0}/${mr.threads_total} threads`, mr.threads ? "hi" : "") : null,
     mr.approvals_required ? sig("review", `${mr.approvals || 0}/${mr.approvals_required} approved`, "") : null,
   ].filter(Boolean);
+  const sessEl = sessionControls(p, "ac");
   return h("article", {class:"acard" + (wait ? " wait" : crash ? " crashed" : ""), "data-name": p.name, "aria-label":`${a.type || "agent"} on ${title}`,
     onmouseenter: () => hl(p.name, true), onmouseleave: () => hl(p.name, false)},
     h("div", {class:"atop"}, agentAv(a.type, 20),
@@ -1335,7 +1403,7 @@ function agentCard(p){  // one size everywhere: title + action, status + step ba
       : crash ? (said ? outLine(p, said, "err", icon("crashed", 12, "alic"), h("span", {class:"mono", title: said}, said)) : null)  // its last words, if any
       : outLine(p, act, "", icon("terminal", 12, "alic"),
           h("span", {class:"mono", title: act}, a.tool ? [h("b", {class:"atool"}, a.tool), a.input ? `: ${a.input}` : ""] : act)),
-    metaItems.length ? h("div", {class:"ameta"}, ...metaItems) : null);
+    metaItems.length || sessEl ? h("div", {class:"afoot"}, metaItems.length ? h("div", {class:"ameta"}, ...metaItems) : null, sessEl) : null);
 }
 /* the action a human request asks for, said the same in every row that offers it */
 const askLabel = p => asking(p) ? "Answer" : p.mr && p.mr.role === "review" ? "Review MR" : p.step === "merge" ? "Review merge"
@@ -1775,18 +1843,19 @@ function lifecycle(p, ml){
   })));
 }
 function agentPanel(p){
-  const a = p.agent, r = ui.page.resp, ag = agentMeta(a.type), t0 = since(a.since);
+  const a = p.agent, r = ui.page.resp, agType = a.type || a.session_harness, ag = agentMeta(agType), t0 = since(a.since), sessEl = sessionControls(p, "wp");
   const last = String((r && r.facts.puck && r.facts.puck.agent.last) || a.last || "").trim();  // the page's facts carry the whole message
-  if (!a.type && !last) return null;
+  if (!a.type && !last && !sessEl) return null;
   const who = ag.name, verb = {working:"is working", waiting:"is waiting on you"}[a.state] || "is idle";
   const paras = last.split(/\n\s*\n/), tail = paras.slice(-1)[0] || "";
   return h("section", {class:"panel"},
-    h("div", {class:"shd"}, agentAv(a.type, 12, "av sm"),
+    h("div", {class:"shd"}, agentAv(agType, 12, "av sm"),
       h("h2", {style:"flex-grow:1"}, `${who} ${verb}`), h("span", {class:"el", "data-since": t0}, clock(t0)),
       h("button", {type:"button", class:"btn sm", onclick: () => openOut(p.name)}, icon("file-text", 12), "View log")),
     a.state === "working" && a.tool ? h("div", {class:"aline"}, h("span", {class:"adot", "aria-hidden":"true"}), h("span", {class:"mono"}, `${a.tool}${a.input ? ": " + a.input : ""}`)) : null,
     tail && tail.length <= 900 && a.state !== "waiting" ? h("p", {class:"amsg"}, tail) : null,  // a waiting agent's question is in the answer box  // the message once, as prose; the raw log stays folded
-    paras.length > 1 || tail.length > 900 ? h("details", {open: !!ui.msgOpen, ontoggle: e => { ui.msgOpen = e.target.open }}, h("summary", {}, "Last message"), W.log({lines: last.split("\n")})) : null);
+    paras.length > 1 || tail.length > 900 ? h("details", {open: !!ui.msgOpen, ontoggle: e => { ui.msgOpen = e.target.open }}, h("summary", {}, "Last message"), W.log({lines: last.split("\n")})) : null,
+    sessEl ? h("div", {class:"afoot"}, sessEl) : null);
 }
 function insights(r){
   const head = (sub, ...kids) => h("div", {class:"shd"}, h("h2", {class:"sect"}, "Insights"), sub ? h("small", {}, sub) : null, h("span", {style:"flex-grow:1"}), ...kids);
@@ -1985,7 +2054,8 @@ function answerBox(p, onPage){
           e.preventDefault(); reply();
         }}, st.draft || ""),
       h("div", {class:"srow"}, h("button", {type:"submit", class:"btn primary", id:"asend", title:"Enter sends · Shift+Enter for a new line", disabled: locked || !String(st.draft || "").trim()}, talking ? "Send" : "Send reply"))),
-    st.err ? h("div", {class:"ast err"}, st.err) : st.sending ? h("div", {class:"ast"}, "Sending…") : sent ? h("div", {class:"ast"}, `Sent “${short(st.sentText, 60)}”. Waiting for the agent to pick it up…`) : null);
+    st.err ? h("div", {class:"ast err"}, st.err) : st.sending ? h("div", {class:"ast"}, "Sending…") : sent ? h("div", {class:"ast"}, `Sent “${short(st.sentText, 60)}”. Waiting for the agent to pick it up…`) : null,
+    onPage && sessionInfo(p) ? h("div", {class:"afoot"}, sessionControls(p, "wp")) : null);
 }
 /* greenlight's question about this workspace (a bell ping that names it): its options, or a reply field; answering = answering in the bell */
 function pingBox(q){
@@ -2075,7 +2145,7 @@ function openOut(name){
   const el = h("div", {id:"aout", role:"dialog", "aria-modal":"true", "aria-labelledby":"aout-t", onkeydown: outKeys},
     h("header", {class:"aohd"},
       h("button", {class:"btn back", id:"aout-back", title:"Back to the agents (Esc)", onclick: () => closeOut(true)}, icon("chevron-left"), "Back"),
-      agentAv(p.agent.type, 12, "av sm"),
+      agentAv(p.agent.type || p.agent.session_harness, 12, "av sm"),
       h("div", {class:"aot"}, h("b", {id:"aout-t", title: mrTitle(p)}, `All output · ${mrTitle(p)}`), h("span", {id:"aout-sub"})),
       h("button", {class:"btn sm", id:"aout-files-btn", "aria-label":"Files touched", "aria-pressed":"false", "aria-controls":"aout-files", title:"What this branch changes, beside the log", onclick: () => outFiles(!ui.out.filesOpen)},
         icon("panel", 12), h("span", {class:"lbl"}, "Files"), h("span", {class:"count", id:"aout-files-n", hidden: true})),
@@ -2346,15 +2416,19 @@ function outStrip(o, p){
   const ciCol = {ok:"--green", bad:"--red", run:"--blue"}[ciTone];
   const {n, i} = p ? stepsOf(p) : {n: 0, i: 0}, stepLabel = p && p.step ? (STEP_GOALS[p.step] || STEP_NAMES[p.step] || cap(String(p.step).replace(/_/g, " "))) : "";
   const cost = outCost(o);
-  const key = [st[0], st[1], lastTs ? Math.floor(lastTs / 1000) : "", toolText, cost ? cost.join() : "", mr.iid || "", mr.ref || "", mr.web_url || "", mr.draft || "", ciLabel, ciGlyph || "", i, n, stepLabel, p && p.state || ""].join("\u0000");
+  const sess = p ? sessionInfo(p) : null;
+  const sidState = sess && ui.copiedSid && ui.copiedSid.key === `ao:${p.name}` && (ui.copiedSid.text === sess.id || ui.copiedSid.text === sess.cmd) ? ui.copiedSid.kind : "";
+  const key = [st[0], st[1], lastTs ? Math.floor(lastTs / 1000) : "", toolText, cost ? cost.join() : "", p && p.path || "", sess ? `${sess.id}:${sess.cmd}:${sidState}` : "", mr.iid || "", mr.ref || "", mr.web_url || "", mr.draft || "", ciLabel, ciGlyph || "", i, n, stepLabel, p && p.state || ""].join("\u0000");
   if (strip.dataset.key === key) return;
-  const hadPrFocus = !!(document.activeElement && strip.contains(document.activeElement) && document.activeElement.classList.contains("aos-pr"));
+  const focusCls = document.activeElement && strip.contains(document.activeElement)
+    ? (document.activeElement.classList.contains("aos-pr") ? "a.aos-pr" : document.activeElement.classList.contains("asid") ? "button.asid" : document.activeElement.classList.contains("aconn") ? "button.aconn" : "") : "";
   strip.dataset.key = key;
   strip.replaceChildren(...[
     statusPill(st[0], st[1]),
     h("span", {class:"aos-item aos-out"}, lastTs ? ["Last output ", h("b", {"data-ts": String(lastTs), title: new Date(lastTs).toLocaleString()}, relTime(lastTs))] : "No output yet"),
     toolText ? h("span", {class:"aos-item aos-tool", title: toolText}, h("span", {class:"mono"}, short(toolText, 80))) : null,
     h("span", {class:"aos-sp"}),
+    p ? sessionControls(p, "ao") : null,
     cost ? h("span", {class:"aos-item aos-cost", title: cost[2]}, cost[0] ? [h("b", {}, cost[0]), " · "] : null, cost[1]) : null,
     mr.iid ? (safeHttpUrl(mr.web_url)
       ? h("a", {class:"aos-pr", href: mr.web_url, title: mr.title || mrRef(mr)}, icon("mr", 12), mrRef(mr), mr.draft ? h("span", {class:"ltag"}, "Draft") : null)
@@ -2363,14 +2437,14 @@ function outStrip(o, p){
     ciLabel ? h("span", {class:"aos-ci", style: ciCol ? `color:${ink(ciCol)}` : null}, icon(ciGlyph, 12), ciLabel) : null,
     n ? h("span", {class:"aos-item aos-step"}, `Step ${Math.min(i + 1, n)} of ${n}`, stepLabel ? [" · ", h("b", {}, p && p.state === "done" ? "Done" : stepLabel)] : null)
       : stepLabel ? h("span", {class:"aos-item aos-step"}, h("b", {}, stepLabel)) : null].filter(Boolean));
-  if (hadPrFocus) strip.querySelector("a.aos-pr")?.focus();
+  if (focusCls) (strip.querySelector(focusCls) || document.getElementById("aout-log"))?.focus({preventScroll: true});
 }
 function outHead(){  // who and what it's doing now, from the 5s snapshot; any refresh error
   const o = ui.out; if (!o) return;
   const p = puckOf(o.name), a = p ? p.agent : {}, sub = document.getElementById("aout-sub"), now = document.getElementById("aout-now");
   if (!sub || !now) return;
   outStrip(o, p); outWarn();
-  const who = agentMeta(a.type).name, t0 = since(a.since);
+  const who = agentMeta(a.type || a.session_harness).name, t0 = since(a.since);
   sub.replaceChildren(...[!p ? "This workspace is gone" : `${who} ${{working:"is working", waiting:"is waiting on you"}[a.state] || "is idle"}`,
     ...(p && t0 ? [" · ", h("span", {"data-since": t0}, clock(t0))] : []), " · updates live"]);
   const toolName = a.tool || o.tool || "", toolIn = a.tool ? (a.input || "") : (o.toolInput || "");
@@ -2841,7 +2915,7 @@ function renderNone(main){  // no workspaces at all: start one; all hidden by th
 }
 function renderMain(){
   const main = document.getElementById("main");
-  const keep = main.scrollTop, inner = [...main.querySelectorAll(".w-log")].map(e => e.scrollTop);  // a refresh rebuilds them at the top
+  const keep = main.scrollTop, acardsEl = main.querySelector(".acards"), keepAgents = acardsEl ? acardsEl.scrollTop : 0, inner = [...main.querySelectorAll(".w-log")].map(e => e.scrollTop);  // a refresh rebuilds them at the top
   const fe = document.activeElement, fid = document.hasFocus() && fe && main.contains(fe) && fe.id, fsel = fid && [fe.selectionStart, fe.selectionEnd];
   main.replaceChildren(); main.classList.remove("ov"); ui.dk = {};
   document.body.classList.toggle("nohex", !shows("hex"));
@@ -2861,9 +2935,11 @@ function renderMain(){
   else if (ui.view === "list" || main.clientWidth < 560) renderList(main);
   else renderOverview(main);
   main.scrollTop = keep;
+  const newAcards = main.querySelector(".acards");
+  if (newAcards && keepAgents) newAcards.scrollTop = keepAgents;
   main.querySelectorAll(".w-log").forEach((e, i) => { if (inner[i]) e.scrollTop = inner[i] });  // ponytail: matched by order; key them if a layout ever reorders logs
   const fi = fid && document.getElementById(fid);
-  if (fi) { fi.focus(); try { fi.setSelectionRange(...fsel) } catch {} }
+  if (fi) { fi.focus({preventScroll: true}); try { fi.setSelectionRange(...fsel) } catch {} }
 }
 function sheetSpec(){
   if (ui.answering && !ui.page) {
@@ -2884,7 +2960,7 @@ function sheetSpec(){
     ask ? [ask.p, ask.rev || 0, ask.qs.map(q => q.id)] : null])};
 }
 function syncSheet(){  // keep the open sheet mounted across renders so .sheet's open animation doesn't replay or drop hover/clicks
-  const spec = sheetSpec(), oldBg = document.querySelector(".sheetbg");
+  const spec = sheetSpec(), oldBg = document.querySelector("body > .sheetbg");
   if (!spec) { if (oldBg) oldBg.remove(); return false }
   if (oldBg && oldBg.dataset.sheetKey === spec.key) {
     if (oldBg._sheetSig === spec.sig) return false;

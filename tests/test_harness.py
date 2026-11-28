@@ -615,3 +615,22 @@ def test_review_edge_cases(harness_env, gl_home, monkeypatch):
     assert any(e.get("e") == "step_done" and e.get("id") == "s1" and not e.get("ok") for e in emitted)
     assert any(e.get("e") == "plan" and e.get("total") == 0 for e in emitted)
     assert any(e.get("e") == "text_reset" for e in emitted)
+
+
+def test_resume_cmd_harnesses_and_validation(harness_env):
+    sid = "0eb62452-d4f6-4e8d-a381-64ec2d0e3137"
+    assert harness.resume_cmd("claude", sid) == ["claude", "--resume", sid]
+    assert harness.resume_cmd("codex", sid) == ["codex", "resume", sid]
+    assert harness.resume_cmd("agy", sid) == ["agy", "--resume", sid]
+    assert harness.resume_cmd("antigravity", sid) == ["agy", "--resume", sid]
+    assert harness.resume_cmd("claude-code", sid) == ["claude", "--resume", sid]
+    assert harness.resume_cmd("gemini-cli", sid) == ["gemini", "--resume", sid]
+    assert harness.resume_cmd("opencode", "ses_abc123") == ["opencode", "-s", "ses_abc123"]
+    assert harness.resume_cmd("gemini", sid) == ["gemini", "--resume", sid]
+    assert harness.resume_cmd("pi", sid) == ["pi", "--session", sid]
+    assert harness.resume_cmd("claude", sid, binary_override="/opt/bin/claude") == ["/opt/bin/claude", "--resume", sid]
+    for bad in ("", "-flag", "id;whoami", "id with spaces", "id\nnext", "../etc", "aé", "a" * 129):
+        with pytest.raises(ValueError):
+            harness.resume_cmd("claude", bad)
+    with pytest.raises(ValueError):
+        harness.resume_cmd("unknown", sid)
