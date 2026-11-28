@@ -2451,8 +2451,14 @@ struct ChatView: View, Looked {
     var newChat: some View {
         let hot = c.hint == Self.newTip
         return Button(action: { c.clear() }) {
-            Label { Text("Start over") } icon: { Image(ds: "compose", size: iconSize(DS.TypeRole.label.size)) }
-                .font(ui(DS.TypeRole.label)).padding(.horizontal, DS.Space.s8).frame(height: padSize)
+            Group {
+                if c.voice.on {
+                    Image(ds: "compose", size: iconSize(DS.TypeRole.body.size)).frame(width: padSize, height: padSize)
+                } else {
+                    Label { Text("Start over") } icon: { Image(ds: "compose", size: iconSize(DS.TypeRole.label.size)) }
+                        .font(ui(DS.TypeRole.label)).padding(.horizontal, DS.Space.s8).frame(height: padSize)
+                }
+            }
                 .foregroundColor(hot || mono ? fg : dim)
                 .background(RoundedRectangle(cornerRadius: corner).fill(hot ? card : .clear))
         }.buttonStyle(.plain).modifier(Tip(c: c, text: Self.newTip)).accessibilityLabel("Start over")
