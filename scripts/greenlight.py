@@ -1473,7 +1473,10 @@ def screen(ws, terminals):
         return None
     ws["agent"]["terminal"] = terms[0]["handle"]
     try:
-        tail = orca("terminal", "read", "--terminal", terms[0]["handle"], "--limit", "60")["terminal"].get("tail", "")
+        if terms[0].get("basement"):
+            tail = ade.get("native").read(terms[0]["handle"], 60)["terminal"].get("tail", "")
+        else:
+            tail = orca("terminal", "read", "--terminal", terms[0]["handle"], "--limit", "60")["terminal"].get("tail", "")
     except Exception:
         return None
     lines = tail.splitlines() if isinstance(tail, str) else [str(x) for x in tail]
@@ -1647,15 +1650,44 @@ def goal_with_backfill(comment, worktree_id, backfills, branch=None, linked_mr=N
     return goal or remembered.get("goal") or "", False
 
 
+def _basement_overlays(wts):
+    """Under ade == 'orca', discover live agents and terminals running in Basement's tmux inside those worktrees."""
+    if not ade.is_orca() or not wts:
+        return {}, {}
+    try:
+        return ade.get("native").overlays(wts)
+    except Exception:  # noqa: BLE001 - no tmux / Basement unavailable: Orca's own view stands
+        return {}, {}
+
+
+def merge_basement_worktrees(wts):
+    """Under ade == 'orca', merge Basement tmux agents into local worktrees; returns (worktrees, terminals_by_wid)."""
+    b_agents, b_terms = _basement_overlays(wts)
+    if not b_agents:
+        return wts, {}
+    merged = []
+    for w in wts:
+        wid = w.get("worktreeId") or w.get("id")
+        extra = b_agents.get(wid)
+        if not extra:
+            merged.append(w)
+            continue
+        last_out = max([w.get("lastOutputAt") or 0, *(a.get("updatedAt") or 0 for a in extra)]) or None
+        merged.append({**w, "agents": [*(w.get("agents") or []), *extra], "lastOutputAt": last_out})
+    return merged, b_terms
+
+
 def scan(save=True, _backfill_retries=0):
     scan_started_ns = time.monotonic_ns()
     started = int(time.time())  # wall clock, for the dashboard: a scan that began after an action can show its result
     clock_id = scan_clock_id()
-    wts = orca("worktree", "ps", "--limit", "10000")["worktrees"]
+    wts, basement_terms = merge_basement_worktrees(orca("worktree", "ps", "--limit", "10000")["worktrees"])
     full = {w["id"]: w for w in orca("worktree", "list", "--limit", "10000")["worktrees"]}
     terminals = {}
     for t in orca("terminal", "list", "--limit", "10000")["terminals"]:
         terminals.setdefault(t["worktreeId"], []).append(t)
+    for wid, ts in basement_terms.items():
+        terminals.setdefault(wid, []).extend(ts)
 
     projects = {w["repoId"]: fp for w in full.values() if (fp := forge_project(w.get("projectId")))}
     backfill_before = backfill_revision()

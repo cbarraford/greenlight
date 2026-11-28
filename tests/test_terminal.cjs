@@ -1021,6 +1021,16 @@ test("new workspace: its row shows at once, and its section and project open if 
   await page.click("#tree .grp.prj:has-text('acme/widgets')"); await page.evaluate(t => term.workspaces({trees: [...t, {ade: "orca", project: "acme/widgets", name: "new-one", path: "/w/new-one", branch: "new-one", main: false, agent: "working"}]}), TREES.trees);
   assert.deepEqual(await row(), [], "shut it yourself afterwards: it stays shut");
 });
+test("new workspace: treeDone attaches to the returned Basement tmux session", async page => {
+  await page.evaluate(() => term.tree({op: "new", path: "/w/new-sess", repo: "/w/widgets", ok: true, session: "mc-1234abcd"}));
+  const opened = (await posts(page, "open")).pop();
+  assert.equal(opened.ws, "/w/new-sess");
+  assert.equal(opened.session, "mc-1234abcd", "attaches to the returned tmux session");
+  await page.evaluate(() => term.tree({op: "new", path: "/w/new-bad", repo: "/w/widgets", ok: true, session: "bad-session"}));
+  const fallback = (await posts(page, "open")).pop();
+  assert.equal(fallback.ws, "/w/new-bad");
+  assert.match(fallback.session, /^mc-/, "invalid session falls back to a fresh mc- session");
+});
 test("Hosts is the first section, above Needs you and Working", async page => {
   await page.evaluate(() => { newTab("/w/fix-login"); newTab("/w/sidebar"); const [a, b] = [...panes.values()]; a.title = "✳ asks"; a.bell = true; b.title = "⠋ busy"; b.st = "work"; render() });
   assert.deepEqual(await page.$$eval("#tree .box", b => b.map(x => x.className).slice(0, 4)), ["box s-host", "box s-need", "box s-work", "box s-ws"]);
@@ -1560,6 +1570,91 @@ test("Open in editor: the palette, the workspace card and Diff each ask the app 
   assert.deepEqual((await posts(page, "edit")).pop(), {cmd: "edit", ws: "/w/review"});
   assert.equal((await posts(page, "edit")).length, 3);
 }, "?editor=Zed");
+
+test("issue 236: spinner titles and refreshes keep tab close button & basement workspace nodes stable so hover doesn't flicker and clicks switch workspaces", async page => {
+  await page.evaluate(t => term.workspaces(t), TREES);
+  await page.evaluate(() => { if (document.body.classList.contains("noside")) toggleSide(true); openWs("/w/fix-login") });
+  const id = await page.evaluate(() => cur.focus.id);
+  const feed = s => page.evaluate(([i, d]) => term.feed(i, d), [id, Buffer.from(s).toString("base64")]);
+  await feed("\x1b]0;⠋ Working on fix\x07");
+  // Pin references to the active tab's close button and another workspace's sidebar row.
+  await page.evaluate(() => {
+    window.__x = document.querySelector("#tabs .tab.on .x");
+    window.__ws = [...document.querySelectorAll("#tree .ws")].find(e => e.dataset.k === "w/w/sidebar");
+  });
+  await page.hover("#tabs .tab.on .x");
+  for (const ch of ["⠙", "⠹", "⠸", "⠼", "⠴"]) await feed(`\x1b]0;${ch} Working on fix\x07`);
+  await page.evaluate(t => { render(); term.workspaces(t) }, TREES);
+  const sameAfter = await page.evaluate(() => ({
+    xSame: document.querySelector("#tabs .tab.on .x") === window.__x && window.__x.isConnected,
+    xHover: window.__x.matches(":hover"),
+    wsSame: [...document.querySelectorAll("#tree .ws")].find(e => e.dataset.k === "w/w/sidebar") === window.__ws && window.__ws.isConnected,
+  }));
+  assert.equal(sameAfter.xSame, true, "tab close button DOM node was replaced across spinner/refresh (causes hover flicker)");
+  assert.equal(sameAfter.xHover, true, "tab close button lost :hover across spinner/refresh");
+  assert.equal(sameAfter.wsSame, true, "basement workspace row DOM node was replaced across spinner/refresh");
+
+  // Hovering and clicking a workspace row in the Basement must switch even if renders/spinners fire between mousedown and mouseup.
+  const box = await page.locator('#tree .ws[data-k="w/w/sidebar"]').boundingBox();
+  assert.ok(box, "sidebar workspace row should be visible");
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  assert.equal(await page.evaluate(() => window.__ws.matches(":hover")), true, "workspace row should be hovered");
+  await page.mouse.down();
+  await feed("\x1b]0;⠦ Working on fix\x07");
+  await page.evaluate(t => { render(); term.workspaces(t) }, TREES);
+  assert.equal(await page.evaluate(() => window.__ws.isConnected && window.__ws.matches(":hover")), true, "workspace row stayed connected and hovered mid-click");
+  await page.mouse.up();
+  assert.equal(await page.evaluate(() => curWs), "/w/sidebar", "clicking workspace in Basement must switch even when render() fires mid-click");
+
+  // Clicking the idle main host chip (ws === "") must open a shell on "" instead of matching the current tab via "".includes("").
+  await page.evaluate(() => { wsTabs("").forEach(closeTab) });
+  await page.click('#tree .hchip[data-k="h"]');
+  assert.equal(await page.evaluate(() => curWs), "", "clicking idle main host chip must switch to main host");
+});
+
+test("stuck stage in Basement escalates smart button to Inspect workspace, with Retry & Reset in menu and attempt recording", async page => {
+  const stuckTrees = {
+    trees: TREES.trees.map(w => w.path === "/w/fix-login" ? {
+      ...w,
+      agent: "none",
+      state: "needs",
+      step: "ci_green",
+      owner: "agent",
+      advice: "A prior attempt failed without moving this stage.",
+      mr: {ref: "!42", state: "opened", pipeline: "failed", target_branch: "main"},
+      moves: [{kind: "ci", repo: "widgets", prompt: "Fix CI\n\nPrior attempt failed on this stage.", jobs: ["unit"]}],
+      attempts: {count: 1, same_sha: 1, stuck: true, step: "ci_green", reason: "Failed on this commit", last: {ts: 1700000000, agent: "claude", source: "basement", kind: "ci"}},
+    } : w),
+  };
+  await page.evaluate(t => term.workspaces(t), stuckTrees);
+  await page.locator(".ws", {hasText: "fix-login"}).first().click({button: "right"});
+  await page.waitForSelector("#card:not([hidden]) .rv.stuck");
+  assert.equal(await page.textContent("#card .rv.stuck .go b"), "Inspect workspace");
+  assert.match(await page.textContent("#card .rv.stuck .go small"), /Fix CI · Failed on this commit/);
+  // Clicking Inspect workspace opens/focuses the workspace tab
+  await page.click("#card .rv.stuck .go");
+  assert.equal(await page.evaluate(() => cur.ws), "/w/fix-login");
+  // Menu has Retry Fix CI anyway (which records attempt) and Reset attempts
+  await page.locator(".ws", {hasText: "fix-login"}).first().click({button: "right"});
+  await page.waitForSelector("#card:not([hidden]) .rv.stuck .mn");
+  await page.click("#card .rv.stuck .mn");
+  await page.waitForSelector("#menu:not([hidden])");
+  assert.match(await page.textContent("#menu"), /Retry Fix CI anyway/);
+  assert.match(await page.textContent("#menu"), /Reset attempts/);
+  await page.click("#menu button:has-text('Retry Fix CI anyway')");
+  const att = (await posts(page, "tree")).filter(m => m.op === "attempt").pop();
+  assert.ok(att, "retrying records attempt via tree attempt");
+  assert.equal(att.path, "/w/fix-login");
+  assert.equal(JSON.parse(att.text).kind, "ci");
+  // Reset attempts posts tree reset-attempts
+  await page.locator(".ws", {hasText: "fix-login"}).first().click({button: "right"});
+  await page.waitForSelector("#card:not([hidden]) .rv.stuck .mn");
+  await page.click("#card .rv.stuck .mn");
+  await page.click("#menu button:has-text('Reset attempts')");
+  const rst = (await posts(page, "tree")).filter(m => m.op === "reset-attempts").pop();
+  assert.ok(rst, "Reset attempts sends tree reset-attempts");
+  assert.equal(rst.path, "/w/fix-login");
+});
 
 (async () => {
   const browser = await launchBrowser();

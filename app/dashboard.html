@@ -541,7 +541,7 @@ body.parkhot #park .dslot.target .sock polygon{fill:var(--fill-hover)}
 /* moves: the most urgent is the view's primary; the rest sit under "Also" */
 #hcard .mvs{display:flex;flex-direction:column;gap:var(--sp-2)}
 #hcard .mv{display:flex;border-radius:var(--r-1)} #hcard .mv button{border:0;font:inherit;background:var(--accent-solid);color:var(--on-accent)}
-#hcard .mv .go{flex:1;display:flex;align-items:center;gap:var(--sp-2);min-width:0;padding:var(--sp-2) var(--sp-3);border-radius:var(--r-1) 0 0 var(--r-1);text-align:left} #hcard .mv .go svg{flex:none} #hcard .mv .go span{display:grid;gap:1px;min-width:0}
+#hcard .mv .go{flex:1;display:flex;align-items:center;gap:var(--sp-2);min-width:0;padding:var(--sp-2) var(--sp-3);border-radius:var(--r-1) 0 0 var(--r-1);text-align:left} #hcard .mv .go:only-child{border-radius:var(--r-1)} #hcard .mv .go svg{flex:none} #hcard .mv .go span{display:grid;gap:1px;min-width:0}
 #hcard .mg .go{flex:1;display:flex;flex-direction:column;gap:2px;min-width:0;padding:var(--sp-2) var(--sp-3);text-align:left}
 #hcard .mv .ed{width:32px;border-radius:0 var(--r-1) var(--r-1) 0;display:flex;align-items:center;justify-content:center;box-shadow:inset 1px 0 0 color-mix(in srgb,var(--on-accent) 25%,transparent)}
 #hcard .mv b,#hcard .mg b{font-size:var(--fs-2);font-weight:600} #hcard .mv b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap} #hcard .mv small,#hcard .mg small{font-size:var(--fs-1);line-height:var(--lh-1);opacity:.85}
@@ -1572,18 +1572,18 @@ addEventListener("keydown", e => {
 UM.hint = "↻ in the footer refreshes it with the scan.";
 const FOOT_SHORT = {needs:"need you", raised:"your move", quiet:"waiting"};
 function footer(){
-  const f = document.getElementById("foot"), fid = umFocusId(f); f.replaceChildren();
-  const um = umMeters(ui.snap?.usage); if (um) { f.append(um); umRestoreFocus(f, fid) }  // each agent's plan usage, at the left (issue 193)
+  const f = document.getElementById("foot"), fid = umFocusId(f), kids = [];
+  const um = umMeters(ui.snap?.usage); if (um) kids.push(um);  // each agent's plan usage, at the left (issue 193)
   const age = ui.snap && ui.snap.ts ? Math.round((Date.now() / 1000 - ui.snap.ts)) : NaN;
   const live = ui.snap && age < 45;
-  f.append(h("span", {class: "live" + (live ? "" : " off") + (!ui.snap ? CONN.failed ? " bad" : " connecting" : "")}, !ui.snap ? (CONN.failed ? "Update timed out" : "Connecting…") : live ? "Live" : isFinite(age) ? `Last update ${ago(age / 3600)} ago` : "No update time"));
-  if (!ui.snap && CONN.failed) f.append(h("span", {}, "Last attempt at " + new Date(CONN.last).toLocaleTimeString([], {hour:"numeric", minute:"2-digit"})));
+  kids.push(h("span", {class: "live" + (live ? "" : " off") + (!ui.snap ? CONN.failed ? " bad" : " connecting" : "")}, !ui.snap ? (CONN.failed ? "Update timed out" : "Connecting…") : live ? "Live" : isFinite(age) ? `Last update ${ago(age / 3600)} ago` : "No update time"));
+  if (!ui.snap && CONN.failed) kids.push(h("span", {}, "Last attempt at " + new Date(CONN.last).toLocaleTimeString([], {hour:"numeric", minute:"2-digit"})));
   const todo = ui.snap ? ui.snap.pucks.filter(p => !p.built && p.state !== "done").length : 0, nb = ui.builds ? ui.builds.building.length : 0;
-  if (todo || nb) f.append(h("span", {title: ui.builds ? ui.builds.building.join("\n") : ""},
+  if (todo || nb) kids.push(h("span", {title: ui.builds ? ui.builds.building.join("\n") : ""},
     nb ? icon("spark", 13) : null, (nb ? ` ${nb} building · ` : "") + `${todo} page${todo === 1 ? "" : "s"} to build` + (ui.builds && !ui.builds.parallel ? " (background builds off)" : "")));
   if (ui.snap) {  // the hexes' MR facts are only as fresh as greenlight's last scan (every 30 min); amber past 45m, red past 2h
     const hrs = ui.snap.scanned ? (Date.now() / 1000 - ui.snap.scanned) / 3600 : NaN;
-    f.append(h("span", {class: "scan", style: hrs > 2 ? `color:${ink("--red")}` : hrs > .75 ? `color:${ink("--orange")}` : null,
+    kids.push(h("span", {class: "scan", style: hrs > 2 ? `color:${ink("--red")}` : hrs > .75 ? `color:${ink("--orange")}` : null,
       title: "When greenlight last checked GitLab, GitHub and Orca for every workspace. It rescans when Greenlight opens and on the scan interval in Settings."},
       ui.rescan ? "Refreshing…" : !isFinite(hrs) ? "Not scanned yet" : hrs < 1 / 60 ? "Scanned just now" : `Scanned ${ago(hrs)} ago`),
       h("button", {class: "rescan" + (ui.rescan ? " on" : ""), title: "Refresh now (~40s)", "aria-label": "Refresh now", disabled: !!ui.rescan,
@@ -1593,16 +1593,18 @@ function footer(){
     if (se && !ui.rescan) {
       const sa = ago((hostNow() - se.ts) / 3600), when = sa === "now" ? "just now" : `${sa} ago`;
       const lead = ui.snap.scanned ? `The last scan stopped ${when}, so these facts are from the one before.` : `The scan stopped ${when}, so no workspaces have been scanned yet.`;
-      f.append(h("span", {class: "scanerr", title: lead + (se.fix ? `\nFix: ${se.fix}.` : "")},
+      kids.push(h("span", {class: "scanerr", title: lead + (se.fix ? `\nFix: ${se.fix}.` : "")},
         `Scan failed: ${se.msg || "unknown error"}`, se.fix ? h("span", {class: "scanfix"}, ` · ${se.fix}`) : null));
     }
   }
   const np = ui.snap ? ui.snap.pucks.filter(p => isParked(p) && inView(p)).length : 0;
-  if (np && !ui.page) f.append(h("button", {class: "rescan", "aria-pressed": String(ui.showParked), title: "Workspaces whose goal says (parked)",
+  if (np && !ui.page) kids.push(h("button", {class: "rescan", "aria-pressed": String(ui.showParked), title: "Workspaces whose goal says (parked)",
     onclick: () => { ui.showParked = !ui.showParked; render() }}, `${ui.showParked ? "Hide" : "Show"} parked (${np})`));
   const fn = ui.snap && !shows("hex") ? counts() : null;
-  if (!ui.page) f.append(h("span", {style:"flex-grow:1"}), fn ? h("span", {class:"fscope", title:"These counts cover all workspaces"}, "All", h("span", {class:"w"}, " workspaces"), ":") : "", ...ORDER.filter(k => fn && fn[k]).map(k =>  // the map's header counts them; a detached window keeps them here
+  if (!ui.page) kids.push(h("span", {style:"flex-grow:1"}), fn ? h("span", {class:"fscope", title:"These counts cover all workspaces"}, "All", h("span", {class:"w"}, " workspaces"), ":") : "", ...ORDER.filter(k => fn && fn[k]).map(k =>  // the map's header counts them; a detached window keeps them here
     h("span", {class:"fst" + (["needs", "raised", "crashed"].includes(k) ? " ask" : ""), title: STATE[k].label}, h("span", {style:`color:${c(STATE[k].color)};display:flex`}, icon("hex", 12)), `${fn[k]}`, h("span", {class:"lbl"}, " " + STATE[k].label.toLowerCase()), h("span", {class:"sh"}, " " + (FOOT_SHORT[k] || STATE[k].label.toLowerCase())))));
+  const fSig = kids.map(k => typeof k === "string" ? k : k.outerHTML).join("");
+  if (f._footSig !== fSig) { f._footSig = fSig; f.replaceChildren(...kids); if (um) umRestoreFocus(f, fid) }
   f.classList.remove("tight", "tighter", "tightest"); if (f.scrollWidth > f.clientWidth) f.classList.add("tight");  // past the width: short words, never bare numbers
   if (f.scrollWidth > f.clientWidth) f.classList.add("tighter");  // still past it: only the counts that need you stay
   if (f.scrollWidth > f.clientWidth) f.classList.add("tightest");  // and last, the scan age
@@ -2881,16 +2883,65 @@ function renderMain(){
   const fi = fid && document.getElementById(fid);
   if (fi) { fi.focus(); try { fi.setSelectionRange(...fsel) } catch {} }
 }
+function sheetSpec(){
+  if (ui.answering && !ui.page) {
+    const p = puckOf(ui.answering);
+    if (!p) { ui.answering = null } else {
+      const st = askState(p), a = p.agent, mins = a.since ? Math.round((Date.now() - since(a.since)) / 60000) : null;
+      const chat = st.chat ? [st.chat.thread.length, !!st.chat.tried, st.chat.thread[st.chat.thread.length - 1]?.text || ""] : null;
+      return {key: "ans:" + p.name, sig: JSON.stringify([mrTitle(p), p.state, p.action || "", p.why || "",
+        a.type, a.state, a.last || "", mins, !!st.loading, !!st.sending, !!st.sent, st.sentText || "",
+        st.err || "", !!st.failed, st.resp || null, chat, !!ui.afull])};
+    }
+  }
+  const sh = ui.task.sheet;
+  if (!sh) return null;
+  const ask = ui.task.ask;
+  return {key: "task", sig: JSON.stringify([sh.repo, sh.fileRev, sh.files.map(f => [f.name, f.size, !!f.data, !!f.error]),
+    ui.task.repos ? ui.task.repos.map(r => [r.name, r.path]) : null, !!ui.task.busy, ui.task.err || "",
+    ask ? [ask.p, ask.rev || 0, ask.qs.map(q => q.id)] : null])};
+}
+function syncSheet(){  // keep the open sheet mounted across renders so .sheet's open animation doesn't replay or drop hover/clicks
+  const spec = sheetSpec(), oldBg = document.querySelector(".sheetbg");
+  if (!spec) { if (oldBg) oldBg.remove(); return false }
+  if (oldBg && oldBg.dataset.sheetKey === spec.key) {
+    if (oldBg._sheetSig === spec.sig) return false;
+    const fresh = answerSheet() || taskSheetEl();
+    if (fresh) {
+      const oldSh = oldBg.querySelector(".sheet"), newSh = fresh.querySelector(".sheet");
+      const sTop = oldSh?.scrollTop || 0, qTop = oldSh?.querySelector(".aq")?.scrollTop || 0, tTop = oldSh?.querySelector(".athread")?.scrollTop || 0;
+      if (newSh) newSh.style.animation = "none";  // same sheet updating: never replay the hcin open animation
+      fresh.dataset.sheetKey = spec.key; fresh._sheetSig = spec.sig;
+      oldBg.replaceWith(fresh);
+      if (newSh && sTop) newSh.scrollTop = sTop;
+      const aq = fresh.querySelector(".aq"); if (aq && qTop) aq.scrollTop = qTop;
+      const th = fresh.querySelector(".athread"); if (th && tTop) th.scrollTop = tTop;
+      return true;
+    }
+  }
+  if (oldBg) oldBg.remove();
+  const sh = answerSheet() || taskSheetEl();
+  if (sh) { sh.dataset.sheetKey = spec.key; sh._sheetSig = spec.sig; document.body.append(sh) }
+  return true;
+}
+function syncToast(){
+  const d = ui.task.done, key = d ? JSON.stringify(d) : "", old = document.querySelector(".toast");
+  if (!key) { if (old) old.remove(); return }
+  const place = el => { const m = document.getElementById("main").getBoundingClientRect(); el.style.bottom = `${innerHeight - m.bottom + 12}px`; el.style.left = `${m.left + m.width / 2}px` };
+  if (old && old._toastKey === key) { place(old); return }
+  if (old) old.remove();
+  const t = toastEl(); if (!t) return;
+  if (old) t.style.animation = "none";
+  t._toastKey = key; place(t); document.body.append(t);  // floats at the map's foot
+}
 function render(){
   const ae = document.activeElement, q = document.hasFocus() && ae && (["q", "areply", "preply"].includes(ae.id) || /^ps-/.test(ae.id)) && ae.id;
   const sel = q && [ae.selectionStart, ae.selectionEnd, ae.scrollTop];
-  document.querySelectorAll(".toast").forEach(e => e.remove());
   topBar(); renderDock(true); renderPark(true); renderMain(); footer();  // the dock first: it sets the gutter the field is laid out in
-  const t = toastEl(); if (t) { const m = document.getElementById("main").getBoundingClientRect(); t.style.bottom = `${innerHeight - m.bottom + 12}px`; t.style.left = `${m.left + m.width / 2}px`; document.body.append(t) }  // floats at the map's foot
-  document.querySelectorAll(".sheetbg").forEach(e => e.remove());
-  const sh = answerSheet() || taskSheetEl(); if (sh) document.body.append(sh);
+  syncToast();
+  syncSheet();
   if (ui.task.fresh) hl(ui.task.fresh, true);  // the task just started: ring its card and hex until the toast goes
-  if (q) { const i = document.getElementById(q); if (i) {
+  if (q) { const i = document.getElementById(q); if (i && document.activeElement !== i) {
     if (i.tagName === "TEXTAREA") grow(i);
     i.focus(); try { if (sel && sel[0] != null) { i.setSelectionRange(sel[0], sel[1]); i.scrollTop = sel[2] }
     else i.setSelectionRange(i.value.length, i.value.length) } catch {} } }
@@ -3046,20 +3097,50 @@ const MOVE = {
 };
 const MI = {review: "review", verify: "verify", threads: "threads", ci: "ci", conflicts: "conflict"};  // each move's icon
 const MTONE = {review: "or", verify: "bl", threads: "pu", ci: "rd", conflicts: "rd"}, DOT = {review: c("--orange"), verify: c("--blue"), threads: c("--purple"), ci: c("--red"), conflicts: c("--red")};
+function askChiefStuck(p, label, att){
+  const ref = p.mr && p.mr.iid ? ` (${mrRef(p.mr)})` : "", reason = (att && att.reason) || "prior attempt failed";
+  const shown = `Why is ${p.name}${ref} stuck on ${label}?`;
+  const parts = [`Workspace ${p.name}${ref} is stuck on "${label}" (step: ${p.step || "unknown"}).`, `Stage attempts: ${att.count} (${reason}).`];
+  if (att && att.last && att.last.agent) parts.push(`Last agent: ${att.last.agent}${att.last.source ? ` via ${att.last.source}` : ""}.`);
+  if (att && att.summary) parts.push(`Last outcome: ${att.summary}`);
+  parts.push("Diagnose why it didn't make progress and recommend what to do next instead of repeating the same approach.");
+  hideCard();
+  post({cmd: "askChief", name: p.name, shown, text: parts.join(" ")});
+}
+function resetAttemptsFor(p){
+  hideCard();
+  post({cmd: "resetAttempts", path: p.path, name: p.name});
+  const live = puckOf(p.name); if (live) delete live.attempts;
+  note("Attempts reset", `${p.name} is ready for a fresh try.`);
+  render();
+}
 // the most urgent move as one big solid button (its own color; blue when several fixes apply; green: merge); the rest as "Also"
 function movesEl(p, mv){
   const land = mv.filter(y => ["merge", "ready", "signoff"].includes(y.kind)), fix = mv.filter(y => !land.includes(y) && Object.hasOwn(MOVE, y.kind));
   const busy = p.agent && p.agent.state === "working" ? "Its agent is working" : null, [x, ...rest] = fix;
-  const run = y => () => y.prompt ? act(p, "The agent didn't start", {cmd: "run", name: p.name, prompt: y.prompt}) : note("The agent didn't start", "This step has no prompt yet.", true);  // the app ignores an empty prompt (no reply): nothing hides  // as a new agent in that workspace, like the Next step
-  let top = null;
-  if (x) { const [l, sub] = MOVE[x.kind](p.mr, x);
-    top = h("div", {class: "mv " + (busy ? "busy" : mv.length > 1 ? "bl" : MTONE[x.kind])},
-      h("button", {class: "go", disabled: !!busy, title: busy || x.prompt, onclick: run(x)},
-        icon(MI[x.kind], 20, ""),
-        h("span", {}, h("b", {}, l), h("small", {}, busy ? "Unlocks when the agent stops" : sub))),
-      h("button", {class: "ed", title: `Edit ${x.repo}'s ${l.split(" ")[0]} prompt`, "aria-label": `Edit ${x.repo}'s prompt`, onclick: () => { hideCard(); post({cmd: "editPrompt", repo: x.repo, kind: x.kind}) }}, icon("edit", 13))) }
-  return h("div", {class: "mvs"}, top, rest.length ? h("div", {class: "also"}, h("span", {}, "Also"),
-    rest.map(y => h("button", {class: "btn sm", disabled: !!busy, title: busy || y.prompt, onclick: run(y)}, h("i", {style: "background:" + DOT[y.kind]}), MOVE[y.kind](p.mr, y)[2]))) : null,
+  const att = p.attempts || null, stuck = !!(att && att.stuck && !busy);
+  const run = y => () => y.prompt ? act(p, "The agent didn't start", {cmd: "run", name: p.name, prompt: y.prompt, kind: y.kind}) : note("The agent didn't start", "This step has no prompt yet.", true);  // the app ignores an empty prompt (no reply): nothing hides  // as a new agent in that workspace, like the Next step
+  let top = null, alsoBtns = rest.map(y => h("button", {class: "btn sm", disabled: !!busy, title: busy || y.prompt, onclick: run(y)}, h("i", {style: "background:" + DOT[y.kind]}), MOVE[y.kind](p.mr, y)[2]));
+  if (x) { const [l, sub, shortL] = MOVE[x.kind](p.mr, x);
+    if (stuck) {
+      top = h("div", {class: "mv or stuck"},
+        h("button", {class: "go", title: `Ask Chief why ${l} hasn't progressed (${att.reason})`, onclick: () => askChiefStuck(p, l, att)},
+          icon("chat", 20, ""),
+          h("span", {}, h("b", {}, "Ask Chief"), h("small", {}, `${shortL} · ${att.reason}`))),
+        h("button", {class: "ed", title: `Edit ${x.repo}'s ${l.split(" ")[0]} prompt`, "aria-label": `Edit ${x.repo}'s prompt`, onclick: () => { hideCard(); post({cmd: "editPrompt", repo: x.repo, kind: x.kind}) }}, icon("edit", 13)));
+      alsoBtns = [
+        h("button", {class: "btn sm", title: x.prompt, onclick: run(x)}, h("i", {style: "background:" + DOT[x.kind]}), `Retry ${shortL}`),
+        ...alsoBtns,
+        h("button", {class: "btn sm", title: "Clear recorded failures for this stage", onclick: () => resetAttemptsFor(p)}, "Reset"),
+      ];
+    } else {
+      top = h("div", {class: "mv " + (busy ? "busy" : mv.length > 1 ? "bl" : MTONE[x.kind])},
+        h("button", {class: "go", disabled: !!busy, title: busy || x.prompt, onclick: run(x)},
+          icon(MI[x.kind], 20, ""),
+          h("span", {}, h("b", {}, l), h("small", {}, busy ? "Unlocks when the agent stops" : att && att.reason ? `${att.reason} · ${sub}` : sub))),
+        h("button", {class: "ed", title: `Edit ${x.repo}'s ${l.split(" ")[0]} prompt`, "aria-label": `Edit ${x.repo}'s prompt`, onclick: () => { hideCard(); post({cmd: "editPrompt", repo: x.repo, kind: x.kind}) }}, icon("edit", 13)));
+    } }
+  return h("div", {class: "mvs"}, top, alsoBtns.length ? h("div", {class: "also"}, h("span", {}, "Also"), ...alsoBtns) : null,
     land.map(y => y.kind === "merge" ? mergeEl(p, y) : y.kind === "signoff" ? signoffEl(p, y) : readyEl(p)));  // under a review it still waits on: merge when you're happy
 }
 // Mark ready: out of draft with greenlight's own ready cmd; one click (marking it draft again undoes it). Answered with mc.merged too.
@@ -3109,6 +3190,18 @@ function lifeLine(p){
 function nextBtn(p){
   suggestCon(p.name);  // normally already written or on its way; the app never asks twice at once
   const sg = ui.sug[p.name] || {}, ready = !!(sg.prompt || sg.error), mv = p.life && p.life.suggestion || {};
+  const att = p.attempts || null;
+  if (att && att.stuck) {
+    const label = sg.label || mv.label || stepTitle(p.step || "next step");
+    return h("div", {class: "mvs nx"},
+      h("div", {class: "mv or stuck"},
+        h("button", {class: "go", title: `Ask Chief why ${label} hasn't progressed (${att.reason})`, onclick: () => askChiefStuck(p, label, att)},
+          icon("chat", 20, ""),
+          h("span", {}, h("b", {}, "Ask Chief"), h("small", {}, `${label} · ${att.reason}`)))),
+      h("div", {class: "also"}, h("span", {}, "Also"),
+        h("button", {class: "btn sm", title: sg.prompt || "", disabled: !ready, onclick: () => { act(p, "The agent didn't start"); nextStep(p.name) }}, "Retry anyway"),
+        h("button", {class: "btn sm", title: "Clear recorded failures for this stage", onclick: () => resetAttemptsFor(p)}, "Reset")));
+  }
   return h("button", {class: "btn sm go nx", title: sg.prompt || "", disabled: !ready, "aria-busy": ready ? null : "true",
     onclick: () => { act(p, "The agent didn't start"); nextStep(p.name) }},
     sg.prompt ? sg.label || mv.label || "Run next step" : sg.error ? mv.label || "Run next step" : mv.label || "Please wait…");
@@ -3359,7 +3452,7 @@ function suggestCon(name){
   post({cmd: "suggest", name});
 }
 const cap = t => String(t || "").replace(/^./, m => m.toUpperCase());
-function runFor(name, text){ post({cmd: "run", name, prompt: text}) }
+function runFor(name, text, kind = "suggest"){ post({cmd: "run", name, prompt: text, kind}) }
 /* ---------- the hover card's actions, one mechanism: the hex leaves the map on the click and comes back once its state is fresh ----------
    merge, mark ready, sign off, the moves, Next step and Answer all go through act(); their replies (mc.merged, mc.ran, mc.answered) through
    acted(). A failure puts the hex back and says why. A success asks for a scan, and the hex stays away until the workspace's state moves
@@ -3484,7 +3577,7 @@ function taskSheetEl(){
           oninput: e => { ask.ans[q.id] = e.target.value; e.target.closest(".pq").querySelectorAll(".pchips button").forEach(b => b.setAttribute("aria-pressed", "false")); syncGo() }});
         return h("div", {class:"pq"}, h("span", {class:"pql", id:`ps-q-${q.id}`}, q.q),
           h("div", {class:"pchips", role:"group", "aria-labelledby":`ps-q-${q.id}`}, q.options.map(o =>
-            h("button", {type:"button", "aria-pressed": String(ask.ans[q.id] === o), onclick: () => { ask.ans[q.id] = o; render() }}, o))), own) }));
+            h("button", {type:"button", "aria-pressed": String(ask.ans[q.id] === o), onclick: () => { ask.ans[q.id] = o; ask.rev = (ask.rev || 0) + 1; render() }}, o))), own) }));
   }
   function errEl(){  // right under the field it's about: a taken name is the title's to fix, anything else is worth a retry
     const taken = /already exists/.test(ui.task.err), name = (ui.task.err.match(/workspace (\S+) already exists/) || [])[1];
@@ -3674,6 +3767,10 @@ window.mc = {
     if (snap.error) { console.log("dash:", snap.error); return }
     clearTimeout(CONN.t); clearTimeout(CONN.t5); CONN.failed = CONN.refocus = false;
     if (snap.ts) ui.skew = Date.now() / 1000 - snap.ts;
+    const hadSnap = !!ui.snap;
+    const prevAct = Object.keys(ui.acting).join(","), prevPark = Object.keys(ui.parking).join(","), prevPick = ui.picked.size;
+    const prevRescan = ui.rescan, prevRescanErr = ui.rescanErr;
+    const prevPagePuck = ui.page ? JSON.stringify(puckOf(ui.page.name) || null) : null;
     ui.raw = snap; relift(); dropGone(snap);
     for (const p of snap.pucks) {  // next steps written ahead (dash.py suggest's cache) for the puck's current state
       const sg = ui.sug[p.name];
@@ -3683,9 +3780,23 @@ window.mc = {
     if (ui.rescan && snap.scanned !== ui.rescan && !(ui.rescan === -1 && !snap.scanned)) ui.rescan = 0;  // the new scan landed
     if (ui.rescanErr && ((snap.scan_error && snap.scan_error.ts >= ui.rescanErr.ts) || snap.scanned > ui.rescanErr.prevScanned)) ui.rescanErr = null;
     settle(snap);
+    const nextSig = JSON.stringify({...snap, ts: 0, usage: null});
+    const stateChanged = !hadSnap || nextSig !== ui.lastSnapSig
+      || Object.keys(ui.acting).join(",") !== prevAct || Object.keys(ui.parking).join(",") !== prevPark
+      || ui.picked.size !== prevPick || ui.rescan !== prevRescan || ui.rescanErr !== prevRescanErr;
+    ui.lastSnapSig = nextSig;
     if (ui.page) {
       const sg = sigOf(snap.pucks.find(x => x.name === ui.page.name));
       if (sg && sg !== ui.page.sig && !ui.page.loading) { ui.page.sig = sg; requestPage(false); outHead(); orphanCard(); return }  // it moved: refresh facts + layout
+      // Another workspace's tick mustn't tear down this page (e.g. its answer box) while this workspace didn't change.
+      if (hadSnap && (!stateChanged || (JSON.stringify(puckOf(ui.page.name) || null) === prevPagePuck
+          && Object.keys(ui.acting).join(",") === prevAct && ui.rescan === prevRescan && ui.rescanErr === prevRescanErr))) {
+        renderDock(true); renderPark(true); footer(); outHead(); return;
+      }
+    }
+    if (!stateChanged) {
+      if (ui.stage) document.getElementById("pg-" + cssId(ui.stage.name))?.classList.add("steady");
+      footer(); outHead(); return;
     }
     render(); outHead(); orphanCard();
   },

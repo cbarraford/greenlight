@@ -284,6 +284,15 @@ func runVoiceOfflineUnitTests(check: (String, Bool) -> Void) {
         check("voice: every stage call carries thinking motion, and turning it off mid-load corrects the queued one",
               carried && v.stageQueued.map { $0.hasSuffix("dataset.motion = 'off';") } ?? false)
     }
+    do {  // reactive field payload: floor priority (speaking > thinking > muted > listening), clamped & rounded energy
+        let sp = voiceFXPayload(speaking: true, thinking: true, micMuted: true, youLevel: 0.8, chiefLevel: 0.642)
+        let th = voiceFXPayload(speaking: false, thinking: true, micMuted: false, youLevel: 0.7, chiefLevel: 0.4)
+        let mu = voiceFXPayload(speaking: false, thinking: false, micMuted: true, youLevel: 0.9, chiefLevel: 0.0)
+        let li = voiceFXPayload(speaking: false, thinking: false, micMuted: false, youLevel: 1.4, chiefLevel: 0.2)
+        let nan = voiceFXPayload(speaking: false, thinking: false, micMuted: false, youLevel: .nan, chiefLevel: 0)
+        check("voice: reactive field payload maps floor state and clamps RMS energy",
+              sp == ("speak", 0.64) && th == ("think", 0) && mu == ("muted", 0) && li == ("listen", 1) && nan == ("listen", 0))
+    }
     do {  // muting drops the half-heard turn and the recognition request: nothing more reaches the recognizer until unmute
         let v = Voice()
         v.setMicMuted(true)

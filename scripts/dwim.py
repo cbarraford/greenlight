@@ -530,7 +530,10 @@ def apply(o):
                 if time.time() - earlier.get("at", 0) < LAUNCH_RESERVE:
                     return {"ws": a["ws"], "error": "an agent launch was just requested there"}
                 _write_undo(reserve, {"at": time.time(), "verb": a["verb"], "ws": a["ws"]})
-                r = dash.run(a["ws"], move.get("prompt") or "", w["worktreeId"])
+                if getattr(dash.run, "__module__", "") == "dash":
+                    r = dash.run(a["ws"], move.get("prompt") or "", w["worktreeId"], kind=LAUNCH[a["verb"]], source="dwim")
+                else:
+                    r = dash.run(a["ws"], move.get("prompt") or "", w["worktreeId"])
                 if r.get("error"):
                     reserve.unlink(missing_ok=True)
                 return {"ws": a["ws"], **({"error": r["error"]} if r.get("error") else {"agent": r.get("agent")})}

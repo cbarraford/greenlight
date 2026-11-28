@@ -1029,6 +1029,166 @@ def fork_token(card):
     return digest(json.dumps([situation_token(card), card.get("situation_source")]))
 
 
+# ---- unified stage-attempt tracking (Center, Basement, DWIM, Orchestrator)
+
+
+def attempt_sig(row, sha=None):
+    """Canonical situation key for a stage attempt (matches orchestrate.sig)."""
+    step = (row.get("next") or {}).get("step") or ""
+    if step == "freeform":
+        return f"freeform:{digest(row.get('goal') or '')}"
+    s = (row.get("mr") or {}).get("sha") if sha is None else sha
+    return f"{step}@{s or ''}"
+
+
+def local_work(path, mr_sha=""):
+    """Check whether a worktree has uncommitted files or unpushed local commits."""
+    if not path:
+        return {}
+    st = git(path, "status", "--porcelain")
+    dirty = len([ln for ln in (st or "").splitlines() if ln.strip()]) if st is not None else 0
+    ahead = 0
+    if mr_sha:
+        head = git(path, "rev-parse", "HEAD") or ""
+        if head and head != mr_sha:
+            cnt = git(path, "rev-list", "--count", f"{mr_sha}..HEAD")
+            if cnt and cnt.isdigit():
+                ahead = int(cnt)
+            else:
+                up = git(path, "rev-list", "--count", "@{u}..HEAD")
+                ahead = int(up) if up and up.isdigit() else 1
+    else:
+        up = git(path, "rev-list", "--count", "@{u}..HEAD")
+        if up and up.isdigit():
+            ahead = int(up)
+    return {"dirty": dirty, "ahead": ahead} if (dirty or ahead) else {}
+
+
+def local_summary(local):
+    parts = []
+    if d := local.get("dirty"):
+        parts.append(f"{d} uncommitted file{'s' * (d != 1)}")
+    if a := local.get("ahead"):
+        parts.append(f"{a} unpushed commit{'s' * (a != 1)}")
+    return ", ".join(parts)
+
+
+def record_attempt(card_key, *, step, sig="", agent="agent", source="center", kind="", sha="", mr_iid=None):
+    """Record a stage attempt in card['dispatches'] across all launch surfaces."""
+    if not card_key or not step:
+        return load(card_key) if card_key else blank("")
+    entry = {
+        "ts": int(time.time()),
+        "agent": str(agent or "agent")[:40],
+        "step": str(step),
+        "sig": str(sig or f"{step}@{sha}"),
+        "source": str(source or "center")[:24],
+        "kind": str(kind or "")[:32],
+        "sha": str(sha or "")[:40],
+        "mr_iid": mr_iid,
+        "pending": False,
+    }
+    with lock():
+        c = load(card_key)
+        kept = [d for d in c.get("dispatches") or []
+                if d.get("pending") or (d.get("step") == step and (mr_iid is None or d.get("mr_iid") in (None, mr_iid)))]
+        c["dispatches"] = [entry] + kept
+        label = kind or step.replace("_", " ")
+        append_activity(c, f"Started {label} ({entry['agent']} via {entry['source']})", kind="attempt", step=step, sha=sha)
+        save(c)
+        return c
+
+
+def reset_attempts(card_key, *, step=None):
+    """Clear completed stage attempts and forks on a workspace card."""
+    with lock():
+        c = load(card_key)
+        c["dispatches"] = [d for d in c.get("dispatches") or []
+                           if d.get("pending") or (step and d.get("step") != step)]
+        if step:
+            c["forks"] = {k: v for k, v in (c.get("forks") or {}).items() if not k.startswith(f"{step}@") and k != step}
+        else:
+            c["forks"] = {}
+        append_activity(c, f"Reset stage attempts{f' for {step}' if step else ''}", kind="attempt", step=step or "")
+        save(c)
+        return c
+
+
+def _matching_attempts(card, row, step, mr_iid, cur_sig):
+    out = []
+    for d in card.get("dispatches") or []:
+        if d.get("pending") or d.get("agent") == "launch pending":
+            continue
+        if d.get("step") != step or str(d.get("sig") or "").startswith("rereview@"):
+            continue
+        if mr_iid is not None and d.get("mr_iid") not in (None, mr_iid):
+            continue
+        if step == "freeform" and d.get("sig") and d.get("sig") != cur_sig:
+            continue
+        out.append(d)
+    return out
+
+
+def _attempt_reason(count, same_sha, local):
+    if local:
+        return f"Tried {count}× · {local_summary(local)}"
+    if same_sha >= 1:
+        return "Failed on this commit" if same_sha == 1 else f"Failed {same_sha}× on this commit"
+    return f"Failed {count}× on this step"
+
+
+def stage_attempts(card, row, *, check_local=False):
+    """Completed attempts for row's current stage, and whether it is stuck (1 on same commit or 2 on same step)."""
+    nxt = row.get("next") or {}
+    step = nxt.get("step") or ""
+    if not step or step in ("done", "parked", "plan"):
+        return None
+    mr = row.get("mr") or {}
+    mr_iid, sha = mr.get("iid"), mr.get("sha") or ""
+    cur_sig = attempt_sig(row, sha)
+    matching = _matching_attempts(card, row, step, mr_iid, cur_sig)
+    ag_state = (row.get("agent") or {}).get("state") or "none"
+    failed = matching[1:] if ag_state in ("working", "waiting") else matching
+    if not failed:
+        return None
+    count = len(failed)
+    same_sha = sum(1 for d in failed if d.get("sig") == cur_sig or (sha and d.get("sha") == sha))
+    stuck = bool(same_sha >= 1 or count >= 2)
+    nxt_agent = nxt.get("agent")
+    if stuck and count == 1 and "out of tokens" in (nxt.get("action") or "") and nxt_agent and nxt_agent not in {d.get("agent") for d in failed}:
+        stuck = False
+    local = local_work(row.get("path"), sha) if (check_local and row.get("path")) else {}
+    last = failed[0]
+    summary_text = ((card.get("failed_approaches") or [""])[0] or card.get("current_hypothesis") or (row.get("agent") or {}).get("last") or "")
+    summary_text = " ".join(str(summary_text).split())[:160]
+    return {
+        "count": count,
+        "same_sha": same_sha,
+        "stuck": stuck,
+        "step": step,
+        "last": {"ts": int(last.get("ts") or 0), "agent": last.get("agent") or "", "source": last.get("source") or "", "kind": last.get("kind") or ""},
+        "reason": _attempt_reason(count, same_sha, local),
+        "summary": summary_text,
+        **({"local": local} if local else {}),
+    }
+
+
+def retry_context(card, attempts):
+    """Short addendum appended to retry prompts so the next agent does not repeat a failed approach."""
+    if not attempts or attempts.get("count", 0) < 1:
+        return ""
+    last = attempts.get("last") or {}
+    who = last.get("agent") or "a previous agent"
+    lines = [f"Prior attempt failed on this stage ({attempts.get('reason') or 'previous attempt did not advance it'}; last: {who}). "
+             "Do not repeat the same approach — diagnose why the earlier attempt failed before editing."]
+    lines.extend(f"- Prior failed approach: {fa[:220]}" for fa in (card.get("failed_approaches") or [])[:2])
+    if not (card.get("failed_approaches")) and attempts.get("summary"):
+        lines.append(f"- Last agent note: {attempts['summary'][:220]}")
+    if local := attempts.get("local"):
+        lines.append(f"- Local worktree already has {local_summary(local)}: inspect existing local changes before starting over.")
+    return "\n".join(lines)[:800]
+
+
 # ---- CLI
 
 
