@@ -1519,7 +1519,7 @@ function openWs(ws, r, wait){  // wait: the app's (Chief's console, a Basement b
     const existing = latest(t => paneOf(t).some(p => p.session === live.resume.session));
     if (existing) return show(existing);
     newTab(live.path, undefined, false, live.resume.session); cur.focus.keep = true; return }
-  if (wait && !treesIn) { waitTrees.push([ws, r]); waitT ||= setTimeout(openWaiting, 5000); return }  // a cold start: the live sessions come with the first trees (5 s at most)
+  if (wait && (!treesIn || !tmuxOk)) { waitTrees.push([ws, r]); waitT ||= setTimeout(openWaiting, 5000); return }  // a cold start: the live sessions come with every host's trees (5 s at most)
   const other = explicit ? latest(t => t.ws === ws)
     : latest(t => t.ws === ws) || latest(t => t.ws && t.ws.endsWith("/" + ws))
       || (q && latest(t => (t.name || "").toLowerCase().includes(q)));

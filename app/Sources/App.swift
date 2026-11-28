@@ -2980,7 +2980,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         web?.evaluateJavaScript("term.toast(\(d))")
     }
     private func publishTrees() {
-        let obj = treesToPublish(server: &serverTreesObj, local: &localTreesObj, merge: !isLocalHost(host), primaryHost: host)
+        let obj = treesToPublish(server: &serverTreesObj, local: &localTreesObj, merge: !isLocalHost(host), primaryHost: host,
+                                 localPending: !initialLocalTreesDone && !uitest && !selftest)  // a Mac fetch that failed or never runs: the server's word
         if let obj, JSONSerialization.isValidJSONObject(obj) {
             lastTreesObj = obj; paneReplay.add(obj["panes"])
             refreshProjects()
