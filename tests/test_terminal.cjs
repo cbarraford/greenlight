@@ -521,6 +521,12 @@ test("a restored kept pane closed before the first trees keeps its agent", async
   await fresh.evaluate(t => term.workspaces(t), TREES);
   await fresh.evaluate(() => closeTab(latestTab(t => t.ws === "/mac/app")));
   assert.equal((await posts(fresh, "close")).pop().keep, true, "its host's trees missing: kept");
+  // a worktree listed before and gone from fresh trees (greenlight's cleanup deleted it): its session ends
+  await fresh.evaluate(t => term.workspaces(t), {trees: [...TREES.trees, {ade: "orca", project: "acme/app", name: "gone", path: "/w/gone", branch: "b", main: false, agent: "none"}]});
+  await fresh.evaluate(() => { newTab("/w/gone", undefined, false, "mc-0d0d0d0d"); cur.focus.keep = true });
+  await fresh.evaluate(t => term.workspaces(t), TREES);
+  await fresh.evaluate(() => closeTab(latestTab(t => t.ws === "/w/gone")));
+  assert.equal((await posts(fresh, "close")).pop().keep, undefined, "a deleted worktree's session ends");
   await fresh.close();
 });
 test("a click in the page (sidebar, palette, card) on a worktree with a live agent still shows your own tab", async page => {
