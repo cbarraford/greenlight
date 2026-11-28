@@ -425,14 +425,15 @@ def test_dash_under_native_writes_goals_and_creates_natively(home, repo, monkeyp
 def test_native_refuses_beside_an_outside_agent(home, monkeypatch):
     import cleanup
     asked = []
-    monkeypatch.setattr(cleanup, "outside_agent", lambda path, fresh=False, paths=None: asked.append((fresh, paths)) or "codex")
+    monkeypatch.setattr(cleanup, "outside_agent", lambda path, fresh=False, paths=None, quiet=None: asked.append((fresh, paths, quiet)) or "codex")
     monkeypatch.setattr(ade_basement, "worktrees", lambda: [{"id": "/w/x", "path": "/w/x", "isMainWorktree": False},
                                                             {"id": "/w/x/.wt/b", "path": "/w/x/.wt/b", "isMainWorktree": False}])
     with pytest.raises(RuntimeError, match="codex runs in /w/x outside Greenlight"):
         ade_basement.remove("/w/x")  # `greenlight.py ade worktree rm` never removes under it
     with pytest.raises(RuntimeError, match="no second agent beside it"):
         ade_basement.launch("/w/x", "claude", "go")  # nor starts a second agent beside it
-    assert asked == [(True, ["/w/x", "/w/x/.wt/b"])] * 2  # fresh, against every worktree (nested ones count)
+    # fresh, against every worktree (nested ones count); only a removal lets one idle for ACTIVE_MINUTES pass
+    assert asked == [(True, ["/w/x", "/w/x/.wt/b"], cleanup.ACTIVE_MINUTES * 60), (True, ["/w/x", "/w/x/.wt/b"], None)]
 
 
 def test_native_listing_runs_the_first_run_import(home, monkeypatch):

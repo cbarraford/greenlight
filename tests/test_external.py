@@ -138,12 +138,12 @@ def test_mac_parsers(monkeypatch):
     monkeypatch.setattr(external.time, "time", lambda: 1000000)
     sup = "/opt/Application Support/x/claude"  # spaces in the path (as under ~/Library): whitespace-split args lose it
     out = {"pid=,args=": f" 101 {sup} --resume\n 102 node x\n",
-           "pid=,ppid=,etime=,uid=,comm=": f" 101  1   01:02:03 {os.getuid()} {sup}\n 102 101 2-00:00:05 0 node\nbad line\n",
+           "pid=,ppid=,etime=,uid=,tty=,comm=": f" 101  1   01:02:03 {os.getuid()} ttys004 {sup}\n 102 101 2-00:00:05 0 ?? node\nbad line\n",
            "lsof": "p101\nfcwd\nn/srv/w/app\np102\nn/srv/w/b\n"}
     monkeypatch.setattr(external.subprocess, "run",
                         lambda cmd, **k: mock.Mock(stdout=out["lsof" if "lsof" in cmd[0] else cmd[-1]], returncode=0))
-    assert external._proc_mac() == {101: {"ppid": 1, "argv": [sup, "--resume"], "start": 1000000 - 3723, "other": False},
-                                    102: {"ppid": 101, "argv": ["node", "x"], "start": 1000000 - 172805, "other": True}}
+    assert external._proc_mac() == {101: {"ppid": 1, "argv": [sup, "--resume"], "start": 1000000 - 3723, "other": False, "tty": "/dev/ttys004"},
+                                    102: {"ppid": 101, "argv": ["node", "x"], "start": 1000000 - 172805, "other": True, "tty": None}}
     assert external.agent_of(external._proc_mac()[101]["argv"]) == "claude"
     assert external._cwds_mac([101, 102]) == {101: "/srv/w/app", 102: "/srv/w/b"} and external._cwds_mac([]) == {}
 
@@ -340,3 +340,92 @@ def test_failures_fail_closed(monkeypatch):
     assert external.scan(procs={9: {"ppid": 1, "argv": ["claude"]}}, roots=set(), cwd_of=lambda p: "") == []  # lsof listed it, no path (its folder was deleted): seen
     monkeypatch.setattr(external, "_alive", lambda pid: False)  # it exited mid-scan: nothing to find
     assert external.scan(procs={7: {"ppid": 1, "argv": ["claude"]}}, roots=set(), cwd_of=lambda p: None) == []
+
+
+# --- an outside agent idle at its prompt: seen by its terminal's last output, no longer "working" for as long as it lives ---
+
+def _at(tmp_path, name, ago):
+    """A stand-in terminal device whose last output was `ago` seconds back."""
+    f = tmp_path / name
+    f.write_text("")
+    t = external.time.time() - ago
+    os.utime(f, (t, t))
+    return str(f)
+
+
+def test_scan_reads_each_agents_terminal_output_time(tmp_path):
+    procs = {21: {"ppid": 1, "argv": ["claude"], "tty": _at(tmp_path, "idle", 3600)},
+             30: {"ppid": 1, "argv": ["codex"], "tty": _at(tmp_path, "busy", 2)},
+             40: {"ppid": 1, "argv": ["gemini"], "tty": None},                         # no terminal (a pipe, an editor's)
+             50: {"ppid": 1, "argv": ["agy"], "tty": str(tmp_path / "gone")}}          # its device can't be read
+    got = {a["pid"]: a for a in external.scan(procs=procs, roots=set(), cwd_of=lambda p: f"/w/{p}")}
+    assert abs(external.time.time() - got[21]["out_at"] - 3600) < 5 and abs(external.time.time() - got[30]["out_at"]) < 7
+    assert "out_at" not in got[40] and "out_at" not in got[50]
+    assert external.quiet(got[21], 1800) and not external.quiet(got[21], 7200)
+    assert not external.quiet(got[30], 60)
+    assert not external.quiet(got[40], 60) and not external.quiet(got[50], 0)  # unknown is never quiet: it holds, as before
+    assert not external.quiet({"pid": None, "agent": None, "cwd": "/w", "start": None}, 0)  # by_worktree_safe's failed check
+
+
+def test_terminal_of_a_process():
+    assert external._tty_linux(0x8803) == "/dev/pts/3" and external._tty_linux(0x10884B) == "/dev/pts/331"
+    assert external._tty_linux(0) is None and external._tty_linux(0x0401) is None  # none; a console, not a pty
+    if os.path.isdir("/proc/self"):
+        assert "tty" in external._proc_linux()[os.getpid()]
+
+
+def test_native_rows_tell_an_idle_external_agent_from_a_working_one(monkeypatch):
+    monkeypatch.setattr(ade_basement, "panes", lambda cmd=False: [])
+    monkeypatch.setattr(ade_basement, "saved", lambda: ["/srv/w/app"])
+    monkeypatch.setattr(ade_basement, "git", lambda repo, *a: "worktree /srv/w/app\nworktree /srv/w/idle\nworktree /srv/w/busy\nworktree /srv/w/blind\n")
+    monkeypatch.setattr(ade_basement, "git_info", lambda p: {"path": p, "branch": "refs/heads/x", "isMainWorktree": p == "/srv/w/app",
+                                                             "repoId": "/srv/w/app", "repo": "app", "projectId": None})
+    now = external.time.time()
+    monkeypatch.setattr(external, "agents", lambda fresh=False, strict=False: [
+        {"pid": 21, "agent": "claude", "cwd": "/srv/w/idle", "start": 1700, "out_at": now - 3600},  # at its prompt for an hour
+        {"pid": 22, "agent": "codex", "cwd": "/srv/w/busy", "start": 1700, "out_at": now - 3},      # its spinner just drew
+        {"pid": 23, "agent": "agy", "cwd": "/srv/w/blind", "start": 1700}])                         # no terminal to read
+    rows = {w["path"]: w for w in ade_basement.worktrees()}
+    (idle,), (busy,), (blind,) = (rows[f"/srv/w/{n}"]["agents"] for n in ("idle", "busy", "blind"))
+    # the bug: every outside agent was "working" for as long as its process lived, so a finished workspace's hex kept
+    # its spinner and its Agents card (both key on agent.state == "working")
+    assert idle["state"] == "done" and idle["external"] and idle["agentType"] == "claude"  # still external: no dispatch beside it
+    assert busy["state"] == "working" and blind["state"] == "working"  # unknown stays working, as before
+    row = greenlight.primary_agent(rows["/srv/w/idle"]["agents"])
+    assert row["state"] == "done" and row["external"]
+
+
+def test_cleanup_removes_a_finished_workspace_under_a_quiet_external_agent(monkeypatch, tmp_path):
+    monkeypatch.setenv("GREENLIGHT_ADE", "native")
+    wt = tmp_path / "w"
+    wt.mkdir()
+    repo = mock.Mock(error=None, default="main", base="origin/main", project="g/p")
+    repo.mrs.return_value = [{"state": "merged", "label": "!4", "sha": "abc", "iid": 4}]
+    monkeypatch.setattr(cleanup, "git", lambda path, *a, check=True: "abc" if a[:1] == ("rev-parse",) else "")
+    monkeypatch.setattr(cleanup, "post_merge_left", lambda *a: None)
+    w = {"path": str(wt), "branch": "refs/heads/feat", "id": "w", "comment": ""}
+    now, found = external.time.time(), []
+    monkeypatch.setattr(external, "agents", lambda fresh=False, strict=False: found)
+    # the bug: merged, clean and pushed, yet kept for as long as the outside session stayed open (days)
+    found[:] = [{"pid": 7, "agent": "claude", "cwd": str(wt), "out_at": now - cleanup.ACTIVE_MINUTES * 60 - 60}]
+    assert cleanup.evaluate(w, repo, set()) == ("candidate", "MR !4 merged")
+    assert cleanup.outside_agent(str(wt)) == "claude"  # asked plainly (the Delete dialog, a launch): it is still there
+    found[:] = [{"pid": 7, "agent": "claude", "cwd": str(wt), "out_at": now - 300}]  # printed 5 min ago: kept, like our own terminals
+    assert cleanup.evaluate(w, repo, set()) == ("skip", "MR !4 merged, but claude runs in it outside Greenlight")
+    found[:] = [{"pid": 7, "agent": "claude", "cwd": str(wt), "out_at": now - 7200},
+                {"pid": 8, "agent": "codex", "cwd": str(wt / "sub"), "out_at": now - 5}]  # one of two is at work
+    assert cleanup.evaluate(w, repo, set()) == ("skip", "MR !4 merged, but codex runs in it outside Greenlight")
+
+    # the native engine's own guards: a removal goes ahead under a quiet one, a launch never starts beside it
+    removed = []
+    trees = [{"id": str(wt), "path": str(wt), "isMainWorktree": False, "repoId": "/srv/repo"}]
+    monkeypatch.setattr(ade_basement, "worktrees", lambda: trees)
+    monkeypatch.setattr(ade_basement.worktrunk, "remove", lambda repo, path, force=False: removed.append(path))
+    monkeypatch.setattr(ade_basement.ade_common, "set_goal", lambda path, goal: None)
+    with pytest.raises(RuntimeError, match="isn't removed under it"):
+        ade_basement.remove(str(wt))  # the codex at work
+    found[:] = found[:1]
+    with pytest.raises(RuntimeError, match="no second agent beside it"):
+        ade_basement.launch(str(wt), "claude", "")
+    ade_basement.remove(str(wt))
+    assert removed == [str(wt)]

@@ -8,7 +8,8 @@ inside the worktree, and it is ours when it descends from a pane of `tmux -L gre
     python3 external.py [--json] [--all]   every agent outside Greenlight's panes (--all: its own too, with `pane`)
 
 Linux reads /proc; macOS asks `ps` and `lsof`. Read-only, stdlib only, cached for a few seconds (a scan asks often).
-A scan that fails fails closed (cleanup: strict; native rows: by_worktree_safe). Known gap: an app that runs its
+A scan that fails fails closed (cleanup: strict; native rows: by_worktree_safe). An agent idle at its prompt is told
+from one at work by its terminal's last output (`out_at`, quiet()); one with no terminal counts as at work. Known gap: an app that runs its
 agents inside one server process whose cwd isn't the worktree (the Codex desktop app's app-server) isn't seen.
 """
 import functools
@@ -81,6 +82,12 @@ def _boot_linux():
         return next((int(x.split()[1]) for x in f if x.startswith("btime ")), 0)
 
 
+def _tty_linux(nr):
+    """/dev/pts/N for /proc stat's tty_nr when the controlling terminal is a pty (majors 136-143), else None."""
+    major, minor = nr >> 8 & 0xfff, nr & 0xff | nr >> 12 & 0xfff00
+    return f"/dev/pts/{(major - 136) * 256 + minor}" if 136 <= major <= 143 else None
+
+
 def _proc_linux():
     out, boot, hz = {}, _boot_linux(), os.sysconf("SC_CLK_TCK")
     for d in Path("/proc").iterdir():
@@ -90,11 +97,12 @@ def _proc_linux():
             raw = (d / "cmdline").read_bytes().split(b"\0")
             stat = (d / "stat").read_text()
             f = stat[stat.rindex(")") + 2:].split()  # after "(comm)": state, ppid, …, starttime (ticks since boot) at 19
-            ppid = int(f[1])
+            ppid, tty = int(f[1]), _tty_linux(int(f[4]))
         except (OSError, ValueError, IndexError):
             continue  # exited mid-read: one odd entry never blanks the table
         argv = [a.decode(errors="replace") for a in raw if a]
-        out[int(d.name)] = {"ppid": ppid, "argv": argv, "start": boot + int(f[19]) // hz if len(f) > 19 and f[19].isdigit() else None}
+        out[int(d.name)] = {"ppid": ppid, "argv": argv, "start": boot + int(f[19]) // hz if len(f) > 19 and f[19].isdigit() else None,
+                             "tty": tty}
     return out
 
 
@@ -138,14 +146,15 @@ def _proc_mac():
     args = {int(p[0]): p[1] if len(p) > 1 else "" for line in _ps("pid=,args=") if (p := line.strip().split(None, 1)) and p[0].isdigit()}
     out, now = {}, int(time.time())
     me = str(os.getuid())
-    for line in _ps("pid=,ppid=,etime=,uid=,comm="):
-        parts = line.split(None, 4)
-        if len(parts) >= 4 and parts[0].isdigit() and parts[1].isdigit():
-            pid, comm, up = int(parts[0]), parts[4] if len(parts) > 4 else "", etime_secs(parts[2])
+    for line in _ps("pid=,ppid=,etime=,uid=,tty=,comm="):
+        parts = line.split(None, 5)
+        if len(parts) >= 5 and parts[0].isdigit() and parts[1].isdigit():
+            pid, comm, up = int(parts[0]), parts[5] if len(parts) > 5 else "", etime_secs(parts[2])
             rest = args.get(pid, "")
             rest = rest[len(comm):] if comm and rest.startswith(comm) else " ".join(rest.split()[1:])
             out[pid] = {"ppid": int(parts[1]), "argv": [comm, *rest.split()] if comm else rest.split(),
-                        "start": now - up if up is not None else None, "other": parts[3] != me}
+                        "start": now - up if up is not None else None, "other": parts[3] != me,
+                        "tty": f"/dev/{parts[4]}" if parts[4].startswith("tty") else None}  # "??": none
     return out
 
 
@@ -188,8 +197,24 @@ def _tmux_roots():
     return {int(k): v for k, _, v in (x.partition("\t") for x in p.stdout.splitlines()) if k.isdigit()}
 
 
+def _out_at(tty):
+    """When the terminal last got output (its device's mtime, epoch s; Linux keeps it to 8 s), else None."""
+    try:
+        return int(os.stat(tty).st_mtime) if tty else None
+    except OSError:
+        return None
+
+
+def quiet(agent, secs):
+    """True when the agent's terminal printed nothing for secs: idle at its prompt (one at work redraws its spinner
+    every second). Never for one with no terminal to read (an editor's, a pipe's, a failed check): that one is at work."""
+    # ponytail: a headless run that prints nothing (`claude -p` in a terminal) looks idle; read its transcript's mtime if that bites
+    return bool(agent.get("out_at")) and time.time() - agent["out_at"] > secs
+
+
 def scan(procs=None, roots=None, cwd_of=None):
-    """[{pid, agent, cwd, start[, pane]}] for every agent process (start: when it began, epoch s). One under a Greenlight
+    """[{pid, agent, cwd, start[, out_at][, pane]}] for every agent process (start: when it began, epoch s; out_at:
+    its terminal's last output, when it has one). One under a Greenlight
     pane carries that pane's folder as `pane`: by_worktree, the one way callers read this, keeps it only when it works in
     another worktree than its pane's. An
     agent another agent started counts on its own only in another folder (a claude's own children aren't another
@@ -231,6 +256,7 @@ def scan(procs=None, roots=None, cwd_of=None):
         c, parent = cwd_of(pid), procs[pid]["ppid"]
         if c and not (parent in every and cwd_of(parent) == c):  # a child in its parent's folder is the parent's own
             out.append({"pid": pid, "agent": found[pid], "cwd": c, "start": procs[pid].get("start"),
+                        **({"out_at": t} if (t := _out_at(procs[pid].get("tty"))) else {}),
                         **({"pane": pane[pid]} if pid in pane else {})})
 
     return out

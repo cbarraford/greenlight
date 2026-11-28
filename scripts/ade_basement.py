@@ -3,8 +3,8 @@
 No ADE app at all: worktrees are managed with Worktrunk, terminals are the Greenlight app's own tmux server (`tmux -L greenlight`), and an
 agent is a pane whose title Claude sets (braille spinner = working, ✳ = idle). Repos are the main checkouts of every pane's
 folder plus the ones listed in ~/.greenlight/repos.json (each worktree this makes adds its repo there). An agent some
-other ADE or terminal runs in a worktree (external.py) is listed too, as working and `external`: never driven, never
-deleted under (#195 passive coexistence).
+other ADE or terminal runs in a worktree (external.py) is listed too, as `external`: working while its terminal prints,
+done once it sits at its prompt. Never driven, and never deleted under while it's at work (#195 passive coexistence).
 """
 import contextlib
 import json
@@ -28,6 +28,8 @@ from ade_common import MENU_ITEM_RE, draft, prompt_ask, git, git_info, goals, pl
 HOME = Path(os.environ.get("GREENLIGHT_HOME") or Path.home() / ".greenlight")
 REPOS, BRIEFS = HOME / "repos.json", HOME / "briefs"
 SEP = "\t"
+EXTERNAL_BUSY_S = 30  # an outside agent whose terminal printed within this is at work: a spinner redraws every second (Linux
+# keeps the time to 8 s). Short, so an idle session's occasional redraw shows as working no longer than this
 NAME = "native"
 
 
@@ -238,8 +240,9 @@ def worktrees():
                 ags.append({"state": s, "agentType": kind, "updatedAt": at_ms, "stateStartedAt": at_ms,
                             "handle": p["handle"], "session": p.get("session"), "paneKey": f"basement:{p['handle']}",
                             **({"asking": ask} if ask else {})})
-        # passive coexistence: busy, not ours to drive. updatedAt 0: an agent of ours here that's active still comes first
-        ags += [{"state": "working", "agentType": e["agent"], "external": True, "pid": e["pid"], "updatedAt": 0,
+        # passive coexistence: not ours to drive. Working while its terminal prints; idle at its prompt it's done (no
+        # spinner, no Agents card). updatedAt 0: an agent of ours here that's active still comes first
+        ags += [{"state": "done" if external.quiet(e, EXTERNAL_BUSY_S) else "working", "agentType": e["agent"], "external": True, "pid": e["pid"], "updatedAt": 0,
                  "stateStartedAt": e["start"] * 1000 if e.get("start") else None} for e in ext.get(path, [])]
         out.append({**git_info(path), "id": path, "worktreeId": path, "displayName": Path(path).name, "comment": g.get(path, ""),
                     "isPinned": False, "linkedGitLabMR": None, "agents": ags,
@@ -328,11 +331,13 @@ def _pane_agent(p, owner=None, recs=None, now_ms=None):
     return kind, s, None
 
 
-def outside(path, paths=None):
+def outside(path, paths=None, idle_ok=False):
     """The agent another ADE or terminal runs in path (or a worktree nested in it), else None; a failed check says so.
-    cleanup.outside_agent's answer, against every worktree (paths, else listed now)."""
+    cleanup.outside_agent's answer, against every worktree (paths, else listed now). idle_ok (a removal): one quiet
+    for cleanup's ACTIVE_MINUTES doesn't count."""
     import cleanup  # here: cleanup imports greenlight, which imports ade and so this module
-    return cleanup.outside_agent(path, fresh=True, paths=[w["path"] for w in worktrees()] if paths is None else paths)
+    return cleanup.outside_agent(path, fresh=True, paths=[w["path"] for w in worktrees()] if paths is None else paths,
+                                 quiet=cleanup.ACTIVE_MINUTES * 60 if idle_ok else None)
 
 
 def launch(path, agent, prompt):
@@ -391,7 +396,7 @@ def remove(worktree_id, force=False):
         raise RuntimeError(f"no native workspace {worktree_id}")
     if ws["isMainWorktree"]:
         raise RuntimeError(f"{worktree_id} is a repo's main checkout: it is never removed")
-    if out := outside(ws["path"], [w["path"] for w in trees]):
+    if out := outside(ws["path"], [w["path"] for w in trees], idle_ok=True):
         raise RuntimeError(f"{out} runs in {worktree_id} outside Greenlight: it isn't removed under it")
     worktrunk.remove(ws["repoId"], ws["path"], force=force)
     ade_common.set_goal(ws["path"], "")
