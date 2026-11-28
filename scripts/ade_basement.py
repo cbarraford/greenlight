@@ -66,7 +66,7 @@ SPIN = re.compile(r"^[^\w\s❯>] ?\S[^(]*…(?: \(\d+[smh]\b|$)")  # Claude's "�
 
 
 def agent_type(title, cmd=""):
-    """Identify a Basement pane's agent (claude, codex, agy) from its title glyph or tmux command, else None."""
+    """Identify a Basement pane's agent (claude, codex, agy, gemini, opencode, pi) from its title glyph or tmux command, else None."""
     g = (title or "")[:1]
     if "⠀" <= g <= "⣿" or g == "✳":
         return "claude"
@@ -81,6 +81,12 @@ def agent_type(title, cmd=""):
         return "codex"
     if low in ("agy", "antigravity") or low.startswith("agy-"):
         return "agy"
+    if low == "gemini" or low.startswith("gemini-"):
+        return "gemini"
+    if low == "opencode" or low.startswith("opencode-"):
+        return "opencode"
+    if low == "pi":
+        return "pi"
     return None
 
 
@@ -235,9 +241,93 @@ def send(handle, text, enter):
         tmux("send-keys", "-t", handle, "-l", "--", text)
 
 
+def _load_recs():
+    try:
+        raw = last_agent.load()
+    except OSError:
+        return {}
+    out = {}
+    for p, rec in raw.items():
+        np = os.path.normpath(p)
+        out[np] = rec
+        rp = os.path.realpath(np)
+        if rp != np:
+            out.setdefault(rp, rec)
+    return out
+
+
+def _pane_agent(p, owner=None, recs=None, now_ms=None):
+    """Identify (kind, state) for a Basement tmux pane, falling back to last_agent for starting or wrapped harnesses."""
+    title, cmd = p["title"], p.get("cmd", "")
+    kind = agent_type(title, cmd)
+    raw_rec = (recs or {}).get(owner) if owner else None
+    rec = raw_rec if isinstance(raw_rec, dict) and raw_rec.get("session") == p.get("session") else None
+    fresh_rec = bool(rec and now_ms is not None and rec.get("used") and 0 <= now_ms - rec["used"] < 15_000)
+    if not kind and rec is not None:
+        if last_agent.cmd(p) in last_agent.CMDS.get(rec["harness"], ()):
+            kind = rec["harness"]
+        elif fresh_rec:
+            return rec["harness"], "working"
+    if not kind:
+        return None, None
+    needs_tail = kind != "claude" or not ("⠀" <= title[:1] <= "⣿")
+    s = state(title, screen(p["handle"]) if needs_tail else None, kind)
+    if s == "done" and fresh_rec and rec is not None and last_agent.cmd(p) in last_agent.CMDS.get(rec["harness"], ()):
+        s = "working"
+    return kind, s
+
+
+def overlays(wts):
+    """Map local worktrees to ({worktreeId: [agent]}, {worktreeId: [terminal]}) for agents running in Basement's tmux."""
+    local = [w for w in wts or () if w.get("path") and (w.get("hostId") or "local") == "local"]
+    if not local:
+        return {}, {}
+    ps = panes(cmd=True)
+    if not ps:
+        return {}, {}
+    by_path: dict[str, list[str]] = {}
+    for w in local:
+        wid = w.get("worktreeId") or w.get("id")
+        if not wid:
+            continue
+        np = os.path.normpath(w["path"])
+        by_path.setdefault(np, []).append(wid)
+        rp = os.path.realpath(np)
+        if rp != np:
+            by_path.setdefault(rp, []).append(wid)
+    paths = sorted(by_path, key=len, reverse=True)
+    recs, now_ms = _load_recs(), int(time.time() * 1000)
+    agents_by_id: dict[str, list[dict]] = {}
+    terms_by_id: dict[str, list[dict]] = {}
+    for p in ps:
+        cwd = os.path.normpath(p["cwd"])
+        owner = next((w for w in paths if cwd == w or cwd.startswith(w + "/")), None)
+        if owner is None:
+            rcwd = os.path.realpath(cwd)
+            if rcwd != cwd:
+                owner = next((w for w in paths if rcwd == w or rcwd.startswith(w + "/")), None)
+        if owner is None:
+            continue
+        kind, s = _pane_agent(p, owner, recs, now_ms)
+        if not kind or not s:
+            continue
+        at_ms = int(p["at"] or 0) * 1000
+        ag = {"state": s, "agentType": kind, "updatedAt": at_ms, "stateStartedAt": at_ms,
+              "handle": p["handle"], "session": p["session"], "paneKey": f"basement:{p['handle']}", "basement": True}
+        for wid in dict.fromkeys(by_path[owner]):
+            agents_by_id.setdefault(wid, []).append(ag)
+            terms_by_id.setdefault(wid, []).append({
+                "handle": p["handle"], "title": p["title"], "lastOutputAt": at_ms, "agentIdentity": kind,
+                "worktreeId": wid, "tabId": "basement", "leafId": p["handle"], "session": p["session"], "basement": True,
+            })
+    return agents_by_id, terms_by_id
+
+
 def outside(path, paths=None):
     """The agent another ADE or terminal runs in path (or a worktree nested in it), else None; a failed check says so.
     cleanup.outside_agent's answer, against every worktree (paths, else listed now)."""
+    if not ade.is_native():
+        return None
     import cleanup  # here: cleanup imports greenlight, which imports ade and so this module
     return cleanup.outside_agent(path, fresh=True, paths=[w["path"] for w in worktrees()] if paths is None else paths)
 

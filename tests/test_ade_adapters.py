@@ -503,3 +503,107 @@ def test_t3_subprocess_wrapper_error():
     bad = subprocess.CompletedProcess(["t3"], 1, stdout="", stderr="server down")
     with mock.patch.object(ade_t3.subprocess, "run", return_value=bad), pytest.raises(RuntimeError, match="server down"):
         ade_t3.t3("thread", "list")
+
+
+def test_basement_overlays_and_outside_under_orca(gl_home, monkeypatch):
+    import last_agent
+
+    monkeypatch.setenv("GREENLIGHT_ADE", "orca")
+    with mock.patch.object(ade_basement, "worktrees", side_effect=AssertionError("should not list native worktrees under orca")):
+        assert ade_basement.outside("/w/feat-1") is None
+
+    now_ms = int(ade_basement.time.time() * 1000)
+    last_agent.note({"/w/fresh": ("codex", "mc-fresh", now_ms), "/w/node-cx": ("codex", "mc-node", now_ms - 60_000)})
+    pane_rows = [
+        {"handle": "%1", "session": "mc-1", "cwd": "/w/feat-1/sub", "title": "⠋ Working", "at": "1700001", "cmd": "claude"},
+        {"handle": "%2", "session": "mc-fresh", "cwd": "/w/fresh", "title": "zsh", "at": "1700002", "cmd": "zsh"},
+        {"handle": "%3", "session": "mc-node", "cwd": "/w/node-cx", "title": "codex", "at": "1700003", "cmd": "node"},
+        {"handle": "%4", "session": "mc-gem", "cwd": "/w/gem", "title": "gemini", "at": "1700004", "cmd": "gemini"},
+        {"handle": "%5", "session": "mc-rem", "cwd": "/w/remote", "title": "⠋ Remote", "at": "1700005", "cmd": "claude"},
+    ]
+    screens = {"%3": ["Working (5s · esc to interrupt)"], "%4": ["▸ 1. Allow", "  2. Deny"]}
+    wts = [
+        {"worktreeId": "wt-1", "path": "/w/feat-1", "hostId": "local"},
+        {"worktreeId": "wt-fresh", "path": "/w/fresh"},
+        {"worktreeId": "wt-node", "path": "/w/node-cx"},
+        {"worktreeId": "wt-gem", "path": "/w/gem"},
+        {"worktreeId": "wt-rem", "path": "/w/remote", "hostId": "ssh:t1"},
+    ]
+    with (
+        mock.patch.object(ade_basement, "panes", return_value=pane_rows),
+        mock.patch.object(ade_basement, "screen", side_effect=lambda h: screens.get(h, [])),
+    ):
+        ags, terms = ade_basement.overlays(wts)
+    assert ags["wt-1"][0]["agentType"] == "claude" and ags["wt-1"][0]["state"] == "working" and ags["wt-1"][0]["paneKey"] == "basement:%1"
+    assert ags["wt-fresh"][0]["agentType"] == "codex" and ags["wt-fresh"][0]["state"] == "working"
+    assert ags["wt-node"][0]["agentType"] == "codex" and ags["wt-node"][0]["state"] == "working"
+    assert ags["wt-gem"][0]["agentType"] == "gemini" and ags["wt-gem"][0]["state"] == "waiting"
+    assert "wt-rem" not in ags
+    assert terms["wt-1"][0]["basement"] is True and terms["wt-1"][0]["tabId"] == "basement" and terms["wt-1"][0]["leafId"] == "%1"
+
+
+def test_greenlight_scan_and_orchestrate_recognize_basement_agent_under_orca(gl_home, monkeypatch):
+    import greenlight
+    import orchestrate
+    import ws_state
+
+    monkeypatch.setenv("GREENLIGHT_ADE", "orca")
+    wt = {
+        "worktreeId": "wt-1", "id": "wt-1", "repoId": "r1", "displayName": "login-fix",
+        "path": "/w/login-fix", "branch": "login-fix", "comment": "Fix login",
+        "projectId": "github:acme/widgets", "agents": [], "lastOutputAt": None,
+    }
+    orca_calls = []
+
+    def fake_orca(*args, **kw):
+        orca_calls.append(args)
+        if args[:2] == ("worktree", "ps"):
+            return {"worktrees": [dict(wt)]}
+        if args[:2] == ("worktree", "list"):
+            return {"worktrees": [dict(wt)]}
+        if args[:2] == ("worktree", "show"):
+            return {"worktree": dict(wt)}
+        if args[:2] == ("terminal", "list"):
+            return {"terminals": []}
+        if args[:2] == ("terminal", "read"):
+            raise AssertionError("should read Basement pane via ade_basement.read, not orca terminal read")
+        if args[:2] == ("agent", "launch"):
+            raise AssertionError("must not dispatch a duplicate Orca agent while Basement agent is running")
+        return {}
+
+    pane = {"handle": "%7", "session": "mc-login", "cwd": "/w/login-fix", "title": "⌬ codex", "at": "1700001", "cmd": "codex"}
+    with (
+        mock.patch.object(greenlight, "orca", side_effect=fake_orca),
+        mock.patch.object(greenlight, "gh_open_prs", return_value=[]),
+        mock.patch.object(greenlight, "gh", return_value=[]),
+        mock.patch.object(greenlight, "upstream_gone", return_value=False),
+        mock.patch.object(ade_basement, "panes", return_value=[pane]),
+        mock.patch.object(ade_basement, "screen", return_value=["Working (4s · esc to interrupt)"]),
+        mock.patch.object(ade_basement, "read", return_value={"terminal": {"handle": "%7", "tail": ["Working (4s · esc to interrupt)"], "draft": ""}}),
+    ):
+        res = greenlight.scan(save=False)
+        assert len(res["rows"]) == 1
+        row = res["rows"][0]
+        assert row["agent"]["state"] == "working" and row["agent"]["type"] == "codex"
+        assert row["agent"]["pane_key"] == "basement:%7"
+        assert row["next"]["owner"] == "working"
+
+        # orchestrate.plan does not schedule a dispatch for a working Basement agent
+        card = ws_state.load(row["card"])
+        assert orchestrate.plan([row], {row["card"]: card}, judge=False) == []
+
+        # TOCTOU race: even if an older scan row thought owner == "agent" and agent was none or done,
+        # orchestrate.act_one re-reads live_worktree (merging Basement agents past worktree show) and blocks dispatch.
+        stale_none = {**row, "next": {"step": "freeform", "owner": "agent", "action": "work toward goal: Fix login"},
+                      "agent": {"state": "none", "type": None, "pane_key": None, "last": ""}}
+        out = orchestrate.act_one(stale_none, stale_none["name"], {"do": "dispatch", "sig": orchestrate.sig(stale_none)}, {row["card"]: card})
+        assert any("agent started or is waiting" in line for line in out), out
+
+        stale_done = {**stale_none, "agent": {"state": "done", "type": "codex", "pane_key": "basement:%7", "last": ""}}
+        out2 = orchestrate.act_one(stale_done, stale_done["name"], {"do": "dispatch", "sig": orchestrate.sig(stale_done)}, {row["card"]: card})
+        assert any("agent started or is waiting" in line for line in out2), out2
+        assert not any(c[:2] == ("agent", "launch") for c in orca_calls)
+
+        # merge_agent_blocks also respects the active Basement agent
+        live = orchestrate.live_worktree(row)
+        assert orchestrate.merge_agent_blocks(live, row) is True

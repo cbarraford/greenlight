@@ -1267,7 +1267,7 @@ async function treeDone(o){
     if (o.paused) return newWsAsk(o);
     newAsk = null;
     if (o.warn) toast(o.warn);
-    newTab(o.path, undefined, true, o.session);  // the agent's own session when the Basement started it, else a shell there
+    newTab(o.path, undefined, true, SESSION_OK(o.session) ? o.session : undefined);  // the agent's own session when the Basement started it, else a shell there
     made.set(o.path, wsInfo(o.repo)?.project || ""); reveal(o.path); save(); return render();
   }
   if (o.op === "cfg") {  // Save to repo: the file is the look now, so yours goes (Undo brings it back)
