@@ -1517,19 +1517,21 @@ test("a rejected promise posts {cmd: error} with its name, for the app's diag tr
   page._errs.splice(0);  // the rejection is the point
 });
 
-test("agent card: the subtitle names the repo and the branch; MR's branch as fallback, detached said, empty left out", async page => {
+test("agent card: the subtitle names the repo and the branch (the MR's first), none when unknown; search finds it", async page => {
   const sub = n => page.textContent(`.acard[data-name='${n}'] .at span`);
   const ps = [{...puck("br-a", "A", "working"), branch: "feat/show-branch"},
-    {...puck("br-b", "B", "working"), branch: "", mr: {iid: 7, ref: "!7", state: "opened", title: "B", source_branch: "fix/from-mr", target_branch: "main"}},
+    {...puck("br-b", "B", "working"), branch: "mr-7", mr: {iid: 7, ref: "!7", state: "opened", title: "B", source_branch: "fix/from-mr", target_branch: "main"}},
     {...puck("br-c", "C", "working"), branch: "HEAD"},
     {...puck("br-d", "D", "working"), branch: ""}];
   await page.evaluate(s => window.mc.update(s), {...SNAP, pucks: ps});
-  assert.match(await sub("br-a"), /^acme\/widgets · feat\/show-branch\b/);
+  assert.equal(await sub("br-a"), "acme/widgets · feat/show-branch");
   assert.equal(await page.getAttribute(".acard[data-name='br-a'] .at span", "title"), await sub("br-a"), "the full line is the tip when it's cut short");
-  assert.match(await sub("br-b"), /^!7 · acme\/widgets · fix\/from-mr\b/);
-  assert.match(await sub("br-c"), /^acme\/widgets · detached\b/);
-  assert.doesNotMatch(await sub("br-d"), /· ·|detached|undefined/);
-  assert.match(await sub("br-d"), /^acme\/widgets\b/);
+  assert.equal(await sub("br-b"), "!7 · acme/widgets · fix/from-mr", "the MR's source branch, not the review checkout's mr-N");
+  assert.equal(await sub("br-c"), "acme/widgets", "a bare HEAD isn't a branch");
+  assert.equal(await sub("br-d"), "acme/widgets", "nothing added for an unknown branch");
+  await page.fill("#q", "show-branch");
+  await page.waitForFunction(() => document.querySelectorAll(".agents .acard").length === 1);
+  assert.deepEqual(await page.$$eval(".agents .acard", es => es.map(e => e.dataset.name)), ["br-a"], "search finds a card by its branch");
 });
 
 test("workspace page: Branch row shows p.branch (not p.name) and long h1 wraps inside its column", async page => {

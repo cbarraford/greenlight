@@ -1103,7 +1103,7 @@ function shown(){  // the workspaces in the picked project (all of them when non
 function isParked(p){ return p.name in ui.parking ? ui.parking[p.name] : !!p.hidden }  // parking: sent from the dock, not yet in a snapshot
 function matches(p){
   const q = ui.q.trim().toLowerCase();
-  return !q || [p.name, p.goal, p.project, p.mr && p.mr.iid && mrRef(p.mr), STATE[p.state].label].join(" ").toLowerCase().includes(q);
+  return !q || [p.name, p.goal, p.project, branchOf(p), p.mr && p.mr.iid && mrRef(p.mr), STATE[p.state].label].join(" ").toLowerCase().includes(q);
 }
 const SQ3 = Math.sqrt(3);
 function hpts(r){ return [0, 1, 2, 3, 4, 5].map(i => { const a = (-90 + 60 * i) * Math.PI / 180; return [r * Math.cos(a), r * Math.sin(a)] }) }
@@ -1363,11 +1363,8 @@ function sessionControls(p, scope){
       onclick: () => connectSession(p)},
       icon("terminal", 12), "Connect") : null);
 }
-/* the checkout's branch, else the MR's source branch; a detached HEAD says so, an unknown one is left out */
-function branchOf(p){
-  const b = String(p.branch || (p.mr && p.mr.source_branch) || "").trim().replace(/^refs\/heads\//, "");
-  return !b ? "" : b === "HEAD" || /^\(.*detached.*\)$/i.test(b) ? "detached" : b;
-}
+/* the MR's source branch, else the checkout's (as the hover card); a review checkout's local mr-N names nothing new */
+const branchOf = p => String((p.mr && p.mr.source_branch) || (p.branch !== "HEAD" && p.branch) || "");
 const CI_GLYPH = {success: ["done", ""], failed: ["crashed", "bad"], running: ["working", "run"], pending: ["queued", ""], canceled: ["queued", ""]};
 function agentCard(p){  // one size everywhere: title + action, status + step bar, current question or tool output, then quiet MR signals and session actions
   const a = p.agent, wait = asking(p), ag = agentMeta(a.type), mr = p.mr || {}, crash = p.state === "crashed" && !wait && a.state !== "working";
@@ -1386,7 +1383,7 @@ function agentCard(p){  // one size everywhere: title + action, status + step ba
     mr.approvals_required ? sig("review", `${mr.approvals || 0}/${mr.approvals_required} approved`, "") : null,
   ].filter(Boolean);
   const sessEl = sessionControls(p, "ac"), br = branchOf(p);
-  const sub = [mr.iid && mrRef(mr), p.project, br, mr.draft && "draft", ag.tag, p.goal && p.goal !== title && short(p.goal, 80)].filter(Boolean).join(" · ");  // not when the goal is the title
+  const sub = [mr.iid && mrRef(mr), p.project, br !== title && br, mr.draft && "draft", ag.tag, p.goal && p.goal !== title && short(p.goal, 80)].filter(Boolean).join(" · ");  // not when the goal is the title
   return h("article", {class:"acard" + (wait ? " wait" : crash ? " crashed" : ""), "data-name": p.name, "aria-label":`${a.type || "agent"} on ${title}`,
     onmouseenter: () => hl(p.name, true), onmouseleave: () => hl(p.name, false)},
     h("div", {class:"atop"}, agentAv(a.type, 20),
