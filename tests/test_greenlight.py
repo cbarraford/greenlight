@@ -364,6 +364,19 @@ greenlight.close_stale([row("renamed", "me") | {"id": "snapshot-id"}])
 assert "@stuck:snapshot:one" in greenlight.pinged()
 greenlight.close_stale([])
 assert "@stuck:snapshot:one" not in greenlight.pinged()
+# a grouped question closes once every workspace it names, unfinished when asked, has merged or gone (it kept a merged PR's hex on "Needs you")
+last_json = greenlight.STATE / "last.json"; kept_scan = last_json.read_text()
+last_json.write_text(json.dumps({"rows": [row("grp-a", "me"), row("grp-b", "agent"), row("grp-old", "done")]}))
+greenlight.ping("Trust the agent in these?\nOptions: yes | no", "@grp-open", ws=["grp-a", "grp-b"])
+greenlight.ping("Deploy these?\nOptions: yes | no", "@grp-done", ws=["grp-a", "grp-old"])
+greenlight.ping("Anything else?\nOptions: yes | no", "@grp-none")
+last_json.write_text(kept_scan)
+greenlight.close_stale([row("grp-a", "done"), row("grp-b", "ci"), row("grp-old", "done")])
+assert {"@grp-open", "@grp-done", "@grp-none"} <= set(greenlight.pinged())  # grp-b is still open
+greenlight.close_stale([row("grp-a", "done")])  # grp-b and grp-old removed
+assert greenlight.outbox_events()[-1] == greenlight.outbox_events()[-1] | {"resolve": "@grp-open", "why": "workspaces finished or removed"}
+assert {"@grp-done", "@grp-none"} <= set(greenlight.pinged()) and "@grp-open" not in greenlight.pinged()  # asked about a finished one; names none
+greenlight.resolve("@grp-done", "test over"); greenlight.resolve("@grp-none", "test over")
 with (greenlight.STATE / "outbox.jsonl").open("ab") as interrupted:
     interrupted.write(b'{"text":"incomplete"')
 greenlight.outbox({"text": "after partial append"})

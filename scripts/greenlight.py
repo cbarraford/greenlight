@@ -2166,6 +2166,20 @@ def resolve(key, why):
         pinged({k: t for k, t in pinged().items() if k != key})
 
 
+def grouped_moot(names, asked, by_key):
+    """A grouped question is moot once every workspace it names has finished or gone since it was asked.
+    asked: {name: its situation in the decision record}. One already finished when asked (a deploy, a delete), or with no
+    record, never counts: cleanup removes a merged workspace by itself, so its going says nothing about the question."""
+    for n in names:
+        was = asked.get(n) or {}
+        if was.get("owner") in (None, "done"):
+            return False
+        r = by_key.get(was.get("worktree_id") or n)
+        if r is not None and r["next"]["owner"] != "done":
+            return False
+    return bool(names)
+
+
 def close_stale(rows):
     """Questions about a workspace close once it's gone or no longer waiting on me."""
     open_pings = pinged()
@@ -2173,14 +2187,19 @@ def close_stale(rows):
         return
     by_key = {r["name"]: r for r in rows} | {r["id"]: r for r in rows}
     ws_prefixes = ("@stuck:", "@drift:", "@rereview:")
-    undo_ws, stuck_ws, stuck_ids = {}, {}, {}
-    if any(k.startswith(("@undo:", *ws_prefixes)) for k in open_pings):
+    undo_ws, stuck_ws, stuck_ids, group_ws, asked = {}, {}, {}, {}, {}
+    if any(k.startswith("@") for k in open_pings):
         for e in outbox_events():
             k = str(e.get("key", ""))
             if k.startswith("@undo:") and e.get("ws"):
                 undo_ws[k] = e["ws"]
             elif k.startswith(ws_prefixes) and e.get("ws"):
                 stuck_ws[k] = e["ws"]
+            elif k in open_pings and e.get("ws"):
+                group_ws[k] = e["ws"]
+    for r in decisions.load() if group_ws else []:
+        if r.get("key") in group_ws:
+            asked[r["key"]] = {t["workspace"]: t for t in [r] + (r.get("workspaces") or []) if t.get("workspace")}
     if any(k.startswith(ws_prefixes) for k in open_pings):
         stuck_ids = {r.get("key"): [t.get("worktree_id") for t in [r] + (r.get("workspaces") or []) if t.get("worktree_id")]
                      for r in decisions.load() if str(r.get("key", "")).startswith(ws_prefixes)}
@@ -2195,7 +2214,9 @@ def close_stale(rows):
             if names and not any((r := by_key.get(name)) and r["next"]["owner"] == "me" for name in names):
                 resolve(key, "workspaces no longer waiting on you")
             continue
-        if key.startswith("@"):  # other grouped questions are closed by hand with `greenlight.py resolve`
+        if key.startswith("@"):  # other grouped questions are closed by hand (`greenlight.py resolve`), unless their workspaces all finished
+            if grouped_moot(group_ws.get(key, []), asked.get(key, {}), by_key):
+                resolve(key, "workspaces finished or removed")
             continue
         r = by_key.get(key)
         if r is None:
