@@ -1245,8 +1245,17 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
           autErr && s1WriteErr && openedReply && pickedDigit && matchedFallback && mainC.waiting.contains { $0.key == "kt" })
 
     // 11. RulesStore full sshOverride lifecycle + Core helpers (localShown, hostPending, shortcut, showDockIcon, pasteFiles, maxTotal, gemini-4-neon migration)
-    responder = { r, _, _ in
-        if r.contains("task 'repos'") { return ([#"{"repos":[{"path":"acme/widgets"}]}"#], 0) }
+    var removedStdin = [String]()
+    var removeErr = false
+    responder = { r, _, s in
+        if r.contains("task 'repos'") {
+            return ([#"{"repos":[{"name":"widgets","path":"acme/widgets","checkout":"/srv/widgets"}],"registered":["/srv/widgets","/srv/local-only"],"ade":"native"}"#], 0)
+        }
+        if r.contains("task 'repo-remove'") {
+            removedStdin.append(s)
+            if removeErr { return ([#"{"error":"repo 'local-only' names 2 registered repos"}"#], 0) }
+            return ([#"{"ok":true,"repo":"widgets","unregistered":["/srv/widgets"],"removed_config":["lifecycle"],"still_in_ade":false}"#], 0)
+        }
         if r.contains("instructions-") { return ([#"{"text":"Be brief"}"#], 0) }
         if r.contains("memory-") { return ([#"{"notes":[{"name":"n1","text":"hello"}]}"#], 0) }
         if r.contains("lifecycle-") { return ([#"{"stages":[{"key":"ci","req":"ci","done":"ci"}],"options":{},"rules":"","intro":"","source":"default","builtins":{"ci":"CI"}}"#], 0) }
@@ -1257,6 +1266,18 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     let rs = RulesStore()
     rs.load(); rs.setAuto("ci", 0); rs.reviewOwn = true; rs.review = "Custom"; rs.saveReview()
     rs.save(); rs.reset(); rs.saveInstructions(); rs.note = "n1"; rs.noteText = "body"; rs.saveNote(); rs.deleteNote()
+    let loadedBoth = rs.repos.contains("widgets") && rs.repos.contains("local-only") && rs.repoCheckouts["widgets"] == "/srv/widgets" && rs.adeBackend == "native"
+    removeErr = true
+    var errCallbackHit = false
+    rs.removeRepo("local-only") { _ in errCallbackHit = true }
+    let keptOnErr = !errCallbackHit && rs.repos.contains("local-only") && rs.projNote.contains("2 registered repos")
+    removeErr = false
+    var removedNote: String?
+    rs.pick("widgets")
+    rs.removeRepo("widgets") { removedNote = $0 }
+    let removedOk = removedNote == "" && !rs.repos.contains("widgets") && rs.repoPaths["widgets"] == nil
+        && rs.repoCheckouts["widgets"] == nil && rs.repo.isEmpty
+        && (removedStdin.last?.contains("/srv/widgets") ?? false) && (removedStdin.last?.contains("acme/widgets") ?? false)
     _ = (mainC.localShown, mainC.hostPending, mainC.shortcut, mainC.pasteFiles())
     mainC.dockIcon = "Default"
     // Legacy gemini-4-neon migration on session 0 (uses isolated unittest UserDefaults)
@@ -1268,8 +1289,8 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     mainC.files = (0..<4).map { ChatFile(name: "f\($0).png", kind: "image", data: bigChunk, thumb: nil) }
     mainC.attach(Data(repeating: 0x41, count: 4_500_000), name: "f5.png")
     RunLoop.main.run(until: Date() + 0.1)
-    check("core: RulesStore round-trip, legacy gemini-4-neon migration, and helpers",
-          rs.repos.contains("widgets") && rs.instructions == "Be brief" && migrated && !bigChunk.isEmpty)
+    check("core: RulesStore round-trip, removeRepo, legacy gemini-4-neon migration, and helpers",
+          loadedBoth && keptOnErr && removedOk && rs.instructions == "Be brief" && migrated && !bigChunk.isEmpty)
 
     // 12. Per-project host setting, resolution, snapshot/tree merging, and project switch clearing chat context onto target host
     let hostMap = parseRepoHosts([

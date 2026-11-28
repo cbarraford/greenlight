@@ -1180,6 +1180,9 @@ final class RulesStore: ObservableObject {
     @Published var status = ""
     @Published var busy = false
     @Published var repoPaths = [String: String]()  // repo → its path in orca, under its name in Repositories
+    @Published var repoCheckouts = [String: String]()  // repo → its registered main checkout path on host
+    var localRepoCheckouts = [String: String]()  // repo → its registered main checkout path on this Mac (when host is remote)
+    @Published var adeBackend = "native"
     // Settings' own UI state: the sidebar's search, the open project and repo tab, the add forms' drafts
     @Published var q = ""
     @Published var proj = ""
@@ -1253,18 +1256,77 @@ final class RulesStore: ObservableObject {
             if let e = j["error"] as? String { self.status = e; onError?() } else { done(j) }
         })
     }
-    private func addRepos(_ list: [[String: Any]]) {
-        let paths = list.compactMap { $0["path"] as? String }
-        let names = paths.compactMap { $0.split(separator: "/").last.map(String.init) }
-        for (n, p) in zip(names, paths) where repoPaths[n] == nil { repoPaths[n] = p }
+    private func addRepos(_ payload: [String: Any], local: Bool = false) {
+        let list = (payload["repos"] as? [[String: Any]]) ?? []
+        var names = [String]()
+        for item in list {
+            let path = item["path"] as? String ?? ""
+            let name = (item["name"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                ?? path.split(separator: "/").last.map(String.init)
+            guard let n = name, !n.isEmpty else { continue }
+            if !path.isEmpty && repoPaths[n] == nil { repoPaths[n] = path }
+            if let checkout = item["checkout"] as? String, !checkout.isEmpty {
+                if local { if localRepoCheckouts[n] == nil { localRepoCheckouts[n] = checkout } }
+                else if repoCheckouts[n] == nil { repoCheckouts[n] = checkout }
+            }
+            names.append(n)
+        }
+        for checkout in (payload["registered"] as? [String]) ?? [] where !checkout.isEmpty {
+            guard let n = checkout.split(separator: "/").last.map(String.init), !n.isEmpty else { continue }
+            if local { if localRepoCheckouts[n] == nil { localRepoCheckouts[n] = checkout } }
+            else if repoCheckouts[n] == nil { repoCheckouts[n] = checkout }
+            names.append(n)
+        }
+        if !local, let ade = payload["ade"] as? String, !ade.isEmpty { adeBackend = ade }
         repos = Array(Set(repos + names + (repo.isEmpty ? [] : [repo]))).sorted()
         if repo.isEmpty, let r = repos.first { pick(r) }
+    }
+    private func removePayload(forgePath: String?, checkout: String?) -> String {
+        var obj = [String: String]()
+        if let fp = forgePath, !fp.isEmpty { obj["path"] = fp }
+        if let co = checkout, !co.isEmpty { obj["checkout"] = co }
+        guard !obj.isEmpty, let d = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys, .withoutEscapingSlashes]),
+              let s = String(data: d, encoding: .utf8) else { return "{}" }
+        return s
+    }
+    func removeRepo(_ r: String, done: @escaping (String) -> Void) {
+        guard !r.isEmpty else { return }
+        let forge = repoPaths[r]
+        let primaryBody = removePayload(forgePath: forge, checkout: repoCheckouts[r])
+        let localBody = removePayload(forgePath: forge, checkout: localRepoCheckouts[r])
+        status = ""; projNote = ""
+        call("repo-remove", r, primaryBody, onError: { [weak self] in
+            guard let self else { return }
+            self.projNote = self.status
+        }) { [weak self] j in
+            guard let self else { return }
+            if !isLocalHost(host) && !uitest && !selftest {
+                ssh("\(pyCmd(on: "local"))/dash.py task repo-remove \(shellQuote(r))", on: "local", stdin: localBody)
+            }
+            let aliases = Set([r] + self.repoPaths.filter { $0.value == r }.map(\.key))
+            self.repos.removeAll { aliases.contains($0) }
+            for k in aliases {
+                self.repoPaths.removeValue(forKey: k)
+                self.repoCheckouts.removeValue(forKey: k)
+                self.localRepoCheckouts.removeValue(forKey: k)
+                self.repoHosts.removeValue(forKey: k)
+            }
+            if let fp = forge { self.repoHosts.removeValue(forKey: fp) }
+            delegate.removeRepoHost(r, forgePath: forge)
+            if aliases.contains(self.repo) {
+                self.repo = ""; self.stages = []; self.options = [:]; self.rules = ""; self.checklist = ""
+                self.intro = ""; self.source = ""; self.autoOn = [:]; self.review = ""; self.reviewOwn = false
+            }
+            let note = j["note"] as? String ?? ""
+            self.status = note.isEmpty ? "Removed \(r)." : note
+            done(note)
+        }
     }
     func load() {
         if loaded { return }
         loaded = true
         repoHosts = delegate.repoHosts
-        call("repos", "-") { self.addRepos(($0["repos"] as? [[String: Any]]) ?? []) }
+        call("repos", "-") { self.addRepos($0) }
         call("repo-hosts", "-") { j in
             let parsed = parseRepoHosts(j["hosts"])
             if !parsed.isEmpty {
@@ -1276,7 +1338,7 @@ final class RulesStore: ObservableObject {
             var rOut = "", hOut = ""
             ssh("\(pyCmd(on: "local"))/dash.py task repos -", on: "local", onLine: { rOut += $0 }, onExit: { [weak self] code in
                 guard code == 0, let j = (try? JSONSerialization.jsonObject(with: Data(rOut.utf8))) as? [String: Any] else { return }
-                self?.addRepos((j["repos"] as? [[String: Any]]) ?? [])
+                self?.addRepos(j, local: true)
             })
             ssh("\(pyCmd(on: "local"))/dash.py task repo-hosts -", on: "local", onLine: { hOut += $0 }, onExit: { [weak self] code in
                 guard code == 0, let self, let j = (try? JSONSerialization.jsonObject(with: Data(hOut.utf8))) as? [String: Any] else { return }

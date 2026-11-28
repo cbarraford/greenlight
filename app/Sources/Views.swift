@@ -1704,11 +1704,11 @@ struct SettingsView: View {
     @ViewBuilder var repositories: some View {
         split("Repositories", "Each repo's project, its lifecycle, and the prompts behind the hover card's buttons.",
               add: ("Add repository", { rs.adding = true; rs.draftRepo = ""; rs.draftProj = rs.projs.first.map(pid) ?? ""; rs.projNote = "" }),
-              empty: allRepos.isEmpty && !rs.adding && !rs.busy ? ("branch", "No repositories yet", "A repository gets its own lifecycle, rules and prompts here.") : nil) {
+              empty: allRepos.isEmpty && !rs.adding && !rs.busy ? ("branch", "No repositories yet", rs.projNote.isEmpty ? "A repository gets its own lifecycle, rules and prompts here." : rs.projNote) : nil) {
             ForEach(allRepos, id: \.self) { r in
                 let on = !rs.adding && rs.repo == r
                 let hostTag = lookupRepoHost(r, in: rs.repoHosts)?.target == "mac" ? " · Mac" : ""
-                listItem(r, (projectOf(r).map(pname) ?? "No project") + hostTag, on: on, tag: on && rs.source == "yours" ? "yours" : nil) { rs.adding = false; rs.pick(r) }
+                listItem(r, (projectOf(r).map(pname) ?? "No project") + hostTag, on: on, tag: on && rs.source == "yours" ? "yours" : nil) { rs.adding = false; rs.projNote = ""; rs.pick(r) }
             }
             if allRepos.isEmpty && rs.busy { note("Loading…").padding(DS.Space.s12) }
         } detail: {
@@ -1749,11 +1749,32 @@ struct SettingsView: View {
         rs.adding = false; rs.rtab = "stages"; rs.pick(name)
     }
 
+    func removeRepo(_ r: String) {
+        let a = NSAlert(); a.messageText = "Remove \(r) from Greenlight?"
+        a.informativeText = "Your git repository, branches, and files on disk aren't touched. Greenlight stops tracking it and removes its saved project assignment, lifecycle, prompts, and auto-run settings."
+        a.addButton(withTitle: "Remove"); a.addButton(withTitle: "Cancel")
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        let forge = rs.repoPaths[r]
+        rs.removeRepo(r) { note in
+            let drop = Set([r] + (forge.map { [$0] } ?? []))
+            commitProjects { l in for j in l.indices { l[j]["repos"] = pstrings(l[j], "repos").filter { !drop.contains($0) } } }
+            if rs.repo.isEmpty, let next = allRepos.first { rs.pick(next) }
+            if !note.isEmpty { rs.projNote = note }
+            delegate.pushTrees()
+            delegate.rescan()
+        }
+    }
+
     @ViewBuilder var repoDetail: some View {
         let proj = projectOf(rs.repo), own = rs.source == "yours"
-        VStack(alignment: .leading, spacing: 3) {
-            Text(rs.repo).font(ds(DS.TypeRole.strong)).foregroundColor(fg)  // the pane's title is the only 15
-            if let path = rs.repoPaths[rs.repo] { note(path) }
+        HStack(alignment: .top, spacing: DS.Space.s12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(rs.repo).font(ds(DS.TypeRole.strong)).foregroundColor(fg)  // the pane's title is the only 15
+                if let subtitle = rs.repoPaths[rs.repo] ?? rs.repoCheckouts[rs.repo] ?? rs.localRepoCheckouts[rs.repo] { note(subtitle) }
+            }
+            Spacer(minLength: 0)
+            Button("Remove", role: .destructive) { removeRepo(rs.repo) }.disabled(rs.busy)
+                .accessibilityLabel("Remove \(rs.repo)")
         }
         if !rs.projNote.isEmpty { note(rs.projNote) }
         box {

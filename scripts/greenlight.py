@@ -17,7 +17,7 @@
     greenlight.py resolve <key> <why>       close that question in the app
     greenlight.py import [detect|preview|apply] [--from orca|t3|cmux|herdr|folder] [--path DIR]  another ADE's repos and
                                  goals into the native engine, read-only on its side (importers.py; preview changes nothing)
-    greenlight.py repos [list|add|rm <path>...]  the native engine's repos (repos.json): every worktree of each is a workspace
+    greenlight.py repos [list|add <path>...|rm <path|name>...]  the native engine's repos (repos.json): every worktree of each is a workspace
     greenlight.py ade <orca-shaped args>    a compatibility JSON call answered by the native backend (ade.py);
                                             Worktrunk creates and removes the worktrees
 
@@ -2439,14 +2439,14 @@ def precheck_cli(res):
 
 
 def repos_cli(argv):
-    """The native engine's repo registry (repos.json): list it, or add/rm repos by any path inside them. Exit code."""
+    """The native engine's repo registry (repos.json): list it, add by path, or rm by path or registered name. Exit code."""
     import ade_basement
     op, paths = (argv[0] if argv else "list"), argv[1:]
     if op == "list":
         print(json.dumps([{"path": r, "exists": Path(r).is_dir()} for r in ade_basement.saved()], indent=1))
         return 0
     if op not in ("add", "rm") or not paths:
-        print("usage: greenlight.py repos [list | add <path>... | rm <path>...]", file=sys.stderr)
+        print("usage: greenlight.py repos [list | add <path>... | rm <path|name>...]", file=sys.stderr)
         return 2
     rc = 0
     for p in paths:
@@ -2454,11 +2454,7 @@ def repos_cli(argv):
             if op == "add":
                 print(f"added {ade_basement.register(p)}")
             else:
-                repo = ade_basement.main_checkout(p) or str(Path(p).expanduser().resolve())
-                if repo not in ade_basement.saved():
-                    raise RuntimeError(f"not registered: {repo}")
-                ade_basement.forget(repo)
-                print(f"removed {repo}")
+                print(f"removed {ade_basement.unregister(p)}")
         except RuntimeError as e:
             print(e, file=sys.stderr)
             rc = 1

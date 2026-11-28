@@ -1441,6 +1441,15 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         ensureLocalDashIfNeeded()
     }
 
+    func removeRepoHost(_ repo: String, forgePath: String? = nil) {
+        var next = repoHosts
+        next.removeValue(forKey: repo)
+        if let fp = forgePath, !fp.isEmpty { next.removeValue(forKey: fp) }
+        repoHosts = next
+        syncHostForActiveWindows(clearOnChange: false)
+        ensureLocalDashIfNeeded()
+    }
+
     private func effectiveProjList() -> [[String: Any]] {
         projList.isEmpty ? buildProjectList(saved: savedProjects, trees: [], dark: isDark, fallback: true) : projList
     }

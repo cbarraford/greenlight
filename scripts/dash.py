@@ -2765,9 +2765,22 @@ def task_new(repo_name, payload):
     return {"ok": True, "name": name, "repo": repo["name"]}
 
 
+def _ade_name():
+    try:
+        return ade.name()
+    except RuntimeError:
+        return "orca"
+
+
 def task(op, arg, stdin):
     if op == "repos":
-        return {"repos": [{k: r[k] for k in ("name", "host", "path")} for r in repos()]}
+        import ade_basement
+        rows = [
+            {k: r[k] for k in ("name", "host", "path")}
+            | ({"checkout": r["id"]} if str(r.get("id") or "").startswith("/") else {})
+            for r in repos()
+        ]
+        return {"repos": rows, "registered": ade_basement.saved(), "ade": _ade_name()}
     if op == "new":
         return task_new(arg, json.loads(stdin or "{}"))
     return settings(op, arg, stdin)
@@ -2897,10 +2910,129 @@ def import_op(verb, stdin):
         return {"error": str(e)}
 
 
+def _purge_repo_config(arg, stem, forge_path):
+    """Remove Greenlight's saved per-repo config (lifecycle, prompts, autorun) for arg; return cleaned category names."""
+    removed = []
+    same_short = bool(forge_path and forge_path.rsplit("/", 1)[-1] == arg.rsplit("/", 1)[-1])
+    forge_stem = _lifecycle_key(forge_path) if same_short else None
+    for s in {s for s in (stem, forge_stem) if s}:
+        lf = greenlight.STATE / "lifecycles" / f"{s}.md"
+        if lf.exists():
+            lf.unlink(missing_ok=True)
+            if "lifecycle" not in removed:
+                removed.append("lifecycle")
+    short = arg.rsplit("/", 1)[-1]
+    if re.fullmatch(r"[\w.-]{1,100}", short) and not short.startswith("."):
+        pdir = greenlight.STATE / "prompts" / short
+        if pdir.is_dir():
+            for kind in KINDS:
+                pf = pdir / f"{kind}.md"
+                if pf.exists():
+                    pf.unlink(missing_ok=True)
+                    if "prompts" not in removed:
+                        removed.append("prompts")
+            with contextlib.suppress(OSError):
+                pdir.rmdir()
+    a = autorun()
+    drop_keys = {arg} | ({forge_path} if same_short else set())
+    if any(k in a for k in drop_keys):
+        for k in drop_keys:
+            a.pop(k, None)
+        _atomic_write(greenlight.STATE / "autorun.json", json.dumps(a, indent=1))
+        removed.append("autorun")
+    return sorted(removed)
+
+
+def _repo_still_in_ade(arg, forge_path, checkouts):
+    """True when the active ADE backend still lists the repo after unregistering (e.g. Orca or an open Basement shell)."""
+    try:
+        rows = greenlight.orca("repo", "list").get("repos") or []
+    except Exception:
+        return False
+    short = arg.rsplit("/", 1)[-1]
+    want_paths = set(checkouts)
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        rpath = str(r.get("path") or r.get("id") or "")
+        if want_paths and rpath in want_paths:
+            return True
+        key = (r.get("gitRemoteIdentity") or {}).get("canonicalKey") or ""
+        _, _, fp = key.partition("/")
+        if forge_path and fp == forge_path:
+            return True
+        if not want_paths and not forge_path and r.get("displayName") == short:
+            return True
+    return False
+
+
+def _parse_remove_request(arg, stdin):
+    """Validate repo-remove inputs; return (stem, forge_path, checkout) or an error string."""
+    stem = _lifecycle_key(arg)
+    if not stem:
+        return "bad repo"
+    try:
+        o = json.loads(stdin or "{}")
+    except ValueError:
+        return "bad request"
+    if not isinstance(o, dict):
+        return "bad request"
+    forge_path = str(o.get("path") or "").strip()
+    if forge_path and not _lifecycle_key(forge_path):
+        return "bad repo path"
+    checkout = str(o.get("checkout") or "").strip()
+    if checkout and (not checkout.startswith(("/", "~/")) or ".." in checkout.split("/")):
+        return "bad checkout path"
+    return stem, forge_path, checkout
+
+
+def _remove_repo(arg, stdin):
+    """Unregister a repo from Greenlight (repos.json) and clear its saved lifecycle, prompts, and autorun config."""
+    import ade_basement
+    parsed = _parse_remove_request(arg, stdin)
+    if isinstance(parsed, str):
+        return {"error": parsed}
+    stem, forge_path, checkout = parsed
+    try:
+        match = (ade_basement.resolve_saved(checkout) if checkout
+                 else ade_basement.resolve_saved(arg, forge_path=forge_path or None))
+    except RuntimeError as e:
+        return {"error": str(e)}
+    if not forge_path and match:
+        forge_path = ade_basement._forge_path(match)
+    unregistered = []
+    if match:
+        ade_basement.forget(match)
+        unregistered.append(match)
+    removed_config = _purge_repo_config(arg, stem, forge_path or None)
+    cur_ade = _ade_name()
+    checkouts = unregistered or ([checkout] if checkout else [])
+    still_in_ade = _repo_still_in_ade(arg, forge_path or None, checkouts)
+    note = ""
+    if still_in_ade:
+        note = ("Removed from Greenlight. Close any open Basement terminal in it for it to disappear from the sidebar."
+                if cur_ade == "native" else
+                f"Removed Greenlight's settings for {arg}. It is still registered in {cur_ade.title()} — "
+                "hide or remove it there to stop listing its workspaces.")
+    diag.event("repo", op="remove", ade=cur_ade, repo_h=diag.h(arg),
+               unregistered=len(unregistered), still_in_ade=still_in_ade)
+    return {
+        "ok": True,
+        "repo": arg,
+        "unregistered": unregistered,
+        "removed_config": removed_config,
+        "still_in_ade": still_in_ade,
+        "ade": cur_ade,
+        **({"note": note} if note else {}),
+    }
+
+
 def settings(op, arg, stdin):
     """The app's Settings: a repo's lifecycle, host preference, standing instructions, and memory notes."""
     if op == "repo-hosts":
         return {"hosts": repo_hosts()}
+    if op == "repo-remove":
+        return _remove_repo(arg, stdin)
     if op.startswith("import-"):  # Settings → Import: read-only importers (importers.py); stdin {from: [source], paths: [dir]}
         return import_op(op.removeprefix("import-"), stdin)
     if op in ("host-get", "host-set"):
