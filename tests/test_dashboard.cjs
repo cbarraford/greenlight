@@ -2491,6 +2491,56 @@ test("detached Agents window fills the full height (no 240px cap or empty box be
   } finally { await det.close() }
 });
 
+test("issue 236: 5s stream updates do not tear down or flicker the answer sheet or workspace page answer box", async page => {
+  const snap = JSON.parse(JSON.stringify(SNAP));
+  snap.pucks[0].state = "needs";
+  snap.pucks[0].agent = {type: "claude", state: "waiting", since: "2026-04-06T12:00:00Z", last: "Which approach should we take?"};
+  await page.evaluate(s => window.mc.update({...s, ts: Math.floor(Date.now() / 1000)}), snap);
+  await page.evaluate(() => openAnswer("plan-a"));
+  await page.evaluate(() => window.mc.asked({name: "plan-a", kind: "menu", question: "Which approach should we take?",
+    options: [{key: "1", label: "Option A"}, {key: "2", label: "Option B"}]}));
+  await page.evaluate(() => {
+    window.__bg = document.querySelector(".sheetbg");
+    window.__sh = document.querySelector(".sheetbg .sheet");
+    window.__opt = document.querySelector(".sheetbg .aopts button");
+  });
+  await page.hover(".sheetbg .aopts button");
+  // Quiet 5s tick (only ts changed) and a tick where a different workspace changed must both keep the sheet & option button untouched.
+  await page.evaluate(s => window.mc.update({...s, ts: Math.floor(Date.now() / 1000) + 5}), snap);
+  const snapOther = JSON.parse(JSON.stringify(snap));
+  snapOther.pucks[1].why = "updated elsewhere";
+  await page.evaluate(s => window.mc.update({...s, ts: Math.floor(Date.now() / 1000) + 10}), snapOther);
+  const sheetCheck = await page.evaluate(() => ({
+    bgSame: document.querySelector(".sheetbg") === window.__bg && window.__bg.isConnected,
+    shSame: document.querySelector(".sheetbg .sheet") === window.__sh && window.__sh.isConnected,
+    optSame: document.querySelector(".sheetbg .aopts button") === window.__opt && window.__opt.isConnected,
+    optHover: window.__opt.matches(":hover"),
+  }));
+  assert.equal(sheetCheck.bgSame, true, "answer sheet backdrop should not be recreated on stream updates");
+  assert.equal(sheetCheck.shSame, true, "answer sheet panel should not be recreated (replays hcin open animation)");
+  assert.equal(sheetCheck.optSame, true, "answer option button should stay connected on stream updates");
+  assert.equal(sheetCheck.optHover, true, "answer option button should keep :hover on stream updates");
+
+  // Even when the sheet content updates (e.g. clicking Full message / chat / new asked payload), .sheet suppresses the hcin open animation.
+  await page.evaluate(() => window.mc.asked({name: "plan-a", kind: "menu", question: "Updated question?",
+    options: [{key: "1", label: "Option A"}, {key: "2", label: "Option B"}], chat: true}));
+  assert.equal(await page.$eval(".sheetbg .sheet", e => getComputedStyle(e).animationName), "none", "updating sheet content must suppress hcin open animation");
+
+  // Workspace page answer box must also stay connected across 5s stream ticks (including unrelated workspace updates).
+  await page.evaluate(() => { closeAnswer(); openPage("plan-a") });
+  await page.evaluate(() => { window.__pageOpt = document.querySelector("#main .aopts button") });
+  await page.hover("#main .aopts button");
+  const snapOther2 = JSON.parse(JSON.stringify(snapOther));
+  snapOther2.pucks[1].why = "changed again";
+  await page.evaluate(s => window.mc.update({...s, ts: Math.floor(Date.now() / 1000) + 15}), snapOther2);
+  const pageCheck = await page.evaluate(() => ({
+    same: document.querySelector("#main .aopts button") === window.__pageOpt && window.__pageOpt.isConnected,
+    hover: window.__pageOpt.matches(":hover"),
+  }));
+  assert.equal(pageCheck.same, true, "workspace page answer box should not rebuild on unrelated 5s stream updates");
+  assert.equal(pageCheck.hover, true, "workspace page answer option should keep :hover across 5s stream updates");
+});
+
 (async () => {
   const browser = await launchBrowser();
   let failed = 0;

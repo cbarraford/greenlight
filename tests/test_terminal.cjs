@@ -1561,6 +1561,47 @@ test("Open in editor: the palette, the workspace card and Diff each ask the app 
   assert.equal((await posts(page, "edit")).length, 3);
 }, "?editor=Zed");
 
+test("issue 236: spinner titles and refreshes keep tab close button & basement workspace nodes stable so hover doesn't flicker and clicks switch workspaces", async page => {
+  await page.evaluate(t => term.workspaces(t), TREES);
+  await page.evaluate(() => { if (document.body.classList.contains("noside")) toggleSide(true); openWs("/w/fix-login") });
+  const id = await page.evaluate(() => cur.focus.id);
+  const feed = s => page.evaluate(([i, d]) => term.feed(i, d), [id, Buffer.from(s).toString("base64")]);
+  await feed("\x1b]0;⠋ Working on fix\x07");
+  // Pin references to the active tab's close button and another workspace's sidebar row.
+  await page.evaluate(() => {
+    window.__x = document.querySelector("#tabs .tab.on .x");
+    window.__ws = [...document.querySelectorAll("#tree .ws")].find(e => e.dataset.k === "w/w/sidebar");
+  });
+  await page.hover("#tabs .tab.on .x");
+  for (const ch of ["⠙", "⠹", "⠸", "⠼", "⠴"]) await feed(`\x1b]0;${ch} Working on fix\x07`);
+  await page.evaluate(t => { render(); term.workspaces(t) }, TREES);
+  const sameAfter = await page.evaluate(() => ({
+    xSame: document.querySelector("#tabs .tab.on .x") === window.__x && window.__x.isConnected,
+    xHover: window.__x.matches(":hover"),
+    wsSame: [...document.querySelectorAll("#tree .ws")].find(e => e.dataset.k === "w/w/sidebar") === window.__ws && window.__ws.isConnected,
+  }));
+  assert.equal(sameAfter.xSame, true, "tab close button DOM node was replaced across spinner/refresh (causes hover flicker)");
+  assert.equal(sameAfter.xHover, true, "tab close button lost :hover across spinner/refresh");
+  assert.equal(sameAfter.wsSame, true, "basement workspace row DOM node was replaced across spinner/refresh");
+
+  // Hovering and clicking a workspace row in the Basement must switch even if renders/spinners fire between mousedown and mouseup.
+  const box = await page.locator('#tree .ws[data-k="w/w/sidebar"]').boundingBox();
+  assert.ok(box, "sidebar workspace row should be visible");
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  assert.equal(await page.evaluate(() => window.__ws.matches(":hover")), true, "workspace row should be hovered");
+  await page.mouse.down();
+  await feed("\x1b]0;⠦ Working on fix\x07");
+  await page.evaluate(t => { render(); term.workspaces(t) }, TREES);
+  assert.equal(await page.evaluate(() => window.__ws.isConnected && window.__ws.matches(":hover")), true, "workspace row stayed connected and hovered mid-click");
+  await page.mouse.up();
+  assert.equal(await page.evaluate(() => curWs), "/w/sidebar", "clicking workspace in Basement must switch even when render() fires mid-click");
+
+  // Clicking the idle main host chip (ws === "") must open a shell on "" instead of matching the current tab via "".includes("").
+  await page.evaluate(() => { wsTabs("").forEach(closeTab) });
+  await page.click('#tree .hchip[data-k="h"]');
+  assert.equal(await page.evaluate(() => curWs), "", "clicking idle main host chip must switch to main host");
+});
+
 (async () => {
   const browser = await launchBrowser();
   let failed = 0;
