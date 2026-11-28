@@ -102,7 +102,10 @@ test("the Basement's footer: the usage meters and their popover; the Pipe has no
   const stage = await page.$eval("#stage", s => s.getBoundingClientRect().bottom), foot = await page.$eval("#bfoot", f => f.getBoundingClientRect());
   assert.ok(Math.abs(stage - foot.top) < 1 && foot.height === 28, "under the terminals, 28 tall");
   await page.click("#bfoot .um[data-id=claude]");
+  assert.deepEqual(await page.$$eval("#umpop .urow", rs => rs.map(r => r.dataset.id)), ["claude"], "claude meter shows only claude");
   assert.deepEqual(await page.$$eval("#umpop .urow[data-id=claude] .uwin .ul", l => l.map(x => x.textContent)), ["5h", "Week"]);
+  await page.click("#bfoot .um[data-id=pi]");
+  assert.deepEqual(await page.$$eval("#umpop .urow", rs => rs.map(r => r.dataset.id)), ["pi"], "pi meter switches popover to only pi");
   assert.match(await page.textContent("#umpop .urow[data-id=pi] .unote"), /signed out/);
   await page.keyboard.press("Escape"); assert.equal(await page.$("#umpop"), null);
   await page.click("#bfoot .um[data-id=claude]");

@@ -1425,7 +1425,7 @@ def facts(name):
     return f
 
 
-def design(f, model=None, effort="low"):
+def design(f, model=None, effort="low", fallbacks=None):
     pick = lambda ks: "\n".join(f"- {k} {CATALOG[k][0]}: {CATALOG[k][1].removeprefix('P ')}" for k in ks)
     prompt = (
         "You pick the Insights for one workspace's page in a developer's Mac app. The page already shows, as fixed parts: "
@@ -1439,22 +1439,23 @@ def design(f, model=None, effort="low"):
         "\"tiles\": [{\"widget\": w, \"title\": 2-4 words, \"props\": {...}}], \"wide\": {\"widget\": w, \"title\": 2-4 words, \"props\": {...}} or null}.\n"
         "0 to 3 tiles, most useful first. Fewer is better than filler. Build every value from the facts; never invent data.\n\nFacts:\n"
         + json.dumps(f)[:30000])
-    answer = ask(prompt, model, effort)
+    answer = ask(prompt, model, effort, fallbacks=fallbacks, slot="page")
     m = re.search(r"\{.*\}", answer, re.S)
     if not m:
         raise ValueError("designer returned no layout")
     return validate(json.loads(m[0]))
 
 
-def ask(prompt, model, effort):
+def ask(prompt, model, effort, fallbacks=None, slot=None):
     """One headless answer from the harness `model` names (harness.route: claude-*, gpt-*, gemini-*, <harness>:<model>);
     an id that names none, or no model, runs on config llm_harness.
     Runs toolless/sandboxed in an empty tempdir so untrusted PR/commit/agent text cannot execute tools.
     A failed run answers "", so an error a CLI prints on stdout never becomes a suggestion sent to an agent as its task."""
-    return harness.ask(prompt, model=model, effort=effort, default=greenlight.CONFIG["llm_harness"])
+    return harness.ask(prompt, model=model, effort=effort, default=greenlight.CONFIG["llm_harness"],
+                       fallbacks=fallbacks, slot=slot)
 
 
-def suggest(name, model=None, effort="low"):
+def suggest(name, model=None, effort="low", fallbacks=None):
     """The console drawer's ghost prompt: greenlight's next step, written as a task for an agent in that workspace."""
     p = next((p for p in snapshot()["pucks"] if p["name"] == name), None)
     if not p:
@@ -1480,7 +1481,7 @@ def suggest(name, model=None, effort="low"):
         ("then a line starting `Advice:` with one sentence telling the developer what to do next themselves (don't restate "
          "puck.action, they see it), " if want else "") +
         "then the prompt on the next line: 1 to 3 imperative sentences, no quotes, no preamble.\n\nFacts:\n" + json.dumps(facts(name))[:30000])
-    label, text = split_label(ask(prompt, model, effort))
+    label, text = split_label(ask(prompt, model, effort, fallbacks=fallbacks, slot="suggest"))
     if not text:  # the model run failed: an error makes the card's button a retry instead of "Please wait…" for this state
         return {"name": name, "sig": s, "error": f"{model or greenlight.CONFIG['llm_harness']} gave no answer (a usage limit, or a model this host can't run)"}
     tip, text = split_advice(text)
@@ -1686,7 +1687,7 @@ def picker(tail):
     return " ".join(q), details
 
 
-def ask_user(name, model=None, effort="low"):
+def ask_user(name, model=None, effort="low", fallbacks=None):
     t = waiting_term(name, done_ok=True)  # "done": the page asks only in a chat, for its reply in full (the stream cuts it to 400)
     if isinstance(t, str):
         return {"name": name, "error": t}
@@ -1714,7 +1715,8 @@ def ask_user(name, model=None, effort="low"):
     try:
         raw = ask("A coding agent ended its turn with this message to the developer. If it asks the developer to choose or confirm "
                   "something, list up to 3 short replies (each under 12 words, in the developer's voice) that answer it. "
-                  "If it asks nothing answerable that way, return []. Return ONLY a JSON array of strings.\n\n" + q[-6000:], model, effort)
+                  "If it asks nothing answerable that way, return []. Return ONLY a JSON array of strings.\n\n" + q[-6000:],
+                  model, effort, fallbacks=fallbacks, slot="page")
         m = re.search(r"\[.*\]", raw, re.S)
         out["options"] = [{"key": "", "label": str(o)[:200]} for o in (json.loads(m[0]) if m else []) if str(o).strip()][:3]
         _write_json(cache, {"key": key, "out": out})
@@ -2679,6 +2681,12 @@ def _model_opts(a):
     if ("model" in opt and not re.fullmatch(r"[\w.:/-]{1,80}", opt["model"])) or (
             "effort" in opt and not re.fullmatch(r"[\w.-]{1,40}", opt["effort"])):
         sys.exit("bad --model/--effort")
+    try:
+        fbs = harness.parse_fallback_flags(a, value_flags=("--model", "--effort"))
+    except ValueError:
+        sys.exit("bad --fallback")
+    if fbs is not None:
+        opt["fallbacks"] = fbs
     return opt
 
 

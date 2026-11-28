@@ -535,11 +535,61 @@ func runCoreOfflineUnitTests(check: (String, Bool) -> Void) {
         selCore.modelFavorites = []
         check("config: Core.modelFavorites persists to ud", favPersisted && savedModelFavorites().isEmpty)
         selCore.termNameEffort = "high"
-        let selView = ModelSelector(c: selCore, title: "Test model", hint: "Hint", model: Binding(get: { selCore.model }, set: { selCore.model = $0 }), effort: Binding(get: { selCore.effort }, set: { selCore.effort = $0 }))
+        let selView = ModelSelector(c: selCore, title: "Test model", hint: "Hint", model: Binding(get: { selCore.model }, set: { selCore.model = $0 }), effort: Binding(get: { selCore.effort }, set: { selCore.effort = $0 }), fallbacks: Binding(get: { selCore.modelFallbacks }, set: { selCore.modelFallbacks = $0 }), tier: .capable)
         _ = selView
         check("config: Core.termNameEffort persists to ud and effortNotes covers every effort level",
               ud.string(forKey: "termNameEffort") == "high"
               && efforts.allSatisfy { !(effortNotes[$0] ?? "").isEmpty })
+
+        // Per-provider model fallbacks: auto defaults per tier, custom order/dedupe, primary switch retention, CLI args, usage cap parsing.
+        let fbRaw: [(String, String)] = [
+            ("Opus 5.5", "claude-opus-5-5"), ("Haiku 5.5", "claude-haiku-5-5"),
+            ("Gemini 4 Neon (High)", "gemini-4-neon-high"), ("Gemini 3.8 Flash (Medium)", "gemini-3.8-flash-medium"),
+            ("GPT-6.2-Sol", "gpt-6.2-sol"), ("GPT-6-Luna", "gpt-6-luna"), ("Codex default", "codex"),
+        ]
+        let autoCapable = resolvedModelFallbacks(saved: nil, primaryModel: "claude-opus-5-5", rawOptions: fbRaw, tier: .capable)
+        let autoFast = resolvedModelFallbacks(saved: nil, primaryModel: "claude-haiku-5-5", rawOptions: fbRaw, tier: .fast, allowedHarnesses: writerHarnesses)
+        let customSaved = [
+            ModelFallback(harness: "codex", model: "gpt-6.2-sol", effort: "high"),
+            ModelFallback(harness: "agy", model: "gemini-4-neon-high", effort: "high"),
+            ModelFallback(harness: "codex", model: "gpt-6-luna", effort: "low"),
+        ]
+        let resolvedCustom = resolvedModelFallbacks(saved: customSaved, primaryModel: "claude-opus-5-5", rawOptions: fbRaw, tier: .capable)
+        let afterSwitch = updatingFallbacksAfterPrimaryChange(oldPrimary: "claude-opus-5-5", oldEffort: "high", newPrimary: "gemini-4-neon-high", saved: customSaved)
+        let afterEmptySwitch = updatingFallbacksAfterPrimaryChange(oldPrimary: "claude-opus-5-5", oldEffort: "high", newPrimary: "gemini-4-neon-high", saved: [])
+        let autoArgs = fallbackCLIArgs(resolvedCustom, explicit: false)
+        let cliArgs = fallbackCLIArgs(resolvedCustom, explicit: true)
+        let noFbArgs = fallbackCLIArgs([], explicit: true)
+        let nowEpoch: TimeInterval = 2_000_000_000
+        let sampleUsage: [[String: Any]] = [
+            ["id": "claude", "at": nowEpoch - 20, "windows": [["label": "5h", "pct": 100.0, "resets": nowEpoch + 600]]],
+            ["id": "codex", "at": nowEpoch - 20, "windows": [["label": "Week", "pct": 100.0, "resets": nowEpoch - 5]]],
+            ["id": "agy", "at": nowEpoch - 20, "note": "5h and Week: Claude and GPT", "windows": [["label": "5h", "pct": 100.0, "resets": nowEpoch + 600]]],
+        ]
+        selCore.modelFallbacks = [ModelFallback(harness: "agy", model: "gemini-4-neon-high", effort: "high")]
+        let fbPersisted = savedModelFallbacks("modelFallbacks") == selCore.modelFallbacks
+        selCore.modelFallbacks = nil
+        selCore.recordLocalLimit("claude", now: Date(timeIntervalSince1970: nowEpoch))
+        let cappedNow = selCore.isLocallyCapped("claude", now: Date(timeIntervalSince1970: nowEpoch + 60))
+        selCore.clearLocalLimit("claude")
+        let uncappedAfterClear = !selCore.isLocallyCapped("claude", now: Date(timeIntervalSince1970: nowEpoch + 60))
+        check("config: per-provider model fallbacks auto-default by tier, dedupe, retain previous primary, format CLI args, and detect usage caps",
+              autoCapable.map(\.harness) == ["agy", "codex"]
+              && autoCapable[0].model == "gemini-4-neon-high" && autoCapable[1].model == "gpt-6.2-sol"
+              && autoFast.map(\.harness) == ["agy", "codex"]
+              && autoFast[0].model == "gemini-3.8-flash-medium" && autoFast[1].model == "gpt-6-luna" && autoFast[1].effort == "low"
+              && resolvedCustom.map(\.harness) == ["codex", "agy"]
+              && afterSwitch?.first?.harness == "claude" && afterSwitch?.first?.model == "claude-opus-5-5"
+              && afterEmptySwitch == []
+              && autoArgs == ""
+              && cliArgs == " --fallback 'gpt-6.2-sol@high' --fallback 'gemini-4-neon-high@high'"
+              && noFbArgs == " --no-fallback"
+              && cappedHarnessesFromUsage(sampleUsage, now: nowEpoch) == Set(["claude"])
+              && isLimitOrAuthErrorText("You've hit your 5-hour limit")
+              && !isLimitOrAuthErrorText("line 429: syntax error")
+              && !isLimitOrAuthErrorText("all good")
+              && cappedNow && uncappedAfterClear
+              && fbPersisted && savedModelFallbacks("modelFallbacks") == nil)
     }
     let rs = RulesStore()
     rs.got(["stages": [["key": "qa", "req": "qa", "done": "label= "]], "builtins": ["ci": "CI"], "options": ["k": "ok"], "rules": "r", "intro": "i", "source": "default"])
