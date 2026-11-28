@@ -423,11 +423,7 @@ def drop_flag(args, name):
 
 def without_change(args):
     """args minus --change <why>, which is greenlight's own and not the ADE's."""
-    args = [x for x in args if not x.startswith("--change=")]
-    if "--change" in args:
-        k = args.index("--change")
-        del args[k:k + 2]
-    return args
+    return drop_flag(args, "change")
 
 
 def gl(path):

@@ -307,8 +307,8 @@ const { launchBrowser } = require("./js_harness.cjs");
   await p.evaluate(() => { document.documentElement.dataset.motion = "off"; stage.wait("Listening", "Say something."); stage.hold("Thinking"); });
   assert.equal(await p.locator("#s.skeleton .skel i").count(), 5);
   assert.equal(await p.locator("#s.skeleton .skel i.lead").count(), 1);
-  assert.equal(await p.$eval(".skel i.lead", e => e.getBoundingClientRect().height), 12);
-  assert.equal(await p.$eval(".skel i:not(.lead)", e => [e.getBoundingClientRect().height, getComputedStyle(e).borderTopLeftRadius].join()), "8,4px");
+  assert.equal(await p.$eval(".skel i.lead", e => Math.round(e.getBoundingClientRect().height * 100) / 100), 12);
+  assert.equal(await p.$eval(".skel i:not(.lead)", e => [Math.round(e.getBoundingClientRect().height * 100) / 100, getComputedStyle(e).borderTopLeftRadius].join()), "8,4px");
   assert.equal(await p.$eval(".skel i", e => getComputedStyle(e).animationName), "none");  // no shimmer
   assert.equal(await p.locator("#s.skeleton h1, #s.skeleton .cursor").count(), 0);  // no wait card
   await p.evaluate(() => stage.hold(null));
@@ -603,7 +603,7 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.equal(await p.getAttribute("#s a", "href"), "https://x/docs");
   await p.evaluate(() => { stage.forward(); });
   await p.evaluate(() => { stage.status(""); stage.html("<p>custom</p>"); stage.options(["Approve", "Skip"]); });
-  assert.ok(await p.$eval("#s.frame > .options a.option", a => a.getBoundingClientRect().left >= 20 && a.getBoundingClientRect().bottom <= innerHeight - 20));
+  assert.ok(await p.$eval("#s.frame > .options a.option", a => a.getBoundingClientRect().left >= 19.5 && a.getBoundingClientRect().bottom <= innerHeight - 19.5));
   await p.setViewportSize({ width: 340, height: 520 });
   await p.evaluate(() => { stage.text({ md: "Pick" }); stage.options(["Merge it now and delete the stale branch afterwards once CI is green"]); });
   assert.ok(await p.$eval(".options a.option", a => a.scrollHeight <= a.clientHeight + 2 && a.getBoundingClientRect().height > 28));

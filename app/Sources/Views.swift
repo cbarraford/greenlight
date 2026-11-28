@@ -276,6 +276,8 @@ struct MsgView: View, Looked {
     let c: Core
     let name: String  // passed in: MsgView doesn't observe Greenlight, which changes every second while working
     var ask: Question? = nil  // the inbox question this message asked, if any: open, or answered with which choice
+    var busy: Bool = false  // passed in so MsgView re-renders when Core.run or Core.clearing changes
+    var isClaude: Bool = true  // passed in so Approve & run updates when switching harnesses
     var body: some View {
         switch m.role {
         case .you: you
@@ -325,7 +327,7 @@ struct MsgView: View, Looked {
     /// first primary. Answered: a hairline box with the choice made.
     func choices(_ open: Bool, _ q: String?) -> some View {
         let chips = ForEach(m.options, id: \.self) { o in
-            Button { c.choose(m, o) } label: { chip(o, open) }.buttonStyle(.plain).disabled(c.run != nil).accessibilityLabel(o)
+            Button { c.choose(m, o) } label: { chip(o, open) }.buttonStyle(.plain).disabled(busy).accessibilityLabel(o)
         }
         return VStack(alignment: .leading, spacing: DS.Space.s12) {
             if open {
@@ -355,24 +357,36 @@ struct MsgView: View, Looked {
                 if mono { Text("-- needs your approval --").font(chatFace(size: DS.TypeRole.body.size, weight: .bold)).foregroundColor(fg) }
                 else { Label { Text("Needs your approval") } icon: { Image(ds: "needs", size: iconSize(DS.TypeRole.label.size)) }.font(ds(DS.TypeRole.label)).foregroundColor(needsInk) }
             } else {
+                let status = approvalStatus(d)
                 HStack(spacing: DS.Space.s8) {
                     Image(ds: mark, size: iconSize(DS.TypeRole.label.size)).foregroundColor(dim)
-                    Text(d == "approved" ? "You approved" : d == "denied" ? "You denied" : "No longer pending (a newer reply replaced it)")
+                    Text(status)
                 }.font(ui(DS.TypeRole.label)).foregroundColor(dim)
             }
             ForEach(m.approvals) { a in
                 VStack(alignment: .leading, spacing: DS.Space.s4) {
                     Text(a.tool == "Bash" ? "Run this command" : "Use \(a.tool)").font(ui(DS.TypeRole.caption)).foregroundColor(dim)
-                    Text(a.what).font(ds(DS.TypeRole.code, mono: true)).foregroundColor(open ? fg : dim).textSelection(.enabled).lineLimit(open ? 12 : 2)
+                    Text(a.what).font(ds(DS.TypeRole.code, mono: true)).foregroundColor(open ? fg : dim).textSelection(.enabled)
+                        .lineLimit(open ? nil : 2).fixedSize(horizontal: false, vertical: true)
                 }
             }
             if open {
                 HStack(spacing: DS.Space.s8) {
-                    Button { c.approve(m) } label: { chip("Approve & run", true, primary: true) }.buttonStyle(.plain).disabled(c.run != nil).accessibilityLabel("Approve and run")
-                    Button { c.deny(m) } label: { chip("Deny", true, primary: false) }.buttonStyle(.plain).accessibilityLabel("Deny")
+                    Button { c.approve(m) } label: { chip("Approve & run", true, primary: true, disabled: busy || !isClaude) }.buttonStyle(.plain).disabled(busy || !isClaude).accessibilityLabel("Approve and run")
+                    Button { c.deny(m) } label: { chip("Deny", true, primary: false, disabled: busy) }.buttonStyle(.plain).disabled(busy).accessibilityLabel("Deny")
                 }
             }
         }.padding(open ? DS.Space.s12 : DS.Space.s8).frame(maxWidth: .infinity, alignment: .leading).background(box(open))
+    }
+    private func approvalStatus(_ d: String) -> String {
+        switch d {
+        case "approved": return "You approved"
+        case "denied": return "You denied"
+        case "expired_replaced": return "No longer pending (a newer reply replaced it)"
+        case "expired_harness": return "No longer pending (switched away from Claude)"
+        case "expired_ttl": return "No longer pending (expired after an hour)"
+        default: return "No longer pending"
+        }
     }
     @ViewBuilder func box(_ open: Bool) -> some View {
         let r = RoundedRectangle(cornerRadius: mono ? 0 : DS.Radius.md)
@@ -391,9 +405,9 @@ struct MsgView: View, Looked {
         if mono { HStack(alignment: .firstTextBaseline, spacing: 0) { Text("? ").font(prose).foregroundColor(dim); t } } else { t }
     }
     /// One choice; the first is the primary while the question's open (§10.2: one primary per view), the rest secondary.
-    func chip(_ o: String, _ open: Bool, primary: Bool? = nil) -> some View {
-        // while a run is going the choices wait (disabled, §10.2): element.rest and fg.faint, no accent
-        let off = c.run != nil, p = (primary ?? (open && o == m.options.first)) && !off, n = (m.options.firstIndex(of: o) ?? (primary == false ? 1 : 0)) + 1
+    func chip(_ o: String, _ open: Bool, primary: Bool? = nil, disabled: Bool? = nil) -> some View {
+        // while a run is going or approvals can't fire the choices wait (disabled, §10.2): element.rest and fg.faint, no accent
+        let off = disabled ?? busy, p = (primary ?? (open && o == m.options.first)) && !off, n = (m.options.firstIndex(of: o) ?? (primary == false ? 1 : 0)) + 1
         let ink = off ? faint : mono ? (p ? page : fg) : p ? onAccent : fg, fill = mono ? (p ? fg : Color.clear) : p ? accent : off ? card : open ? bg : card
         let r = RoundedRectangle(cornerRadius: mono ? 0 : DS.Radius.sm)
         return Text(mono ? "[\(n)] \(o)" : o).font(ui(DS.TypeRole.label)).foregroundColor(ink)
@@ -2073,7 +2087,7 @@ struct ChatView: View, Looked {
                 ScrollView {
                     VStack(alignment: .leading, spacing: DS.Space.s12) {  // 12 inside a turn, 24 between turns
                         ForEach(shown) { m in
-                            MsgView(m: m, c: c, name: c.name, ask: c.question(for: m)).padding(.top, m.role == .you && m.id != shown.first?.id ? DS.Space.s12 : 0)
+                            MsgView(m: m, c: c, name: c.name, ask: c.question(for: m), busy: c.run != nil || c.clearing > 0, isClaude: c.isClaude).padding(.top, m.role == .you && m.id != shown.first?.id ? DS.Space.s12 : 0)
                         }
                         if let r = c.run { RunCard(r: r, c: c) }
                         ForEach(Array(c.queue.enumerated()), id: \.offset) { i, q in

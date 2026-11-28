@@ -2489,55 +2489,182 @@ def test_claude_streamed_text_is_still_spoken_as_it_comes():
 def test_denied_calls_become_one_use_approvals(tmp_path, monkeypatch):
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
     monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
-    denials = [{"tool_name": "Bash", "tool_use_id": "t1", "tool_input": {"command": "ORCA_ENVIRONMENT=local orca host list"}},
-               {"tool_name": "Bash", "tool_input": {"command": "ORCA_ENVIRONMENT=local orca host list"}},  # the same call twice: one
-               {"tool_name": "WebFetch", "tool_input": {"url": "https://example.com"}},
-               {"tool_name": "Bash", "tool_input": {"command": "  "}}, {"tool_name": "bad name()"}, "junk"]
+    denials = [
+        {"tool_name": "Bash", "tool_use_id": "t1", "tool_input": {"command": "ORCA_ENVIRONMENT=local orca host list"}},
+        {"tool_name": "Bash", "tool_input": {"command": "ORCA_ENVIRONMENT=local orca host list"}},  # duplicate: one item
+        {"tool_name": "Bash", "tool_input": {"command": "echo ) Bash #"}},  # paren breakout refused
+        {"tool_name": "Bash", "tool_input": {"command": "echo (foo"}},  # unbalanced open paren refused
+        {"tool_name": "Bash", "tool_input": {"command": "echo x,Bash,y"}},  # comma refused
+        {"tool_name": "Bash", "tool_input": {"command": "ls *.py"}},  # wildcard refused
+        {"tool_name": "Bash", "tool_input": {"command": "echo hi\nrm -rf /"}},  # multiline refused
+        {"tool_name": "Bash", "tool_input": {"command": "echo hi\\"}},  # trailing backslash refused
+        {"tool_name": "Bash", "tool_input": {"command": "ls \u202e# safe"}},  # BiDi override refused
+        {"tool_name": "Bash", "tool_input": {"command": "ls \x00foo"}},  # NUL byte refused
+        {"tool_name": "Bash", "tool_input": {"command": "ls \x1b[31mfoo"}},  # control char refused
+        {"tool_name": "WebFetch", "tool_input": {"url": "https://example.com/a"}},
+        {"tool_name": "WebFetch", "tool_input": {"url": "https://example.com/b"}},  # same domain: merged into one item
+        {"tool_name": "WebFetch", "tool_input": {"url": "https://example.com/a"}},  # exact duplicate suppressed
+        {"tool_name": "WebFetch", "tool_input": {"url": "https://attacker.com\\@trusted.com/secret"}},  # backslash differential refused
+        {"tool_name": "WebFetch", "tool_input": {"url": "file://example.com/etc/passwd"}},  # non-http scheme refused
+        {"tool_name": "WebFetch", "tool_input": {"url": "https://.example.com/x"}},  # leading dot refused
+        {"tool_name": "WebFetch", "tool_input": {"url": "https://../x"}},  # degenerate host refused
+        {"tool_name": "WebFetch", "tool_input": {"url": "https://user:pass@example.com/x"}},  # userinfo refused
+        {"tool_name": "WebFetch", "tool_input": {"url": "https://evil.com/a\r\nFake"}},  # CRLF refused
+        {"tool_name": "WebFetch", "tool_input": {"url": "http://[bad"}},  # malformed IPv6 URL skipped without raising
+        {"tool_name": "Write", "tool_input": {"file_path": "/etc/passwd"}},  # never widen filesystem Write
+        {"tool_name": "WebSearch", "tool_input": {"query": "greenlight"}},
+        {"tool_name": "mcp__demo__ping", "tool_input": {"x": 1}},
+        {"tool_name": "mcp__github", "tool_input": {}},  # bare server wildcard refused
+        {"tool_name": "mcp__", "tool_input": {}},  # empty MCP name refused
+        {"tool_name": "mcp__é__ping", "tool_input": {}},  # non-ASCII MCP name refused
+        {"tool_name": "Bash", "tool_input": {"command": "  "}}, {"tool_name": "bad name()"}, "junk",
+    ]
     result = {"type": "result", "result": "Denied.", "is_error": False, "permission_denials": denials}
-    assert [e["e"] for e in Norm().claude(result)] == ["done"]  # an automation (auto.py's Norm) has no one to ask
     n = Norm()
-    n.approvals = True
-    ev = n.claude(result)
-    assert [e["e"] for e in ev] == ["approval", "done"], ev
-    items = ev[0]["items"]
-    assert [(i["tool"], i["what"]) for i in items] == [("Bash", "ORCA_ENVIRONMENT=local orca host list"),
-                                                     ("WebFetch", '{"url": "https://example.com"}')]
+    assert [e["e"] for e in n.claude(result)] == ["done"]  # Norm stays pure: automations never write approvals
+    assert not os.path.exists(chat.approvals_path())
+    items = chat.save_denials(n.denials)
+    assert [i["tool"] for i in items] == ["Bash", "WebFetch", "WebSearch", "mcp__demo__ping"], items
+    assert items[0]["what"] == "ORCA_ENVIRONMENT=local orca host list"
+    assert items[1]["what"] == "Any WebFetch to example.com (https://example.com/a; https://example.com/b)"
+    assert "this turn" in items[2]["what"] and "WebSearch" in items[2]["what"]
+    assert "this turn" in items[3]["what"] and "mcp__demo__ping" in items[3]["what"]
     assert stat.S_IMODE(os.stat(chat.approvals_path()).st_mode) == 0o600
-    assert chat.take_approvals([items[0]["id"], "nope"]) == ["Bash(ORCA_ENVIRONMENT=local orca host list)"]
+    # Empty request returns []
+    assert chat.take_approvals(["", "  "]) == []
+    # Partial batch failure (one bad id) refuses everything without burning the valid id
+    assert chat.take_approvals([items[0]["id"], "nope"]) == []
+    # Duplicate id deduplicates and consumes once; multi-id consumes atomically with exact persisted rules
+    assert chat.take_approvals([items[0]["id"], items[0]["id"]]) == ["Bash(ORCA_ENVIRONMENT=local orca host list)"]
     assert chat.take_approvals([items[0]["id"]]) == []  # once only
+    assert chat.take_approvals([items[1]["id"], items[2]["id"], items[3]["id"]]) == [
+        "WebFetch(domain:example.com)", "WebSearch", "mcp__demo__ping"]
+    assert chat.take_approvals([items[1]["id"]]) == []
+    # Expired, NaN, Infinity, far-future, corrupt timestamps, and invalid persisted rules are all rejected
+    items2 = chat.save_denials([
+        {"tool_name": "Bash", "tool_input": {"command": "echo one"}},
+        {"tool_name": "Bash", "tool_input": {"command": "echo two"}},
+        {"tool_name": "WebFetch", "tool_input": {"url": "https://example.com/x"}},
+        {"tool_name": "WebSearch", "tool_input": {"query": "q"}},
+        {"tool_name": "mcp__demo__ping", "tool_input": {}},
+    ])
     with open(chat.approvals_path()) as fh:
         store = json.load(fh)
-    store[items[1]["id"]]["at"] -= chat.APPROVAL_TTL + 1
+    store[items2[1]["id"]]["at"] -= chat.APPROVAL_TTL + 1
+    store[items2[2]["id"]]["at"] = "corrupt"
+    store[items2[3]["id"]]["at"] = float("nan")
+    store[items2[4]["id"]]["rule"] = "Write"  # legacy/tampered unscoped rule refused on read
+    store["inf-id"] = {"rule": "WebSearch", "at": float("inf")}
+    store["future-id"] = {"rule": "WebSearch", "at": time.time() + 10_000}
     with open(chat.approvals_path(), "w") as fh:
         json.dump(store, fh)
-    assert chat.take_approvals([items[1]["id"]]) == []  # expired
-    n.claude({"type": "result", "result": "ok", "is_error": False})  # the next turn's result replaces what's left
+    # Partial batch with one expired id refuses without burning the fresh id
+    assert chat.take_approvals([items2[0]["id"], items2[1]["id"]]) == []
+    assert chat.take_approvals([items2[1]["id"]]) == []  # expired
+    assert chat.take_approvals([items2[2]["id"]]) == []  # malformed timestamp handled safely
+    assert chat.take_approvals([items2[3]["id"]]) == []  # NaN timestamp rejected
+    assert chat.take_approvals([items2[4]["id"]]) == []  # tampered/legacy rule rejected
+    assert chat.take_approvals(["inf-id"]) == []  # Infinity timestamp rejected
+    assert chat.take_approvals(["future-id"]) == []  # far-future timestamp rejected
+    assert chat.take_approvals([items2[0]["id"]]) == ["Bash(echo one)"]  # fresh id still intact
+    # Missing/corrupt/non-dict approvals.json fails closed
+    with open(chat.approvals_path(), "w") as fh:
+        fh.write("[]")
+    assert chat.take_approvals(["abc"]) == []
+    with open(chat.approvals_path(), "w") as fh:
+        fh.write("{bad")
+    assert chat.take_approvals(["abc"]) == []
+    # Merged calls past 600 chars include an explicit omitted-count marker
+    many = [{"tool_name": "WebFetch", "tool_input": {"url": f"https://example.com/{i}/" + "a" * 180}} for i in range(6)]
+    merged = chat.save_denials(many)
+    assert len(merged) == 1 and "… (+" in merged[0]["what"] and "more)" in merged[0]["what"]
+    assert chat.save_denials([]) == []  # empty denials clear the file
     with open(chat.approvals_path()) as fh:
         assert json.load(fh) == {}
 
 
-def test_send_approve_runs_the_turn_with_the_call_allowed(tmp_path, monkeypatch, capsys):
+def test_approval_write_errors_do_not_emit_or_replay(tmp_path, monkeypatch):
     monkeypatch.setattr(chat, "DIR", str(tmp_path))
     monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
-    n = Norm()
-    n.approvals = True
-    aid = n.claude({"type": "result", "result": "x", "is_error": False,
-                    "permission_denials": [{"tool_name": "Bash", "tool_input": {"command": "orca host list"}}]})[0]["items"][0]["id"]
-    seen = {}
-    monkeypatch.setattr(chat, "turn", lambda text, *a, **k: seen.update(text=text, allow=k.get("allow")))
-    monkeypatch.setattr(sys, "stdin", io.StringIO("Approved"))
-    chat.send_turn(["send", "--approve", aid], lambda k: aid if k == "--approve" else None)
-    assert seen == {"text": "Approved", "allow": ("Bash(orca host list)",)}
-    seen.clear()
-    monkeypatch.setattr(sys, "stdin", io.StringIO("Approved"))
-    chat.send_turn(["send", "--approve", aid], lambda k: aid if k == "--approve" else None)  # used: no turn, a failed done
-    assert seen == {} and '"ok": false' in capsys.readouterr().out
+    items = chat.save_denials([{"tool_name": "Bash", "tool_input": {"command": "orca host list"}}])
+    assert len(items) == 1
+    with monkeypatch.context() as mp:
+        mp.setattr(chat, "_write_approvals", lambda s: (_ for _ in ()).throw(OSError("disk full")))
+        assert chat.save_denials([{"tool_name": "Bash", "tool_input": {"command": "orca host list"}}]) == []
+    # Even after disk recovers, the superseded approval was removed (fail closed) and cannot replay
+    assert not os.path.exists(chat.approvals_path())
+    assert chat.take_approvals([items[0]["id"]]) == []
+    # _write_approvals cleans up its temp file on failure
+    with monkeypatch.context() as mp:
+        mp.setattr(os, "replace", lambda a, b: (_ for _ in ()).throw(OSError("ENOSPC")))
+        try:
+            chat._write_approvals({"a": {"rule": "WebSearch", "at": time.time()}})
+            assert False, "expected OSError"
+        except OSError:
+            pass
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_send_approve_atomic_reservation_and_guards(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    aid = chat.save_denials([{"tool_name": "Bash", "tool_input": {"command": "orca host list"}}])[0]["id"]
+    # 1. send_turn forwards approve_ids to turn() without burning them early
+    with monkeypatch.context() as mp:
+        seen = {}
+        mp.setattr(chat, "turn", lambda text, *a, **k: seen.update(text=text, approve_ids=k.get("approve_ids")))
+        mp.setattr(sys, "stdin", io.StringIO("Approved"))
+        chat.send_turn(["send", "--approve", aid], lambda k: aid if k == "--approve" else None)
+        assert seen == {"text": "Approved", "approve_ids": (aid,)}
+        # Empty --approve fails without calling turn()
+        seen.clear()
+        mp.setattr(sys, "stdin", io.StringIO("Approved"))
+        chat.send_turn(["send", "--approve", " , "], lambda k: " , " if k == "--approve" else None)
+        assert seen == {} and '"ok": false' in capsys.readouterr().out
+    # 2. Real turn() rejects busy chat, orphaned PID, delivery OSError, or non-Claude harness WITHOUT burning the approval
+    events = []
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    monkeypatch.setattr(chat, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("run should not be called")))
+    # Busy chat (RESETTING present) must not consume aid
+    (tmp_path / chat.RESETTING).write_text("resetting")
+    chat.turn("Approved", "claude-haiku-5-5", None, approve_ids=(aid,))
+    assert events[-1]["ok"] is False and "Clear" in events[-1]["text"]
+    (tmp_path / chat.RESETTING).unlink()
+    # Busy chat (live ACTIVE_TURN) must not consume aid
+    my_birth = chat.auto.process_start(os.getpid())
+    (tmp_path / chat.ACTIVE_TURN).write_text(json.dumps({"id": "other", "pid": os.getpid(), "birth": my_birth}))
+    chat.turn("Approved", "claude-haiku-5-5", None, approve_ids=(aid,))
+    assert events[-1]["ok"] is False and "Another message" in events[-1]["text"]
+    (tmp_path / chat.ACTIVE_TURN).unlink()
+    # Orphaned PIDFILE must not consume aid
+    (tmp_path / "pid").write_text(json.dumps({"pid": os.getpid(), "birth": my_birth}))
+    chat.turn("Approved", "claude-haiku-5-5", None, approve_ids=(aid,))
+    assert events[-1]["ok"] is False and "Another message" in events[-1]["text"]
+    (tmp_path / "pid").unlink()
+    # Delivery cleanup OSError must not consume aid
+    delivery = tmp_path / (chat.QUESTION_DELIVERY + chat.scope_suffix())
+    delivery.write_text("pending")
+    with monkeypatch.context() as mp:
+        mp.setattr(chat, "clear_stale_question_unlocked", lambda: (_ for _ in ()).throw(OSError("io fail")))
+        chat.turn("Approved", "claude-haiku-5-5", None, approve_ids=(aid,))
+    assert events[-1]["ok"] is False and "interrupted question" in events[-1]["text"]
+    delivery.unlink()
+    # Non-Claude harness must not consume aid
+    chat.turn("Approved", "codex", None, approve_ids=(aid,))
+    assert events[-1]["ok"] is False and "Claude" in events[-1]["text"]
+    # Approval is still intact and usable once
+    assert chat.take_approvals([aid]) == ["Bash(orca host list)"]
+    assert chat.take_approvals([aid]) == []
 
 
 # A fake `claude -p` that is denied its first call and, run with that call allowed, makes it: the approval round trip.
 FAKE_DENIED = """#!/usr/bin/env python3
 import json, sys
-sys.stdin.read()
+prompt = sys.stdin.read()
+if "(Greenlight's watch" in prompt:
+    print(json.dumps({"type": "result", "session_id": "s1", "result": "(nothing)", "is_error": False, "duration_ms": 1}))
+    sys.exit(0)
 cmd = "ORCA_ENVIRONMENT=local orca host list"
 allowed = sys.argv[sys.argv.index("--allowedTools") + 1:] if "--allowedTools" in sys.argv else []
 ok = "Bash(" + cmd + ")" in allowed
@@ -2561,9 +2688,99 @@ def test_a_denied_call_runs_once_approved(tmp_path, monkeypatch):
     chat.turn("Create the workspace on this machine", "claude-haiku-5-5", None)
     approval = [e for e in events if e["e"] == "approval"]
     assert len(approval) == 1 and approval[0]["items"][0]["what"] == "ORCA_ENVIRONMENT=local orca host list", events
+    # A silent watch turn returning (nothing) must NOT wipe the pending approval on disk
+    events.clear()
+    chat.turn("(Greenlight's watch, not typed by the user: these workspaces just started needing the user.)", "claude-haiku-5-5", None)
+    assert [e["text"] for e in events if e["e"] == "done"] == ["(nothing)"]
     events.clear()
     monkeypatch.setattr(sys, "stdin", io.StringIO("Approved"))
     aid = approval[0]["items"][0]["id"]
     chat.send_turn(["send", "--approve", aid], lambda k: aid if k == "--approve" else None)
     assert [e["text"] for e in events if e["e"] == "done"] == ["Ran it."], events
     assert not [e for e in events if e["e"] == "approval"]
+    # Re-using the same approval id fails cleanly
+    events.clear()
+    monkeypatch.setattr(sys, "stdin", io.StringIO("Approved"))
+    chat.send_turn(["send", "--approve", aid], lambda k: aid if k == "--approve" else None)
+    assert events[-1]["ok"] is False and "expired or was already used" in events[-1]["text"]
+
+
+def test_stopped_turn_does_not_emit_or_save_approvals(tmp_path, monkeypatch):
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    events = []
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    denials = [{"tool_name": "Bash", "tool_input": {"command": "orca host list"}}]
+    with chat.scope_lock():
+        gen = chat.generation_unlocked()
+        chat._finalize_turn_unlocked(
+            {"e": "done", "ok": True, "text": "ok", "context": 0, "window": None, "ms": 1},
+            owned=False, had_stale=False, reserved_gen=gen, delivery=str(tmp_path / "del"), token="t1",
+            pending_denials=denials,
+        )
+        # Generation mismatch (mid-turn Clear) also refuses to save or emit approvals even when owned=True
+        chat._finalize_turn_unlocked(
+            {"e": "done", "ok": True, "text": "ok", "context": 0, "window": None, "ms": 1},
+            owned=True, had_stale=False, reserved_gen="stale-gen", delivery=str(tmp_path / "del"), token="t2",
+            pending_denials=denials,
+        )
+    assert not any(e["e"] == "approval" for e in events)
+    assert events[0]["ok"] is False and events[0]["text"] == "Stopped"
+    assert not os.path.exists(chat.approvals_path())
+
+
+def test_approved_turn_never_replays_allow_on_retry_or_session_loss(tmp_path, monkeypatch):
+    monkeypatch.setattr(chat, "DIR", str(tmp_path))
+    monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
+    monkeypatch.setenv("GREENLIGHT_REQUEST", "")
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    events = []
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    # 1. On IGNORED retry: allow is only passed on attempt 1, never replayed on attempt 2, and attempt 1 denials are cleared
+    seen_cmds = []
+    aid = chat.save_denials([{"tool_name": "Bash", "tool_input": {"command": "orca host list"}}])[0]["id"]
+    def fake_run_retry(cmd, engine, text, norm, **k):
+        seen_cmds.append(list(cmd))
+        if len(seen_cmds) == 1:
+            norm.denials = [{"tool_name": "Bash", "tool_input": {"command": "stale cmd"}}]
+            return "s1", "retry"
+        norm.reply = "Done."
+        norm.pending_done = {"e": "done", "ok": True, "text": "Done.", "context": 0, "window": None, "ms": 1}
+        return "s1", None
+    with monkeypatch.context() as mp:
+        mp.setattr(chat, "run", fake_run_retry)
+        chat.turn("Approved", "claude-haiku-5-5", None, approve_ids=(aid,))
+    assert len(seen_cmds) == 2
+    assert "--allowedTools" in seen_cmds[0] and "--allowedTools" not in seen_cmds[1]
+    assert not [e for e in events if e["e"] == "approval"]  # attempt 1 stale denials were cleared
+    # 2. On session-lost error with approve_ids: fails closed instead of spawning a contextless sid=None session
+    seen_cmds.clear()
+    events.clear()
+    (tmp_path / "session-claude").write_text("s-existing")
+    aid2 = chat.save_denials([{"tool_name": "Bash", "tool_input": {"command": "orca host list"}}])[0]["id"]
+    def fake_run_fail(cmd, engine, text, norm, **k):
+        seen_cmds.append(list(cmd))
+        return "s-existing", "exit 1"
+    with monkeypatch.context() as mp:
+        mp.setattr(chat, "run", fake_run_fail)
+        chat.turn("Approved", "claude-haiku-5-5", None, approve_ids=(aid2,))
+    assert len(seen_cmds) == 1  # no second sid=None invocation
+    assert events[-1]["ok"] is False
+    # 3. /compact and failed non-watch Claude turns clear superseded approvals on disk
+    aid3 = chat.save_denials([{"tool_name": "Bash", "tool_input": {"command": "orca host list"}}])[0]["id"]
+    def fake_run_compact(cmd, engine, text, norm, **k):
+        norm.reply = "Compacted."
+        norm.pending_done = {"e": "done", "ok": True, "text": "Compacted.", "context": 0, "window": None, "ms": 1}
+        return "s1", None
+    with monkeypatch.context() as mp:
+        mp.setattr(chat, "run", fake_run_compact)
+        chat.turn("", "claude-haiku-5-5", None, compact=True)
+    assert chat.take_approvals([aid3]) == []
+    aid4 = chat.save_denials([{"tool_name": "Bash", "tool_input": {"command": "orca host list"}}])[0]["id"]
+    def fake_run_model_err(cmd, engine, text, norm, **k):
+        norm.pending_done = {"e": "done", "ok": False, "text": "rate limited", "context": 0, "window": None, "ms": 1}
+        return "s1", "model failed"
+    with monkeypatch.context() as mp:
+        mp.setattr(chat, "run", fake_run_model_err)
+        chat.turn("Next question", "claude-haiku-5-5", None)
+    assert chat.take_approvals([aid4]) == []

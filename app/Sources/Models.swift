@@ -57,7 +57,8 @@ final class Msg: ObservableObject, Identifiable {
     var failed = false
     var canvas = false  // this reply drew the chat's canvas (#208): "Updated the canvas" under it
     var approvals: [Approval] = []  // calls the turn was denied: each with Approve & run (Core.approve)
-    @Published var decided: String?  // "approved" or "denied" once you answered them
+    var approvalsAt: Date? = nil  // when those approvals arrived: matched against Core.approvalTTL (chat.py APPROVAL_TTL)
+    @Published var decided: String?  // "approved", "denied", or "expired*" once resolved
     @Published var expanded = false
     init(_ role: Role, _ text: String) { self.role = role; self.text = text }
 

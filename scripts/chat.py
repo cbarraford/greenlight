@@ -13,7 +13,7 @@ Every command streams JSON lines (events, see Norm) for the Greenlight app:
   chat.py bg                         # one JSON line: this chat's background shells + working Orca agents
   chat.py bgstop <task_id>           # kill one background shell
 """
-import contextlib, fcntl, glob, hashlib, io, json, os, random, re, signal, subprocess, sys, threading, time, uuid
+import contextlib, fcntl, glob, hashlib, io, json, math, os, random, re, signal, subprocess, sys, threading, time, urllib.parse, uuid
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
@@ -45,65 +45,174 @@ def asked_path():
 
 APPROVALS = "approvals"  # + scope_suffix() + .json: the calls the last turn was denied, by id, for `send --approve`
 APPROVAL_TTL = 3600  # an approval the user doesn't give within the hour is gone: ask again
+CTRL_BIDI_RE = re.compile(r"[\x00-\x1f\x7f-\x9f\u0085\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]")
+# claude's --allowedTools splits on comma/space/parens, globs `*`, fails on trailing `\`; reject control/BiDi chars too
+BASH_UNSAFE = re.compile(r"[()*,]|\\\Z|" + CTRL_BIDI_RE.pattern)
+HOST_RE = re.compile(r"(?=.{1,253}\Z)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\Z", re.ASCII)
+MCP_TOOL_RE = re.compile(r"mcp__[A-Za-z0-9_-]{1,64}__[A-Za-z0-9_.-]{1,64}\Z", re.ASCII)
 
 
 def approvals_path():
     return os.path.join(DIR, APPROVALS + scope_suffix() + ".json")
 
 
-def denial_rule(tool, inp):
-    """The --allowedTools rule that allows exactly this call: a Bash command as it was typed, else the tool itself."""
-    cmd = inp.get("command") if isinstance(inp, dict) else None
+def _valid_approval_rule(rule):
+    """Validate a persisted --allowedTools rule before passing it to claude."""
+    if not isinstance(rule, str) or not rule:
+        return False
+    if rule.startswith("Bash(") and rule.endswith(")"):
+        cmd = rule[5:-1]
+        return bool(cmd.strip()) and not BASH_UNSAFE.search(cmd)
+    if rule.startswith("WebFetch(domain:") and rule.endswith(")"):
+        return bool(HOST_RE.fullmatch(rule[16:-1]))
+    return rule == "WebSearch" or bool(MCP_TOOL_RE.fullmatch(rule))
+
+
+def _denial_parts(tool, inp):
+    """(rule, prefix, detail) for claude's --allowedTools, or None when the call cannot be scoped safely."""
+    inp = inp if isinstance(inp, dict) else {}
     if tool == "Bash":
-        return f"Bash({cmd})" if isinstance(cmd, str) and cmd.strip() else None
-    return tool if re.fullmatch(r"[A-Za-z][\w.-]{0,99}", tool or "") else None
+        cmd = inp.get("command")
+        if isinstance(cmd, str) and cmd.strip() and not BASH_UNSAFE.search(cmd):
+            return f"Bash({cmd})", "", cmd
+        return None
+    if tool == "WebFetch":
+        url = inp.get("url")
+        if not isinstance(url, str) or "\\" in url or CTRL_BIDI_RE.search(url):
+            return None
+        try:
+            parsed = urllib.parse.urlparse(url)
+        except ValueError:
+            return None
+        host = parsed.hostname if parsed.scheme in ("http", "https") else None
+        if host and "@" not in parsed.netloc and parsed.username is None and parsed.password is None and HOST_RE.fullmatch(host):
+            return f"WebFetch(domain:{host})", f"Any WebFetch to {host}", url[:240]
+        return None
+    if tool == "WebSearch" or (isinstance(tool, str) and MCP_TOOL_RE.fullmatch(tool)):
+        return tool, f"Allow any {tool} call this turn", json.dumps(inp)[:300]
+    return None
+
+
+def denial_rule(tool, inp):
+    """(rule, what) for claude's --allowedTools, or None when the call cannot be scoped safely."""
+    parts = _denial_parts(tool, inp)
+    if not parts:
+        return None
+    rule, prefix, detail = parts
+    return rule, f"{prefix} ({detail})" if prefix else detail
+
+
+def _format_merged_what(prefix, details, limit=600):
+    """Render one or more unique call details under a shared prefix, marking omitted calls when capped."""
+    if not prefix:
+        return details[0]
+    head = f"{prefix} ("
+    shown: list[str] = []
+    for i, d in enumerate(details):
+        rest = len(details) - i
+        cand = head + "; ".join([*shown, d]) + ")"
+        if len(cand) <= limit:
+            shown.append(d)
+            continue
+        suffix = f"; … (+{rest} more))" if shown else f"… (+{rest} more))"
+        if not shown:
+            room = max(0, limit - len(head) - len(f"… (+{rest} more))"))
+            return head + d[:room] + f"… (+{rest} more))"
+        return head + "; ".join(shown) + suffix
+    return head + "; ".join(shown) + ")"
 
 
 def _write_approvals(store):
-    tmp = f"{approvals_path()}.{os.getpid()}.tmp"
-    with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as fh:
-        json.dump(store, fh)
-    os.replace(tmp, approvals_path())
+    tmp = f"{approvals_path()}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        with os.fdopen(os.open(tmp, flags, 0o600), "w") as fh:
+            json.dump(store, fh)
+        os.replace(tmp, approvals_path())
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
+        raise
 
 
-def save_denials(denials):
-    """The turn's permission denials (claude's result.permission_denials) kept as approvals the user can give, replacing
-    the last turn's, and returned as the app's `approval` items: id, tool, and what (the command, or the call's input)."""
+def save_denials_unlocked(denials):
+    """Persist permission_denials (caller holds scope_lock) and return `approval` items; [] if write fails."""
     store: dict[str, dict] = {}
     items: list[dict] = []
+    by_rule: dict[str, tuple[dict, str, list[str], set[str]]] = {}
+    now = time.time()
     for d in denials if isinstance(denials, list) else []:
         if not isinstance(d, dict):
             continue
-        tool, raw = str(d.get("tool_name") or ""), d.get("tool_input")
-        inp: dict = raw if isinstance(raw, dict) else {}
-        rule = denial_rule(tool, inp)
-        if not rule or any(v["rule"] == rule for v in store.values()):
+        tool = str(d.get("tool_name") or "")
+        parts = _denial_parts(tool, d.get("tool_input"))
+        if not parts:
+            continue
+        rule, prefix, detail = parts
+        if rule in by_rule:
+            item, pfx, details, seen = by_rule[rule]
+            if detail not in seen:
+                seen.add(detail)
+                details.append(detail)
+                item["what"] = _format_merged_what(pfx, details)
             continue
         aid = uuid.uuid4().hex[:12]
-        store[aid] = {"rule": rule, "at": time.time()}
-        items.append({"id": aid, "tool": tool, "what": inp["command"] if tool == "Bash" else json.dumps(inp)[:400]})
-    with contextlib.suppress(OSError):
+        store[aid] = {"rule": rule, "at": now}
+        details, seen = [detail], {detail}
+        item = {"id": aid, "tool": tool, "what": _format_merged_what(prefix, details)}
+        by_rule[rule] = (item, prefix, details, seen)
+        items.append(item)
+    try:
         _write_approvals(store)
+    except OSError:
+        with contextlib.suppress(OSError):
+            os.remove(approvals_path())
+        return []
     return items
 
 
-def take_approvals(ids):
-    """The rules the user approved (ids from the last turn's `approval` event, unexpired), each usable once."""
+def save_denials(denials):
+    with scope_lock():
+        return save_denials_unlocked(denials)
+
+
+def take_approvals_unlocked(ids):
+    """Validate and consume all requested approval ids atomically (caller holds scope_lock); [] if any is missing/expired."""
+    req = list(dict.fromkeys(aid.strip() for aid in ids if isinstance(aid, str) and aid.strip()))
+    if not req:
+        return []
     try:
-        with open(approvals_path()) as fh:
+        fd = os.open(approvals_path(), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(fd, "r") as fh:
             store = json.load(fh)
     except (OSError, ValueError):
         return []
     if not isinstance(store, dict):
         return []
     now, rules = time.time(), []
-    for aid in ids:
-        rec = store.pop(aid, None)
-        if isinstance(rec, dict) and isinstance(rec.get("rule"), str) and now - float(rec.get("at") or 0) < APPROVAL_TTL:
-            rules.append(rec["rule"])
-    with contextlib.suppress(OSError):
+    for aid in req:
+        rec = store.get(aid)
+        if not isinstance(rec, dict) or not _valid_approval_rule(rec.get("rule")):
+            return []
+        try:
+            at = float(rec.get("at") or 0)
+        except (TypeError, ValueError):
+            return []
+        if not math.isfinite(at) or now - at >= APPROVAL_TTL or at > now + 300:
+            return []
+        rules.append(rec["rule"])
+    for aid in req:
+        store.pop(aid, None)
+    try:
         _write_approvals(store)
+    except OSError:
+        return []
     return rules
+
+
+def take_approvals(ids):
+    with scope_lock():
+        return take_approvals_unlocked(ids)
 
 
 def chat_identity():
@@ -647,7 +756,7 @@ class Norm:
         self.plan_k = self.plan_base = self.plan_obs = 0  # items done now, done when first seen (untimed), updates that finished some
         self.plan_keys = None  # its items, so a replaced list starts its pace over
         self.gem_open = False  # gemini: an assistant reply block is streaming (its deltas append to self.text)
-        self.approvals = False  # a chat turn: its permission denials become approvals the app offers (automations have no one to ask)
+        self.denials: list = []  # claude result.permission_denials; persisted atomically under scope_lock on turn commit
 
     def more(self, e, **kw):
         """Verbose only: add the non-empty extras to an event; the concise stream stays byte-for-byte what it was."""
@@ -791,8 +900,7 @@ class Norm:
             self.tin, self.tout = self.tin + self.usage(u), self.tout + ((u.get("output_tokens") or 0) if isinstance(u, dict) else 0)  # +=: a retry's run adds to the first's
             if isinstance(d.get("total_cost_usd"), int | float) and not isinstance(d.get("total_cost_usd"), bool):
                 self.cost = (self.cost or 0) + d["total_cost_usd"]
-            if self.approvals and (items := save_denials(d.get("permission_denials"))):  # the app shows each with Approve (send --approve)
-                out.append({"e": "approval", "items": items})
+            self.denials = d.get("permission_denials") if isinstance(d.get("permission_denials"), list) else []
             out.append({"e": "done", "ok": not d.get("is_error"), "text": d.get("result") or self.text,
                         "context": self.context, "window": self.window, "ms": d.get("duration_ms")})
         return out
@@ -1586,29 +1694,53 @@ def asked_question(reply):
     return "\n\n".join(paras[-n:])[-1000:]  # the question (and its Options) and the paragraph above, for an offer
 
 
-def turn(text, model, effort, compact=False, name=None, verbose=False, files=None, done="", allow=(), fallbacks=None):
+def _reserve_approvals_unlocked(approve_ids, model, allow):
+    """Consume approve_ids inside turn()'s scope_lock only when the turn is Claude and every id is valid."""
+    if not approve_ids:
+        return tuple(allow), None
+    engine, _ = harness.route(model)
+    if engine != "claude":
+        return None, "Approvals only apply to Claude turns; switch back to Claude or ask again."
+    rules = take_approvals_unlocked(approve_ids)
+    if not rules:
+        return None, "That approval expired or was already used. Ask again and approve the new one."
+    return tuple(allow) + tuple(rules), None
+
+
+def _check_turn_ready_unlocked(path, model, approve_ids):
+    """Verify the chat is free to start a turn (caller holds scope_lock); returns (birth, None) or (None, err_text)."""
+    if os.path.exists(os.path.join(DIR, RESETTING)):
+        return None, "This chat's Clear was interrupted; clear it again before sending."
+    if (sent_in := os.environ.pop(TURN_GEN, "")) and sent_in != generation_unlocked():  # a Clear came after send started it
+        return None, "Cleared before it started."
+    adopt_legacy_scope_unlocked()
+    try:
+        with open(path) as af:
+            active = json.load(af)
+        if active.get("birth") and auto.process_start(int(active["pid"])) == active["birth"]:
+            return None, "Another message is still running in this chat."
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    if pid_matches(pid_record()):
+        return None, "Another message is still running in this chat."
+    birth = auto.process_start(os.getpid())
+    if not birth:
+        return None, "This chat could not verify its process identity; retry this message."
+    if approve_ids and harness.route(model)[0] != "claude":
+        return None, "Approvals only apply to Claude turns; switch back to Claude or ask again."
+    return birth, None
+
+
+def turn(text, model, effort, compact=False, name=None, verbose=False, files=None, done="", allow=(), approve_ids=(), fallbacks=None):
     """Reserve this chat through answer handling, harness work, and pending-question commit."""
     global SCOPE_EXPECTED, SCOPE_DIR, SCOPE_TURN_TOKEN
     path = os.path.join(DIR, ACTIVE_TURN)
     token = uuid.uuid4().hex
     with scope_lock():
-        if os.path.exists(os.path.join(DIR, RESETTING)):
-            return emit(e="done", ok=False, text="This chat's Clear was interrupted; clear it again before sending.",
-                        context=0, window=None, ms=None)
-        if (sent_in := os.environ.pop(TURN_GEN, "")) and sent_in != generation_unlocked():  # a Clear came after send started it
-            return emit(e="done", ok=False, text="Cleared before it started.", context=0, window=None, ms=None)
-        adopt_legacy_scope_unlocked()
+        birth, ready_err = _check_turn_ready_unlocked(path, model, approve_ids)
+        if ready_err:
+            return emit(e="done", ok=False, text=ready_err, context=0, window=None, ms=None)
         delivery = os.path.join(DIR, QUESTION_DELIVERY + scope_suffix())
-        try:
-            active = json.load(open(path))
-            if active.get("birth") and auto.process_start(int(active["pid"])) == active["birth"]:
-                return emit(e="done", ok=False, text="Another message is still running in this chat.", context=0, window=None, ms=None)
-        except (OSError, ValueError, KeyError, TypeError):
-            pass
-        birth = auto.process_start(os.getpid())
-        if not birth:
-            return emit(e="done", ok=False, text="This chat could not verify its process identity; retry this message.",
-                        context=0, window=None, ms=None)
         TURN["stale_note"] = ""
         TURN["stale_cleared"] = False
         if not compact and os.path.exists(delivery):
@@ -1624,6 +1756,9 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
                       if delivery_state == "stale" else "the previous reply was interrupted before its question reached the user")
             TURN["stale_note"] = stale_question_notice(reason)
             TURN["stale_cleared"] = True
+        allow, err_msg = _reserve_approvals_unlocked(approve_ids, model, allow)
+        if err_msg:
+            return emit(e="done", ok=False, text=err_msg, context=0, window=None, ms=None)
         with open(path, "w") as af:
             af.write(json.dumps({"id": token, "pid": os.getpid(), "birth": birth}))
         reserved_gen = generation_unlocked()
@@ -1634,6 +1769,7 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
         TURN["done"] = done  # send --done: the buttons pressed since the last turn (done_note)
         TURN["allow"] = tuple(allow)  # send --approve: the calls the user approved, allowed for this turn only
         TURN["fallbacks"] = fallbacks
+        TURN.pop("pending_denials", None)
         terminal = _turn_owned(text, model, effort, compact=compact, name=name, verbose=verbose, files=files,
                                reservation=(token, reserved_gen))
     finally:
@@ -1650,11 +1786,14 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
                 SCOPE_TURN_TOKEN = None
             had_stale = TURN.pop("stale_cleared", False)
             TURN.pop("stale_note", None)
+            TURN.pop("allow", None)
+            TURN.pop("done", None)
             TURN.pop("fallbacks", None)
-            _finalize_turn_unlocked(terminal, owned, had_stale, reserved_gen, delivery, token)
+            pending_denials = TURN.pop("pending_denials", None)
+            _finalize_turn_unlocked(terminal, owned, had_stale, reserved_gen, delivery, token, pending_denials)
 
 
-def _finalize_turn_unlocked(terminal, owned, had_stale, reserved_gen, delivery, token):
+def _finalize_turn_unlocked(terminal, owned, had_stale, reserved_gen, delivery, token, pending_denials=None):
     if terminal and terminal.get("ok") and not owned:
         terminal = {"e": "done", "ok": False, "text": "Stopped",
                     "context": 0, "window": None, "ms": None}
@@ -1663,7 +1802,11 @@ def _finalize_turn_unlocked(terminal, owned, had_stale, reserved_gen, delivery, 
     if stale_rearm and (not terminal or not terminal.get("ok")) and not os.path.exists(delivery):
         _mark_question_stale_unlocked()
     if terminal:
+        items = (save_denials_unlocked(pending_denials)
+                 if owned and pending_denials is not None and scope_current_unlocked() and generation_unlocked() == reserved_gen else [])
         try:
+            if items:
+                emit(e="approval", items=items)
             emit(**terminal)
         except BaseException:
             if stale_rearm and not os.path.exists(delivery):
@@ -1747,15 +1890,14 @@ def _run_chat_attempt(
 ):
     """Run one provider attempt (including IGNORED retry and non-limit session-lost retry).
     Returns (new_sid, err, norm, seen, missing_bin, unusable)."""
-    mk = lambda s, t: harness.argv(engine, t, model=model, effort=None if compact else effort, sid=s, system=prompt, stream=True,
-                                   images=attach.images(stored), allow=TURN.get("allow", ()))
+    mk = lambda s, t, allow=(): harness.argv(engine, t, model=model, effort=None if compact else effort, sid=s, system=prompt, stream=True,
+                                             images=attach.images(stored), allow=allow)
     emit(e="start", engine=engine, model=model or "default")
     norm = Norm(verbose)
-    norm.approvals = not compact
     TURN["norm"], norm.base = norm, codex_base(sid) if engine == "codex" and sid else (0, 0)
     seen = None
     try:
-        cmd, t = mk(sid, text)
+        cmd, t = mk(sid, text, allow=TURN.get("allow", ()))
         new_sid, err = run(cmd, engine, t, norm, check=not compact, guard=guard, defer_done=True)
     except FileNotFoundError as e:
         seen_forget()
@@ -1766,9 +1908,9 @@ def _run_chat_attempt(
     except OSError as e:
         seen_forget()
         return None, str(e), norm, seen, False, False
-    if err == "retry":  # once only: the retry runs unchecked
+    if err == "retry":  # once only: the retry runs unchecked and never replays one-use approved tools
         emit(e="status", text="Reply ignored your message, asking again")
-        norm.text = ""
+        norm.text, norm.denials = "", []
         try:
             cmd, t = mk(new_sid or sid, RETRY_PREFIX + text)
             new_sid, err = run(cmd, engine, t, norm, guard=guard, defer_done=True)
@@ -1780,13 +1922,14 @@ def _run_chat_attempt(
             return None, str(e), norm, seen, False, isinstance(e, ValueError)
         sid = None  # don't fall into the session-lost retry below
     err_text = _attempt_err_text(err, norm)
-    if err and sid and not compact and err not in ("Stopped", "another turn running", "model failed") and not harness.fallback_reason(err_text):
+    if (err and sid and not compact and err not in ("Stopped", "another turn running", "model failed")
+            and not TURN.get("allow") and not harness.fallback_reason(err_text)):
         emit(e="status", text="Session lost, starting a new one")
         key = f"{engine}:new"
         seen_forget()
         seen = seen_load(key)
         text = wrap_fn(done_note(TURN.get("done")) + stale_note + handoff + board_note(msg, key, seen, request_snapshot))
-        norm.base = (0, 0)  # a new thread: its totals start at 0
+        norm.base, norm.denials = (0, 0), []  # a new thread: its totals start at 0
         try:
             cmd, t = mk(None, text)
             new_sid, err = run(cmd, engine, t, norm, guard=guard, defer_done=True)
@@ -1801,8 +1944,8 @@ def _run_chat_attempt(
 
 def _chat_candidates(model, effort, compact):
     primary_engine, primary_model = harness.route(model)
-    if compact:
-        return [(primary_engine, primary_model, None)], {}, False
+    if compact or TURN.get("allow"):  # approvals are scoped to Claude; never fail over to another provider
+        return [(primary_engine, primary_model, None if compact else effort)], {}, False
     chain = harness.fallback_chain(model, effort, fallbacks=TURN.get("fallbacks"), slot="chat")
     ordered, skipped = harness.order_by_availability(chain)
     proactive = ordered[0][0] != chain[0][0]
@@ -1973,6 +2116,8 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
         ordered, proactive_switch, text, msg, prompt, compact, verbose, stored, guard, wrap,
         request_snapshot, stale_note, reservation)
     if early is not None:
+        if err == "model failed" and engine == "claude" and kind != "watch":
+            TURN["pending_denials"] = []
         return early
     with scope_lock():
         if reservation and not reservation_current_unlocked(*reservation) or not scope_current_unlocked():
@@ -1996,6 +2141,11 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
                 _save_reply_question_unlocked(question, request_snapshot, reservation, kind)
             elif os.path.exists(asked):
                 os.remove(asked)
+            silent_watch = kind == "watch" and (norm.reply or "").strip().lower().startswith("(nothing)")
+            if engine == "claude" and not silent_watch:
+                TURN["pending_denials"] = list(norm.denials)
+        elif engine == "claude" and kind != "watch" and err != "Stopped":
+            TURN["pending_denials"] = []
     if err:
         return {"e": "done", "ok": False, "text": short(err, 500), "context": norm.context, "window": norm.window, "ms": None}
     elif getattr(norm, "pending_done", None):
@@ -2200,10 +2350,10 @@ def send_turn(args, opt):
             text, files = str(j.get("text") or ""), j.get("files") or []
         except (ValueError, AttributeError):
             return emit(e="done", ok=False, text="The attachments didn't arrive in a form greenlight understands.", context=0, window=None, ms=None)
-    allow = ()
-    if opt("--approve"):  # the user approved calls the last turn was denied: this turn may make exactly those
-        allow = tuple(take_approvals(opt("--approve").split(",")))
-        if not allow:
+    approve_ids: tuple[str, ...] = ()
+    if "--approve" in args:  # consumed atomically inside turn() under scope_lock once the chat is reserved
+        approve_ids = tuple(x.strip() for x in (opt("--approve") or "").split(",") if x.strip())
+        if not approve_ids:
             return emit(e="done", ok=False, text="That approval expired or was already used. Ask again and approve the new one.",
                         context=0, window=None, ms=None)
     try:
@@ -2211,7 +2361,7 @@ def send_turn(args, opt):
     except ValueError as e:
         return emit(e="done", ok=False, text=str(e), context=0, window=None, ms=None)
     turn(text.strip(), opt("--model"), opt("--effort"), name=opt("--name"), verbose="--verbose" in args, files=files,
-         done=opt("--done") or "", allow=allow, fallbacks=fallbacks)
+         done=opt("--done") or "", approve_ids=approve_ids, fallbacks=fallbacks)
 
 
 def dispatch(args):
