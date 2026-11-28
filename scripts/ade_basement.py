@@ -196,6 +196,58 @@ def register(path):
     return repo
 
 
+def _forge_path(checkout):
+    """org/repo from checkout's git remote when checkout exists on disk, else ''."""
+    if not Path(checkout).is_dir():
+        return ""
+    pid = (git_info(checkout).get("projectId") or "").removeprefix("git:")
+    _, _, fp = pid.partition("/")
+    return fp
+
+
+def resolve_saved(ref, forge_path=None):
+    """Match ref (saved path, path inside a checkout, forge path org/repo, or unambiguous folder name) in repos.json."""
+    raw = str(ref or "").strip()
+    have = saved()
+    if not raw or not have:
+        return None
+    if raw in have:
+        return raw
+    is_path = raw.startswith(("/", "~", "./", "../")) or raw in (".", "..") or Path(raw).exists()
+    if is_path:
+        main = main_checkout(raw)
+        if main and main in have:
+            return main
+        expanded = Path(raw).expanduser()
+        for cand in (str(expanded.resolve()), str(expanded)):
+            if cand in have:
+                return cand
+        return None
+    target_forge = str(forge_path or "").strip() or (raw if "/" in raw else "")
+    if target_forge:
+        by_forge = [r for r in have if _forge_path(r) == target_forge]
+        if len(by_forge) == 1:
+            return by_forge[0]
+        if len(by_forge) > 1:
+            raise RuntimeError(f"repo {raw!r} matches {len(by_forge)} registered repos: pass its path")
+    if "/" not in raw:
+        by_name = [r for r in have if Path(r).name == raw]
+        if len(by_name) == 1:
+            return by_name[0]
+        if len(by_name) > 1:
+            raise RuntimeError(f"repo {raw!r} names {len(by_name)} registered repos: pass its path")
+    return None
+
+
+def unregister(ref, forge_path=None):
+    """Remove the registered repo matching ref (path, forge path, or unambiguous folder name) from repos.json."""
+    repo = resolve_saved(ref, forge_path=forge_path)
+    if not repo:
+        raise RuntimeError(f"not registered: {ref}")
+    forget(repo)
+    return repo
+
+
 def agent_worktree(path):
     """Claude Code's own subagent checkouts (`<repo>/.claude/worktrees/agent-…`): not a workspace, so hidden."""
     return "/.claude/worktrees/" in path + "/"

@@ -452,3 +452,34 @@ def test_native_listing_runs_the_first_run_import(home, monkeypatch):
     monkeypatch.setattr(ade_basement, "saved", list)
     ade_basement.worktrees()
     assert calls == [1]  # every native listing asks; first_run itself makes it once (its own tests)
+
+
+def test_unregister_by_name_forge_path_and_deleted_dir(home, repo, monkeypatch, capsys):
+    monkeypatch.setattr(ade_basement, "REPOS", home / "repos.json")
+    # 1. Remove by unambiguous folder name via CLI
+    ade_basement.register(str(repo))
+    assert greenlight.repos_cli(["rm", "widgets"]) == 0
+    assert ade_basement.saved() == []
+    assert "removed " in capsys.readouterr().out
+
+    # 2. Ambiguous folder name refuses, forge path disambiguates
+    git("remote", "add", "origin", "https://github.com/acme/widgets.git", cwd=repo)
+    other = home / "other" / "widgets"
+    other.mkdir(parents=True)
+    git("init", "-q", "-b", "main", cwd=other)
+    git("remote", "add", "origin", "https://github.com/beta/widgets.git", cwd=other)
+    ade_basement.register(str(repo))
+    ade_basement.register(str(other))
+    with pytest.raises(RuntimeError, match="names 2 registered repos"):
+        ade_basement.unregister("widgets")
+    assert ade_basement.unregister("acme/widgets") == str(repo.resolve())
+    assert ade_basement.saved() == [str(other.resolve())]
+
+    # 3. Deleted checkout still unregisters by saved path or folder name
+    import shutil
+    shutil.rmtree(other)
+    assert ade_basement.unregister(str(other.resolve())) == str(other.resolve())
+    assert ade_basement.saved() == []
+    assert ade_basement.resolve_saved("") is None
+    with pytest.raises(RuntimeError, match="not registered"):
+        ade_basement.unregister("ghost")
