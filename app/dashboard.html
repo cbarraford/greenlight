@@ -1663,8 +1663,9 @@ function footer(){
 function renderOverview(main){
   const all = shown(), SHELF = ["quiet", "done"];
   main.classList.add("ov");
-  const strip = shows("agents") ? main.appendChild(agentsStrip(true)) : null, cards = strip && strip.querySelector(".acards");
-  if (cards && cards.offsetHeight > 240) main.style.overflowY = "scroll";  // the board below will overflow (§10.7): the scrollbar's room comes out of W0 now, not after it's laid out
+  const strip = shows("agents") ? main.appendChild(agentsStrip(true)) : null, cards = strip && strip.querySelector(".acards"), CARDS = 240;  // §10.7: the board sizes as if the cards stood at most this tall
+  if (cards && cards.offsetHeight > CARDS) main.style.overflowY = "scroll";  // the page will scroll: reserve a classic scrollbar now, so W0 and the shelf's chips measure the width that remains
+  const cw = main.clientWidth;
   const pucks = all.filter(p => !SHELF.includes(p.state)), shelf = all.filter(p => SHELF.includes(p.state));  // nothing to do here: they wait on the shelf
   const stacks = stackUp(pucks), W0 = main.clientWidth - (parseFloat(getComputedStyle(main).paddingRight) || 0);  // the dock's gutter
   const st = stacks.find(p => p.members && p.name === ui.drill);  // inside a stack: only its hexes, breadcrumbs back out
@@ -1692,7 +1693,7 @@ function renderOverview(main){
     const more = h("button", {class:"chip more", "aria-expanded":"false", onclick: () => { ui.shelfAll = true; render() }});
     do { more.textContent = `+${kids.length - i} more`; row.insertBefore(more, kids[i]) } while (more.offsetTop > y && i-- > 0);  // no room for one chip: just the count
   });
-  const stripH = strip ? strip.offsetHeight - (cards ? Math.max(0, cards.offsetHeight - 240) : 0) : 0;  // §10.7: the board sizes as if the strip held 240px of cards; more agents push it down the page, never shrink it
+  const stripH = strip ? strip.offsetHeight - (cards ? Math.max(0, cards.offsetHeight - CARDS) : 0) : 0;  // more agents push the board down the page, never shrink it
   const H0 = Math.max(260, main.clientHeight - stripH - head.offsetHeight - (shelfEl ? shelfEl.offsetHeight : 0));  // the shelf measured, never sliced by the drawer
   if (!items.some(p => p.name === ui.openStack)) ui.openStack = null;
   if (items.length) {
@@ -1710,6 +1711,7 @@ function renderOverview(main){
     });
     main.insertBefore(wrap, shelfEl);
   }
+  if (main.clientWidth < cw && !main.style.overflowY) { main.style.overflowY = "scroll"; main.replaceChildren(); renderOverview(main) }  // the board itself overflowed (its 260 floor, a tall honeycomb): lay out once more inside the classic scrollbar
 }
 
 /* list: one row per workspace carrying what its hex says: number, state, lifecycle, MR signals, agent */
