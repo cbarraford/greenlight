@@ -1483,6 +1483,63 @@ test("All output: another session is labelled from the first paint; a new sessio
   assert.deepEqual(tail, ["Claude · another sessionb0", "Claudeb1"], "b is main once m went quiet: its new lines aren't 'another session'");
 });
 
+test("All output, pane log: blank rows and spinner fragments drop out, a status run keeps its last line, one time per minute", async page => {
+  await page.evaluate(() => { ui.agentsFolded = false; render() });
+  await page.click(".acard[data-name='plan-b'] button.aline");
+  const t0 = Date.now() - 600_000;
+  const L = (n, text, dt = 0) => ({id: `p.g0:${n}`, role: "line", text, ts: t0 + dt, kind: "pane"});
+  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: null, source: "pane", entries: [
+    L(0, "3 def test_route(env):"), L(1, ""), L(2, "● Bash(pytest -q)", 1000), L(3, "  $ pytest -q", 1000), L(4, ""),
+    L(5, "running PreToolUse hooks… 0/3 · 2m 55s · ↓ 9.2k tokens)", 2000), L(6, ""), L(7, "1", 2000), L(8, "g", 2000), L(9, "* n", 2000),
+    L(10, "ng…", 2000), L(11, "●", 2000), L(12, "· Calculating…", 3000), L(13, ""), L(14, "12 passed", 4000), L(15, ""), L(16, "3", 5000),
+    L(17, "later work", 120_000), L(18, "more", 125_000)]});
+  const shown = () => page.$$eval("#aout-list > .aoe.line:not([hidden]) .aotx", es => es.map(e => e.textContent));
+  assert.deepEqual(await shown(), ["3 def test_route(env):", "● Bash(pytest -q)", "  $ pytest -q", "· Calculating…", "12 passed", "3", "later work", "more"],
+    "no blank rows, the fragments go, the spinner run keeps its latest status, a lone short line is still output");
+  assert.equal(await page.$eval("#aout-list [data-id='p.g0:12']", e => e.classList.contains("noise")), true, "the status line is muted");
+  assert.match(await page.textContent("#aout-filter [data-f='all']"), /All\s*8/, "All counts what can show, not the redraws");
+  assert.match(await page.textContent("#aout-list [data-id='p.g0:2'] .aomt"), /^5 lines$/, "a call's line count skips the redraws");
+  const stamped = await page.$$eval("#aout-list > .aoe.line:not([hidden]):not(.samets)", es => es.map(e => e.dataset.id));
+  assert.deepEqual(stamped, ["p.g0:0", "p.g0:2", "p.g0:17"], "a time on the first row of each minute and on a call's header only");
+  await page.fill("#aout-q", "* n");
+  await page.waitForFunction(() => !document.querySelector("#aout-list [data-id='p.g0:9']").hidden);
+  await page.click("#aout-back");
+});
+
+test("All output, pane log: real short output, errors, replies and program output that looks like a status line all stay", async page => {
+  await page.evaluate(() => { ui.agentsFolded = false; render() });
+  await page.click(".acard[data-name='plan-b'] button.aline");
+  const t0 = Date.now() - 60_000;
+  const L = (id, text) => ({id, role: "line", text, ts: t0, kind: "pane"});
+  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: null, source: "pane", entries: [
+    L("a.g0:0", "● Bash(seq 3)"), L("a.g0:1", "  ⎿  1"), L("a.g0:2", "     2"), L("a.g0:3", "     3"), L("a.g0:4", ""),
+    L("a.g0:5", "  ⎿  42"), L("a.g0:6", "✻ Thinking… (esc to interrupt)"), L("b.g0:0", "ok"), L("a.g0:7", "✗ a"), L("a.g0:8", "✗ b"),
+    L("a.g0:9", "● OK"), L("a.g0:10", "run 1: 50.2 tok/s"), L("a.g0:11", "run 2: 51.0 tok/s"), L("a.g0:12", "Compiling… crate foo"), L("a.g0:13", "Compiling… crate bar"),
+    L("a.g0:14", "● Bash(seq 3)"), L("a.g0:15", "  ⎿  1"), L("a.g0:16", "     2"), L("a.g0:17", "     3"), L("a.g0:18", "Building…"), L("a.g0:19", "Linking…"),
+    L("a.g0:20", "| llama3 | 50.2 tok/s"), L("a.g0:21", "✻ Thinking… (esc to interrupt)"), L("a.g0:22", "  - a"), L("a.g0:23", "• Working (3s • esc to interrupt)"),
+    L("a.g0:24", "◦ Working (4s • esc to interrupt)"), L("a.g0:25", "g"), L("a.g0:26", "• Working (5s • esc to interrupt)"),
+    L("a.g0:27", "  ✻ Thinking… (esc to interrupt)"), L("a.g0:28", "  ✻ Thinking… (esc to interrupt)"), L("a.g0:29", "* Downloading… (50%)"), L("a.g0:30", "* Downloading… (100%)"),
+    ...["✻ Philosophizing… 6", "", "*", "", "✶", "Checking for updates…", "✢", "✻ Philosophizing…", "7m 10s · ↓ 24.3k tokens · thought for 2s)", "✶", "· Philosophizing…"]
+      .map((t, i) => L(`d.g0:${i}`, t)),
+    L("f.g0:0", "• Working (3s • esc to interrupt)"), L("f.g0:1", "• 3"), L("e.g0:0", "⏺ 3"), L("e.g0:1", "  test_a, test_b and test_c."), L("e.g0:2", "✶ Fixing 3 failed tests… (1s · esc to interrupt)"), L("e.g0:3", "F"), L("e.g0:6", "✶ 20"), L("e.g0:8", "✶ Fixing 3 failed tests…"), L("e.g0:7", "✶ Fixing 3 failed tests… (2s · esc to interrupt)"), L("e.g0:9", "⏺ I'll add a test…"),
+    L("e.g0:4", "✻ Running the tests… (esc to interrupt · ctrl+t to show todos)"), L("e.g0:5", "✻ Running the tests… (13s · esc to interrupt · ctrl+t to show todos)")]});
+  const hidden = await page.$$eval("#aout-list > .aoe.line[hidden]", es => es.map(e => e.dataset.id));
+  assert.deepEqual(hidden, ["a.g0:4", "a.g0:23", "a.g0:24", "a.g0:25", ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(i => `d.g0:${i}`), "e.g0:2", "e.g0:3", "e.g0:6", "e.g0:8", "e.g0:4"],
+    "only the blank row and the spinner's redraws go (Codex's too, and a real Claude Code run down to its last line): short results, quoted spinner text, another session's line, errors, a short reply, a build's progress and a results table stay");
+  assert.equal(await page.$eval("#aout-list [data-id='a.g0:26']", e => e.dataset.k), "status", "Codex's spinner is a status line, not the agent talking");
+  assert.equal(await page.$eval("#aout-list [data-id='f.g0:1']", e => e.dataset.k), "said", "and its one-number answer after it is the agent talking");
+  assert.match(await page.textContent("#aout-filter [data-f='err']"), /Errors\s*2/, "short error lines are still errors; the spinner's label isn't one");
+  assert.equal(await page.$eval("#aout-list [data-id='a.g0:9']", e => e.dataset.k), "said", "a short reply is the agent talking, and ends the call");
+  await page.evaluate(() => { ui.out.inflight = true });
+  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: null, source: "pane", entries: []});
+  await page.click("#aout-back");
+  await page.click(".acard[data-name='plan-b'] button.aline");
+  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: null, source: "pane", entries: [L("c.g0:0", ""), L("c.g0:1", "· Calculating…"), L("c.g0:2", "g"), L("c.g0:3", "Calculating…")]});
+  assert.equal(await page.isVisible("#aout-empty"), false, "the latest status line still shows");
+  assert.deepEqual(await page.$$eval("#aout-list > .aoe.line:not([hidden])", es => es.map(e => e.dataset.id)), ["c.g0:1"], "the spinner's bare word after it goes too");
+  await page.click("#aout-back");
+});
+
 test("custom lifecycle stages show step_meta requirements and pre-MR signoff button without an MR", async page => {
   const custom = {...puck("pre-rfc", "Write RFC", "idle"), state: "needs", owner: "me", step: "rfc", mr: {},
     steps: ["rfc", "mr_open", "qa", "e2e", "merge"], step_index: 0,
