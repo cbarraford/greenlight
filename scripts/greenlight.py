@@ -1481,13 +1481,14 @@ def screen(ws, terminals):
     ws["agent"]["screen"] = {k: seen[k] for k in ("state", "prob", "provider")}
     if seen.get("ask"):
         ws["agent"]["asking"] = seen["ask"]
+    else:
+        ws["agent"].pop("asking", None)
     return seen
 
 
 def prompt_text(ag):
     """What the agent's prompt asks (its question, and the command it wants to run), for an action line; "" if none."""
-    p = ag.get("asking") or {}
-    return f"{p.get('text') or ''} `{p['cmd']}`".strip() if p.get("cmd") else (p.get("text") or "")
+    return ade_common.format_prompt_text(ag.get("asking") if isinstance(ag, dict) else None)
 
 
 def waiting_action(ag, where=""):

@@ -59,6 +59,10 @@ import tempfile
 import time
 from pathlib import Path
 
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ade_common  # noqa: E402
+
 STATE = Path(os.environ.get("GREENLIGHT_HOME") or Path.home() / ".greenlight")
 STAGES = (
     ("define", "Define", (("capture", "Capture"), ("scope", "Scope"), ("done-condition", "Done condition"), ("plan", "Plan"))),
@@ -436,8 +440,8 @@ def now(life, agent_state, logged_out=False, block=None, asking=None):
         life = life | {"pile": "yours", "by": "you", "holder": "you", "why": "your agent is waiting on your answer",
                        "do": "Your agent asked you a question and has stopped until you answer it.",
                        "suggestion": {"label": "Answer your agent", "kind": "answer"}}
-        if isinstance(asking, dict) and asking.get("text"):
-            asks = asking["text"] + (f" `{asking['cmd']}`" if asking.get("cmd") else "")
+        if isinstance(asking, dict) and ade_common.clean_prompt_str(asking.get("text")):
+            asks = ade_common.format_prompt_text(asking)
             life["do"] = f"Your agent is stopped on a prompt until you answer it: {asks[:300]}"
     elif block and life["pile"] != "done" and life["by"] not in HOLDER:  # my side doesn't know it holds this one
         if block.get("reason") == "discussion" and life["sub"] == "re-review":
@@ -470,7 +474,8 @@ def rows():
 def of(r):
     """A row's life: what the scan stored, else worked out from the row (a snapshot from before lifestage.py)."""
     life = r.get("life") or place(r)
-    return now(life, (r.get("agent") or {}).get("state"), "logged out" in (r.get("next") or {}).get("action", ""), block_of(r, blocks()))
+    ag = r.get("agent") or {}
+    return now(life, ag.get("state"), "logged out" in (r.get("next") or {}).get("action", ""), block_of(r, blocks()), ag.get("asking"))
 
 
 def main():

@@ -91,12 +91,12 @@ def agent_type(title, cmd=""):
     return None
 
 
-def state(title, tail=None, cmd=""):
+def state(title, tail=None, cmd="", _ask_checked=False):
     """Agent title/command and screen → Orca's agent state; None when the pane isn't an agent."""
     kind = agent_type(title, cmd)
     if not kind:
         return None
-    if tail and prompt_ask(tail):  # a known permission/trust/approval prompt (ade_common.PROMPTS): stopped on the user
+    if not _ask_checked and tail and prompt_ask(tail):  # a known permission/trust/approval prompt (ade_common.PROMPTS): stopped on the user
         return "waiting"
     if kind == "claude":
         g, lines = (title or "")[:1], [x.strip() for x in (tail or [])[-15:]]
@@ -104,7 +104,7 @@ def state(title, tail=None, cmd=""):
             return "working"
         if g == "✳":
             return "waiting" if any(MENU_ITEM_RE.search(x) for x in lines) else "done"
-    seen = screen_state(tail or [])["state"]
+    seen = screen_state(tail or [], _ask_checked=True)["state"]
     if seen == "working":
         return "working"
     if seen == "waiting_for_user":
@@ -322,7 +322,7 @@ def _pane_agent(p, owner=None, recs=None, now_ms=None):
     tail = screen(p["handle"]) if needs_tail else None
     if ask := prompt_ask(tail or []):
         return kind, "waiting", ask
-    s = state(title, tail, kind)
+    s = state(title, tail, kind, _ask_checked=True)
     if s == "done" and fresh_rec and rec is not None and last_agent.cmd(p) in last_agent.CMDS.get(rec["harness"], ()):
         s = "working"
     return kind, s, None
