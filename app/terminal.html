@@ -825,14 +825,16 @@ function sniff(p, s){
   if (tail && tail[0].length <= 512) { p.oscBuf = tail[0]; s = s.slice(0, -tail[0].length) }
   if (s.includes(TMUX_MARK)) p.tmux = true;  // paneCmd: tmux runs here, so the wheel goes to it
   if (s.includes(RUN_MARK)) p.run = undefined;  // paneCmd has its command: a reconnect only reattaches
-  let changed = false;
-  for (const [, , v] of s.matchAll(/\x1b\]([02]);([^\x07\x1b]*)(?:\x07|\x1b\\)/g)) if (v !== p.title) { p.title = v; changed = true }
-  for (const [, v] of s.matchAll(/\x1b\]7;file:\/\/[^/]*([^\x07\x1b]*)(?:\x07|\x1b\\)/g)) { let d = v; try { d = decodeURIComponent(v) } catch {} if (d !== p.cwd) { p.cwd = d; changed = true } }  // OSC 7: the shell's working directory
-  if (s.replace(OSC, "").includes("\x07") && !(p === cur?.focus && document.hasFocus())) { p.bell = true; changed = true; if (isAgent(p)) ping(p, "needs you", paneTitle(p)) }
+  const wasTitle = paneTitle(p), wasAgent = agentOf(p), wasBell = p.bell, wasWhy = p.why;
+  for (const [, , v] of s.matchAll(/\x1b\]([02]);([^\x07\x1b]*)(?:\x07|\x1b\\)/g)) if (v !== p.title) p.title = v;
+  for (const [, v] of s.matchAll(/\x1b\]7;file:\/\/[^/]*([^\x07\x1b]*)(?:\x07|\x1b\\)/g)) { let d = v; try { d = decodeURIComponent(v) } catch {} if (d !== p.cwd) p.cwd = d }  // OSC 7: the shell's working directory
+  if (s.replace(OSC, "").includes("\x07") && !(p === cur?.focus && document.hasFocus())) { p.bell = true; if (isAgent(p)) ping(p, "needs you", paneTitle(p)) }
   if (isAgent(p) && !p.scanT) p.scanT = setTimeout(() => { p.scanT = 0; working(p) }, 500);  // at most twice a second, and once after the last chunk
   else if (!isAgent(p)) { p.st = ""; p.wait = false; clearTimeout(p.endT); clearTimeout(p.askT); p.endT = p.askT = 0 }
   // ponytail: OSC 9/777 only arrive when tmux passes them through (allow-passthrough); the bell and the title always do
   for (const [, v] of s.matchAll(/\x1b\](?:9;(?!4;)|777;notify;)([^\x07\x1b]*)(?:\x07|\x1b\\)/g)) ping(p, "says", v.replace(/;/, ": "));
+  // Spinner-only OSC title frames ("⠋ Foo" → "⠙ Foo") keep the same visible title and agent; skip render() so hover/clicks stay steady.
+  const changed = paneTitle(p) !== wasTitle || agentOf(p) !== wasAgent || p.bell !== wasBell || p.why !== wasWhy;
   if (changed && !editing) render();
 }
 // Claude works while its spinner line ("✶ Skedaddling… (3s · …)") is on screen; Codex and agy show a timer or interrupt hint
@@ -943,10 +945,101 @@ function settle(tab){
 }
 settle.later = (tab, ms) => { clearTimeout(tab.retry); tab.retry = setTimeout(() => settle(tab), ms) };
 function pump(){ while (naming < 2 && autoQ.length) { const t = autoQ.shift(); if (tabs.includes(t) && !t.manual) aiName(t, true) } }
+// Reconcile children in place so unchanged tabs and sidebar rows stay connected (preserving :hover and in-flight clicks).
+let lastScrollTab = null, lastScrollWs = null;
+function syncChildren(parent, next){
+  const keep = new Set(next);
+  for (const c of [...parent.children]) if (!keep.has(c)) c.remove();
+  for (let i = 0; i < next.length; i++) {
+    const n = next[i], at = parent.children[i];
+    if (at !== n) parent.insertBefore(n, at || null);
+  }
+}
+function patchNode(oldEl, newEl, container){
+  if (oldEl.className !== newEl.className) oldEl.className = newEl.className;
+  for (const a of ["title", "aria-selected", "aria-expanded", "aria-label"]) {
+    const v = newEl.getAttribute(a);
+    if (v === null) { if (oldEl.hasAttribute(a)) oldEl.removeAttribute(a) }
+    else if (oldEl.getAttribute(a) !== v) oldEl.setAttribute(a, v);
+  }
+  for (const fn of ["onclick", "ondblclick", "oncontextmenu", "onkeydown"]) if (newEl[fn] || oldEl[fn]) oldEl[fn] = newEl[fn];
+  oldEl._ws = newEl._ws;
+  if (container) { patchKeyed(oldEl, [...newEl.children]); return oldEl }
+  const oldSig = oldEl._htmlSig ?? (oldEl._htmlSig = oldEl.innerHTML), sig = newEl.innerHTML;
+  if (oldSig !== sig) { oldEl.replaceChildren(...newEl.childNodes); oldEl._htmlSig = sig }
+  return oldEl;
+}
+function patchKeyed(parent, next){
+  const byKey = new Map();
+  for (const c of parent.children) if (c.dataset?.k) byKey.set(c.dataset.k, c);
+  const out = next.map(n => {
+    const k = n.dataset?.k, old = k && byKey.get(k);
+    if (!old || old.tagName !== n.tagName) { if (!n.dataset?.box) n._htmlSig = n.innerHTML; return n }
+    byKey.delete(k);
+    return patchNode(old, n, !!n.dataset?.box);
+  });
+  syncChildren(parent, out);
+}
+function buildTab(x, i, prev){
+  const name = shown(tabName(x)), bell = paneOf(x).some(p => p.bell), multi = paneOf(x).length > 1;
+  const isEdit = editing === x && !editSide;
+  const st = paneOf(x).some(p => p.bell && isAgent(p)) ? "needs" : paneOf(x).some(p => p.st === "work") ? "working" : "";
+  const cls = "tab" + (x === cur ? " on" : ""), tip = `${tabName(x)}${i < 9 ? `  ⌘${i + 1}` : ""} · double-click to rename`;
+  const iconK = x.auto ? "bolt" : multi ? "multi" : agentOf(x.focus) || "shell";
+  const iconH = x.auto ? I.bolt(13) : multi ? I.splitR(14) : paneIcon(x.focus, 14);
+  const nmText = x.naming ? "Naming…" : (multi && !x.name ? `${name} · ${paneOf(x).length} panes` : name);
+  const nmCls = "nm" + (x.naming ? " busy" : ""), showBell = bell && x !== cur;
+  const reuse = prev && !isEdit && !prev._editing;
+  const b = reuse ? prev : el("div", cls);
+  if (!reuse) { b.setAttribute("role", "tab"); b.dataset.k = "tab" + x.key }
+  if (b.className !== cls) b.className = cls;
+  if (b.getAttribute("aria-selected") !== String(x === cur)) b.setAttribute("aria-selected", x === cur);
+  b.tabIndex = x === cur ? 0 : -1;  // roving: Tab lands on the open tab, arrows walk the rest
+  if (b.title !== tip) b.title = tip;
+  b.onkeydown = e => {
+    if (e.target !== b || e.metaKey || e.ctrlKey || e.altKey) return;
+    const all = [...$("tabs").querySelectorAll(".tab")], k = all.indexOf(b), n = all.length;
+    const to = {ArrowRight: (k + 1) % n, ArrowLeft: (k + n - 1) % n, Home: 0, End: n - 1}[e.key];
+    if (to !== undefined) { e.preventDefault(); all.forEach(t => t.tabIndex = -1); all[to].tabIndex = 0; all[to].focus() }
+    else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); show(x) }
+  };
+  b.onclick = () => x !== cur && show(x);
+  b.ondblclick = e => { if (e.target.closest(".ib")) return; rename(x) };
+  b.oncontextmenu = e => { e.preventDefault(); menu(e, x) };
+  if (isEdit) { b._editing = true; b.replaceChildren(); b.insertAdjacentHTML("beforeend", iconH); nameField(x, b); return b }
+  b._editing = false;
+  if (!reuse) {
+    b.insertAdjacentHTML("beforeend", iconH);
+    b._ic = b.firstElementChild; b._iconK = iconK;
+    b._dot = st ? dotEl(st) : null; b._st = st; if (b._dot) b.append(b._dot);  // the tab's agent: waiting on you, or working
+    b._nm = el("span", nmCls); b._nm.textContent = nmText; b.append(b._nm);
+    b._tailBell = showBell;
+    if (showBell) { b.insertAdjacentHTML("beforeend", I.bell(13)); b._tail = b.lastElementChild }
+    else { b._tail = iconBtn("ib x", I.x(14), `Close ${name}`, () => closeTab(x), "Close tab"); b.append(b._tail) }
+    return b;
+  }
+  if (b._iconK !== iconK) { const t = el("span", "", iconH).firstElementChild; b._ic.replaceWith(t); b._ic = t; b._iconK = iconK }
+  if (b._st !== st) {
+    if (b._dot) { b._dot.remove(); b._dot = null }
+    if (st) { b._dot = dotEl(st); b._nm.before(b._dot) }
+    b._st = st;
+  }
+  if (b._nm.className !== nmCls) b._nm.className = nmCls;
+  if (b._nm.textContent !== nmText) b._nm.textContent = nmText;
+  if (b._tailBell !== showBell) {
+    b._tail.remove(); b._tailBell = showBell;
+    if (showBell) { b.insertAdjacentHTML("beforeend", I.bell(13)); b._tail = b.lastElementChild }
+    else { b._tail = iconBtn("ib x", I.x(14), `Close ${name}`, () => closeTab(x), "Close tab"); b.append(b._tail) }
+  } else if (!showBell && b._tail.title !== `Close ${name}`) b._tail.title = `Close ${name}`;
+  return b;
+}
 function render(){
   if (editing && document.activeElement?.matches("#tabs input, #tree input")) return;  // a refresh mid-rename would wipe what you typed; the commit renders
   panes.forEach(p => {
     p.box.classList.toggle("on", p === p.tab.focus);
+    const hSig = `${agentOf(p)}|${shown(paneTitle(p))}|${p.bell ? 1 : 0}`;
+    if (p._headSig === hSig) return;
+    p._headSig = hSig;
     p.head.replaceChildren();
     p.head.insertAdjacentHTML("beforeend", paneIcon(p, 12));
     const pn = el("span", "pn"); pn.textContent = shown(paneTitle(p)); p.head.append(pn);
@@ -955,33 +1048,11 @@ function render(){
   });
   tabs.forEach(x => x.r.classList.toggle("multi", paneOf(x).length > 1));
   renderSide(); foot(); save(); badgeSync();
-  $("tabs").replaceChildren(...setTabs(cur).map((x, i) => {
-    const b = el("div", "tab" + (x === cur ? " on" : "")), name = shown(tabName(x)), bell = paneOf(x).some(p => p.bell);
-    b.setAttribute("role", "tab"); b.setAttribute("aria-selected", x === cur); b.tabIndex = x === cur ? 0 : -1;  // roving: Tab lands on the open tab, arrows walk the rest
-    b.onkeydown = e => {
-      if (e.target !== b || e.metaKey || e.ctrlKey || e.altKey) return;
-      const all = [...$("tabs").querySelectorAll(".tab")], k = all.indexOf(b), n = all.length;
-      const to = {ArrowRight: (k + 1) % n, ArrowLeft: (k + n - 1) % n, Home: 0, End: n - 1}[e.key];
-      if (to !== undefined) { e.preventDefault(); all.forEach(t => t.tabIndex = -1); all[to].tabIndex = 0; all[to].focus() }
-      else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); show(x) }
-    };
-    b.title = `${tabName(x)}${i < 9 ? `  ⌘${i + 1}` : ""} · double-click to rename`;
-    b.onclick = () => x !== cur && show(x);
-    b.ondblclick = e => { if (e.target.closest(".ib")) return; rename(x) };
-    b.oncontextmenu = e => { e.preventDefault(); menu(e, x) };
-    const multi = paneOf(x).length > 1;
-    b.insertAdjacentHTML("beforeend", x.auto ? I.bolt(13) : multi ? I.splitR(14) : paneIcon(x.focus, 14));
-    if (editing === x && !editSide) { nameField(x, b); return b }
-    const st = paneOf(x).some(p => p.bell && isAgent(p)) ? "needs" : paneOf(x).some(p => p.st === "work") ? "working" : "";
-    if (st) b.append(dotEl(st));  // the tab's agent: waiting on you, or working
-    const nm = el("span", "nm" + (x.naming ? " busy" : "")); nm.textContent = x.naming ? "Naming…" : (multi && !x.name ? `${name} · ${paneOf(x).length} panes` : name);
-    b.append(nm);
-    if (bell && x !== cur) b.insertAdjacentHTML("beforeend", I.bell(13));
-    else b.append(iconBtn("ib x", I.x(14), `Close ${name}`, () => closeTab(x), "Close tab"));
-    return b;
-  }), iconBtn("", I.plus(16), "New tab  ⌘T", () => newTab(), "New tab"));
-  $("tabs").lastElementChild.id = "newtab";
-  const on = $("tabs").querySelector(".tab.on"); if (on) on.scrollIntoView({block: "nearest", inline: "nearest"});  // the active tab stays in view
+  const bar = $("tabs"), prevTabs = new Map();
+  for (const c of bar.children) if (c.dataset?.k) prevTabs.set(c.dataset.k, c);
+  const addBtn = $("newtab") || Object.assign(iconBtn("", I.plus(16), "New tab  ⌘T", () => newTab(), "New tab"), {id: "newtab"});
+  syncChildren(bar, [...setTabs(cur).map((x, i) => buildTab(x, i, prevTabs.get("tab" + x.key))), addBtn]);
+  if (cur !== lastScrollTab) { lastScrollTab = cur; const on = bar.querySelector(".tab.on"); if (on) on.scrollIntoView({block: "nearest", inline: "nearest"}) }  // the active tab stays in view on switch without yanking mid-hover
 }
 function menu(e, tab, side = false){
   const m = $("menu"), items = [["Rename…", "", () => rename(tab, side)], ["Name with AI", "", () => aiName(tab)]];
@@ -1267,7 +1338,7 @@ async function treeDone(o){
     if (o.paused) return newWsAsk(o);
     newAsk = null;
     if (o.warn) toast(o.warn);
-    newTab(o.path, undefined, true, o.session);  // the agent's own session when the Basement started it, else a shell there
+    newTab(o.path, undefined, true, SESSION_OK(o.session) ? o.session : undefined);  // the agent's own session when the Basement started it, else a shell there
     made.set(o.path, wsInfo(o.repo)?.project || ""); reveal(o.path); save(); return render();
   }
   if (o.op === "cfg") {  // Save to repo: the file is the look now, so yours goes (Undo brings it back)
@@ -1396,10 +1467,11 @@ function resumeWs(ws, r){
 function openWs(ws, r){
   if (resumeWs(ws, r)) return;
   // Chief's [console: …]: a tmux session, a worktree (path or its last part) or a tab's name; else that worktree's latest tab
-  const latest = latestTab, q = ws.toLowerCase();
-  const t = latest(t => paneOf(t).some(p => p.session === ws)) || latest(t => t.ws === ws) || latest(t => t.ws && t.ws.endsWith("/" + ws))
-    || latest(t => (t.name || "").toLowerCase().includes(q));
-  t ? show(t) : (ws === "" || ws.startsWith("/") || ws.startsWith("@")) && newTab(ws) }
+  const latest = latestTab, explicit = ws === "" || ws.startsWith("/") || ws.startsWith("@"), q = ws.toLowerCase();
+  const t = explicit ? latest(t => t.ws === ws)
+    : latest(t => paneOf(t).some(p => p.session === ws)) || latest(t => t.ws === ws) || latest(t => t.ws && t.ws.endsWith("/" + ws))
+      || (q && latest(t => (t.name || "").toLowerCase().includes(q)));
+  t ? show(t) : explicit && newTab(ws) }
 // status glyphs: brand/icons names (DESIGN.md §9.4)
 const g16 = (name, cls = "", label = "", w = 12) => { const e = dsIcon(name, w, {cls});
   if (label){ e.removeAttribute("aria-hidden"); e.setAttribute("role", "img"); e.setAttribute("aria-label", label) } return e.outerHTML };
@@ -1501,7 +1573,7 @@ function renderSide(){
   const out = [];  // a box per section holding its rows: Hosts (always first), Needs you, Working, then the workspaces by status
   rows.length = 0; grp("§host", "Hosts", homes().length, "sec");
   if (!isShut("§host")) {
-    const idle = el("div", "hchips");
+    const idle = el("div", "hchips"); idle.dataset.k = "hchips"; idle.dataset.box = "1";
     for (const h of homes()) {
       const n = wsTabs(h).length;
       if (!n) { const c = el("button", "hchip" + (h === curWs ? " on" : "")); c.type = "button"; c.title = `New shell on ${wsName(h)}`;
@@ -1511,14 +1583,14 @@ function renderSide(){
       l1.lastChild.before(iconBtn("ca", "Close all", `Close ${n} terminal${n > 1 ? "s" : ""} on ${wsName(h)}`, () => wsTabs(h).forEach(closeTab)));
       const lost = wsTabs(h).flatMap(paneOf).filter(p => p.dead);  // ssh lost it (exit 255): say so on the host's row, with Retry
       if (lost.length) { const c = el("div", "lost", g16(G.bad) + `<span>Can't reach ${esc(wsName(h))}</span>`), b = Object.assign(el("button", "", "Retry"), {type: "button"});
-        b.onclick = e => { e.stopPropagation(); lost.forEach(reconnect); render() }; c.append(b); rows[at].append(c) }
-      const card = el("div", "hc"); card.append(...rows.splice(at)); rows.push(card);
+        b.onclick = e => { e.stopPropagation(); wsTabs(h).flatMap(paneOf).filter(p => p.dead).forEach(reconnect); render() }; c.append(b); rows[at].append(c) }
+      const card = el("div", "hc"); card.dataset.k = "hc:" + h; card.dataset.box = "1"; card.append(...rows.splice(at)); rows.push(card);
     }
     if (idle.children.length) rows.push(idle);
   }
-  const hb = el("div", "box s-host" + (isShut("§host") ? " shut" : "")); hb.setAttribute("role", "group"); hb.append(...rows); out.push(hb);
+  const hb = el("div", "box s-host" + (isShut("§host") ? " shut" : "")); hb.setAttribute("role", "group"); hb.dataset.k = "box:host"; hb.dataset.box = "1"; hb.append(...rows); out.push(hb);
   // the workspaces aren't in yet: a skeleton of their rows (no shimmer); none at all: say what goes here, and how
-  if (!treesIn) out.push(el("div", "skel", "<b></b><i></i><i></i><i></i><b></b><i></i><i></i><i></i>"));
+  if (!treesIn) { const sk = el("div", "skel", "<b></b><i></i><i></i><i></i><b></b><i></i><i></i><i></i>"); sk.dataset.k = "skel"; out.push(sk) }
   // under Hosts: Claude panes waiting on you (a bell), then the ones working; a row per workspace, a click goes to that pane
   const alerts = (k, label, ps, tail) => {
     const by = new Map(); ps.forEach(p => by.has(p.tab.ws) || by.set(p.tab.ws, p));
@@ -1532,7 +1604,7 @@ function renderSide(){
       if (w?.ade) r._ws = ws;
       r.onclick = () => focusPane(p); rows.push(r);
     });
-    const b = el("div", `box s-${k}` + (isShut("§" + k) ? " shut" : "")); b.setAttribute("role", "group"); b.append(...rows); out.push(b);
+    const b = el("div", `box s-${k}` + (isShut("§" + k) ? " shut" : "")); b.setAttribute("role", "group"); b.dataset.k = "box:" + k; b.dataset.box = "1"; b.append(...rows); out.push(b);
   };
   const cl = [...panes.values()].filter(isAgent);
   alerts("need", "Needs you", cl.filter(p => p.bell), p => el("span", "badge k-o", g16(G.needs) + esc(p.why || "Asking")));
@@ -1544,18 +1616,18 @@ function renderSide(){
       grp(sk + "/" + proj, proj, ws.length, "prj");
       if (!isShut(sk + "/" + proj)) ws.forEach(w => wsRow(w.path, w));
     }
-    const b = el("div", `box s-${sk}` + (isShut("§" + sk) ? " shut" : "")); b.setAttribute("role", "group"); b.append(...rows); out.push(b);
+    const b = el("div", `box s-${sk}` + (isShut("§" + sk) ? " shut" : "")); b.setAttribute("role", "group"); b.dataset.k = "box:" + sk; b.dataset.box = "1"; b.append(...rows); out.push(b);
   }
   if (treesIn && out.length === 1 && !visTrees().length) {
     const e = el("div", "nows", "No workspaces yet"), b = Object.assign(el("button", "", "New workspace…"), {type: "button"});
-    b.onclick = newWsDialog; e.append(b); out.push(e);
+    e.dataset.k = "nows"; b.onclick = newWsDialog; e.append(b); out.push(e);
   }
   const back = $("tree").contains(document.activeElement);  // a re-render keeps the keyboard where it was
-  $("tree").replaceChildren(...out);
+  patchKeyed($("tree"), out);
   const items = treeItems(), at = items.find(x => x.dataset.k === treeKey) || items.find(x => x.classList.contains("on")) || items[0];
-  items.forEach(x => x.tabIndex = x === at ? 0 : -1);
-  if (back && at) at.focus({preventScroll: true});
-  $("tree").querySelector(".ws.on")?.scrollIntoView({block: "nearest"});
+  items.forEach(x => { const ti = x === at ? "0" : "-1"; if (x.getAttribute("tabindex") !== ti) x.setAttribute("tabindex", ti) });
+  if (back && at && document.activeElement !== at) at.focus({preventScroll: true});
+  if (curWs !== lastScrollWs) { lastScrollWs = curWs; $("tree").querySelector(".ws.on")?.scrollIntoView({block: "nearest"}) }
 }
 // the tree from the keyboard (DESIGN.md §10.8): one tab stop; ↑↓ walk the rows, ← folds or goes to the parent, → unfolds, ↵ or space opens,
 // ⇧F10 or the menu key opens the row's menu. Row actions show on focus too (CSS)
@@ -2509,10 +2581,12 @@ function foot(list = UM.list){
     if (se.fix) { const x = el("span", "scanfix"); x.textContent = ` · ${se.fix}`; e.append(x) }
     out.push(e);
   }
-  f.replaceChildren(...um ? [um] : [], ...out, el("span", "gap"), ...FOOT.filter(([k]) => n[k]).map(([k, tone, label, short]) => {
+  const kids = [...um ? [um] : [], ...out, el("span", "gap"), ...FOOT.filter(([k]) => n[k]).map(([k, tone, label, short]) => {
     const s = el("span", `fst k-${tone}` + (["needs", "raised", "crashed"].includes(k) ? " ask" : ""), `${g16("hex")}${n[k]}<span class="lbl"> ${label.toLowerCase()}</span><span class="sh"> ${short || label.toLowerCase()}</span>`);
-    s.title = label; return s }));
-  basementFit(); umRestoreFocus(f, fid); umPlace();
+    s.title = label; return s })];
+  const fSig = kids.map(k => k.outerHTML).join("");
+  if (f._footSig !== fSig) { f._footSig = fSig; f.replaceChildren(...kids); umRestoreFocus(f, fid) }
+  basementFit(); umPlace();
 }
 setInterval(() => { if (!document.hidden) foot() }, 5000); addEventListener("resize", () => foot());  // the ages and the meters' reset countdowns
 window.term = {
@@ -2559,7 +2633,7 @@ window.term = {
   // the window is closing for good: every pane's tmux session, for the app to end; nothing is saved after
   closeAll: () => { restored = false; clearTimeout(saveT); const out = [...panes.values()].map(p => ({session: p.session, ws: p.tab.ws}));
     panes.forEach(p => { clearTimeout(p.scanT); clearTimeout(p.endT); clearTimeout(p.askT); clearTimeout(p.lnkT); p.t.dispose?.() }); panes.clear(); pinged.clear(); lastPanes = null;
-    tabs.forEach(t => { clearTimeout(t.quiet); clearTimeout(t.retry); t.r.remove() }); tabs.length = 0; cur = null; return out },
+    tabs.forEach(t => { clearTimeout(t.quiet); clearTimeout(t.retry); t.r.remove() }); tabs.length = 0; cur = null; lastScrollTab = lastScrollWs = null; return out },
   workspaces: o => { basementFoot(o?.usage); trees = o?.trees || []; if (Array.isArray(o?.agents) && o.agents[0]) defAgent = normAgent(o.agents[0]); treesIn = true; refreshing(false);
     Object.assign(scanFoot, {at: Date.now(), scanned: +o?.scanned || 0, err: o?.scan_error || null}, +o?.ts ? {skew: Date.now() / 1000 - o.ts} : {}); const was = JSON.stringify(acctCfg); merge(); firstShell();
     if (JSON.stringify(acctCfg) !== was) { paint(); save() }

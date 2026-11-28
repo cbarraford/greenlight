@@ -140,17 +140,7 @@ ol.life li span{color:var(--dim)}
 @keyframes rise{from{opacity:0;transform:translateY(4px)}}
 .caret{display:inline-block;width:2px;height:13px;margin-left:var(--ds-space-2);vertical-align:-2px;background:var(--accent)}
 .doc code+.caret{margin-left:0}  /* the chip's own padding is the gap */
-/* While Chief thinks (issue 208): the last card stays, stepped down to muted; with none, a still skeleton of the answer. */
-#s.held{--text:var(--dim);--accent:var(--dim);--accent-fg:var(--dim);color:var(--text)}  /* fg.muted, or the look's own dim */
-#s.held .caret{display:none}
-#s.held::before{content:"Last answer";font:var(--ds-type-label);font-family:var(--font);color:var(--faint)}  /* the second cue: it's the last answer */
-[data-look=phosphor] #s.held{--text:var(--faint);--dim:var(--faint)}
-#s.held .track i.peak{background:var(--bar)}  /* a held chart steps down too: its accent goes neutral */
-#s.held svg.chart,#s.held .legend i,#s.held svg.tone,#s.held .diff,#s.held pre.hunk,#s.held ol.life{filter:grayscale(1)}
-#s.held .chip{color:var(--dim)}  /* a held chip steps down with the card (and Phosphor's faint green) */
-#s.held .chip svg.tone{color:inherit;filter:none}  /* overrides .bad/.now/.needs svg.tone so the glyph steps down too */
-#s.held iframe{filter:grayscale(1);opacity:.6}
-#s.frame.held::before{padding:var(--ds-space-8) var(--ds-space-24) 0}  /* a frame has no padding: the label keeps the gutter */  /* Chief's own page can't take the muted colour: it's dimmed instead */
+/* Fallback while Chief thinks with motion off or reduced motion: a still skeleton of the answer (no shimmer). */
 .skel{display:flex;flex-direction:column;gap:var(--ds-space-12);max-width:var(--ds-layout-measure)}
 .skel i{display:block;height:var(--ds-space-8);border-radius:var(--ds-radius-xs);background:var(--track)}  /* a step above element.rest, to read on the stage */
 .skel i.lead{height:var(--ds-space-12);margin-bottom:var(--ds-space-4)}  /* 16 to the first line, as the lead to the body */
@@ -175,7 +165,6 @@ table.grid td .chip svg.tone{flex:none;margin-top:1px}
 .options a.option:hover{background:var(--ds-element-hover)}
 .options a.option:active{background:var(--ds-element-active);transform:scale(.97)}
 .options a.option:focus-visible{outline:none;box-shadow:var(--ds-ring)}
-#s.held .options{display:none}
 [data-look=phosphor] .options a.option{border:1px dashed var(--line);background:none}
 [data-look=phosphor] .options a.option:hover{background:var(--well);border-color:var(--text)}
 [data-look=phosphor] .options a.option:active{background:var(--card)}
@@ -227,11 +216,13 @@ body.past #s.frame::before{padding:var(--ds-space-8) var(--ds-space-24) 0}
   .cursor{width:var(--ds-space-8)}
 }
 @media (prefers-reduced-motion: reduce){
-  #s{animation:fade var(--ds-duration-fast) linear}
+  #s,#s[data-anim]{animation:fade var(--ds-duration-fast) linear}
   .doc .fresh{animation:none}
   .listening .cursor{animation:none}
 }
 @keyframes fade{from{opacity:0}}
+@keyframes slideBack{from{opacity:0;transform:translateX(-6px)}}
+@keyframes slideFwd{from{opacity:0;transform:translateX(6px)}}
 /* The status line (issue 176): what Chief is doing while it says nothing, pinned under whatever the stage shows. Shown, never spoken. */
 #status{position:fixed;left:0;right:0;bottom:0;display:flex;align-items:center;gap:var(--ds-space-8);padding:var(--ds-space-8) var(--ds-space-24);
   background:var(--bg);border-top:1px solid var(--line);font:var(--ds-type-label);font-family:var(--font);color:var(--dim);
@@ -250,13 +241,19 @@ body.status #s.frame,[data-look] body.status #s.frame{height:calc(100% - var(--d
 @media (prefers-reduced-motion: reduce){ #status{animation:fade var(--ds-duration-fast) linear} #status svg.tone{animation:none} }
 /* Chief's own page fills the stage in every look. */
 [data-look] #s.frame{margin:0;padding:0;border:0;background:none;min-height:0;height:100%}
-/* The thinking field (DESIGN.md §10.18): needles drift behind the wait card while Chief works, then lie down as the lines of
-   what it shows. The card waits unseen (.born) until they land, then enters as it always has. */
+/* The thinking field (DESIGN.md §10.18): needles scatter from outgoing displays, drift while Chief works, form a rolling
+   frontier for streaming text, land in place for cards, and breathe subtly in open canvas while listening or speaking. */
 #fx{position:fixed;inset:0;width:100%;height:100%;z-index:-1;pointer-events:none}
+#ghost{position:fixed;inset:0;pointer-events:none;z-index:0;overflow:hidden}
 #s.born{animation:none;opacity:0}
+#s[data-anim=emerge]{animation:fade var(--ds-duration-base) var(--ds-easing-out)}
+#s[data-anim=cross]{animation:fade var(--ds-duration-fast) var(--ds-easing-out)}
+#s[data-anim=slide-back]{animation:slideBack var(--ds-duration-fast) var(--ds-easing-out)}
+#s[data-anim=slide-fwd]{animation:slideFwd var(--ds-duration-fast) var(--ds-easing-out)}
+#s.thinking{animation:none;pointer-events:none}
 @media (prefers-reduced-motion: reduce){ #fx{display:none} }
 </style></head>
-<body><canvas id="fx" aria-hidden="true"></canvas><div id="s"></div><div id="status" hidden></div>
+<body><canvas id="fx" aria-hidden="true"></canvas><div id="ghost" aria-hidden="true"></div><div id="s"></div><div id="status" hidden></div>
 <div id="hist" hidden role="group" aria-label="Earlier cards"><span class="hh">Say “go back” for the previous card</span><button type="button" data-go="back" aria-label="Previous card"></button><span class="hn"></span><button type="button" data-go="forward" aria-label="Next card"></button></div>
 <script id="ds-icons">/* generated by scripts/icons.py from brand/icons: edit the SVGs, then run `icons.py generate`. The agent marks (claude, openai) are from lobe-icons, MIT: brand/icons/marks/LICENSE.lobe-icons */
 const DS_ICONS = {"agy":[24,"f",[["path",{"d":"M12 1.5l2.7 7.8L22.5 12l-7.8 2.7L12 22.5l-2.7-7.8L1.5 12l7.8-2.7L12 1.5z"}]]],"alert":[16,"s",[["path",{"d":"M7.13 2.5a1 1 0 0 1 1.74 0l5.4 9.5a1 1 0 0 1-.87 1.5H2.6a1 1 0 0 1-.87-1.5zM8 6.25v3M8 11.25h.01"}]]],"arrow-up":[16,"s",[["path",{"d":"M8 13.5v-11M3.5 7 8 2.5 12.5 7"}]]],"attach":[16,"s",[["path",{"d":"M13 7.25 7.9 12.35a3.2 3.2 0 0 1-4.53-4.53l5.3-5.3a2.13 2.13 0 0 1 3.02 3.02L6.4 10.83a1.07 1.07 0 0 1-1.51-1.51l4.6-4.6"}]]],"bell":[16,"s",[["path",{"d":"M4.5 7a3.5 3.5 0 0 1 7 0c0 3.5 1.75 5 1.75 5H2.75S4.5 10.5 4.5 7zM6.75 14h2.5"}]]],"bell-fill":[16,"f",[["path",{"d":"M4.5 7a3.5 3.5 0 0 1 7 0c0 3.5 1.75 5 1.75 5H2.75S4.5 10.5 4.5 7z"}],["path",{"d":"M6.5 13.25h3v1.25h-3z"}]]],"bolt":[16,"s",[["path",{"d":"M9 1.5 3.5 9H8l-1 5.5L12.5 7H8z"}]]],"bookmark":[16,"s",[["path",{"d":"M4 2.5h8v11l-4-3-4 3z"}]]],"branch":[16,"s",[["circle",{"cx":"5","cy":"3.5","r":"1.5"}],["circle",{"cx":"5","cy":"12.5","r":"1.5"}],["circle",{"cx":"11","cy":"4.5","r":"1.5"}],["path",{"d":"M5 5v6M11 6c0 2.75-2.5 3.5-6 4.75"}]]],"brush":[16,"s",[["path",{"d":"M13.5 2.5 8.25 7.75M8.25 7.75c-1.9-.35-3.5.9-3.5 2.85 0 1.25-.75 2.4-2.25 2.9 3.6.75 6.5-.85 6.5-3.6z"}]]],"captions":[16,"s",[["rect",{"height":"10","rx":"2","width":"12.5","x":"1.75","y":"3"}],["path",{"d":"M4.75 7h3M9.75 7h1.5M4.75 9.75h1.5M8.25 9.75h3"}]]],"captions-fill":[16,"f",[["path",{"d":"M3.5 2.25h9a2.5 2.5 0 0 1 2.5 2.5v6.5a2.5 2.5 0 0 1 -2.5 2.5h-9a2.5 2.5 0 0 1 -2.5 -2.5v-6.5a2.5 2.5 0 0 1 2.5 -2.5zM4.75 6.25h2.25a0.75 0.75 0 0 1 0.75 0.75v0a0.75 0.75 0 0 1 -0.75 0.75h-2.25a0.75 0.75 0 0 1 -0.75 -0.75v-0a0.75 0.75 0 0 1 0.75 -0.75zM9.75 6.25h1.5a0.75 0.75 0 0 1 0.75 0.75v0a0.75 0.75 0 0 1 -0.75 0.75h-1.5a0.75 0.75 0 0 1 -0.75 -0.75v-0a0.75 0.75 0 0 1 0.75 -0.75zM4.75 9h0.75a0.75 0.75 0 0 1 0.75 0.75v0a0.75 0.75 0 0 1 -0.75 0.75h-0.75a0.75 0.75 0 0 1 -0.75 -0.75v-0a0.75 0.75 0 0 1 0.75 -0.75zM8.25 9h3a0.75 0.75 0 0 1 0.75 0.75v0a0.75 0.75 0 0 1 -0.75 0.75h-3a0.75 0.75 0 0 1 -0.75 -0.75v-0a0.75 0.75 0 0 1 0.75 -0.75z","fill-rule":"evenodd"}]]],"chat":[16,"s",[["path",{"d":"M2.5 4.25A1.75 1.75 0 0 1 4.25 2.5h7.5a1.75 1.75 0 0 1 1.75 1.75v5.5a1.75 1.75 0 0 1-1.75 1.75H7.25L4.5 13.75v-2.25h-.25A1.75 1.75 0 0 1 2.5 9.75z"}]]],"chat-text":[16,"s",[["path",{"d":"M2.5 4.25A1.75 1.75 0 0 1 4.25 2.5h7.5a1.75 1.75 0 0 1 1.75 1.75v5.5a1.75 1.75 0 0 1-1.75 1.75H7.25L4.5 13.75v-2.25h-.25A1.75 1.75 0 0 1 2.5 9.75z"}],["path",{"d":"M5.5 5.75h5M5.5 8.25h3"}]]],"check":[16,"s",[["path",{"d":"M3 8.5l3.25 3.25L13 5"}]]],"chevron-down":[16,"s",[["path",{"d":"M3.5 6 8 10.5 12.5 6"}]]],"chevron-left":[16,"s",[["path",{"d":"M10 3.5 5.5 8 10 12.5"}]]],"chevron-right":[16,"s",[["path",{"d":"M6 3.5 10.5 8 6 12.5"}]]],"chevron-up":[16,"s",[["path",{"d":"M3.5 10 8 5.5 12.5 10"}]]],"chevron-up-down":[16,"s",[["path",{"d":"M5 6 8 3l3 3M5 10l3 3 3-3"}]]],"ci":[16,"s",[["circle",{"cx":"3.5","cy":"8","r":"1.5"}],["circle",{"cx":"8","cy":"8","r":"1.5"}],["circle",{"cx":"12.5","cy":"8","r":"1.5"}],["path",{"d":"M5 8h1.5M9.5 8H11"}]]],"claude":[24,"f",[["path",{"d":"M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z"}]]],"clear":[16,"s",[["circle",{"cx":"8","cy":"8","r":"6.25"}],["path",{"d":"M6 6l4 4M10 6l-4 4"}]]],"close":[16,"s",[["path",{"d":"M4 4l8 8M12 4l-8 8"}]]],"collapse":[16,"s",[["path",{"d":"M13.5 6.5h-4v-4M9.5 6.5l4-4M2.5 9.5h4v4M6.5 9.5l-4 4"}]]],"compose":[16,"s",[["path",{"d":"M13.5 9v3.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1H7M11.5 1.75l2.75 2.75L9 9.75H6.25V7z"}]]],"conflict":[16,"s",[["circle",{"cx":"4.5","cy":"3.5","r":"1.5"}],["circle",{"cx":"4.5","cy":"12.5","r":"1.5"}],["path",{"d":"M4.5 5v6M9.5 6.5l4 4M13.5 6.5l-4 4"}]]],"contrast":[16,"s",[["circle",{"cx":"8","cy":"8","r":"6.25"}],["path",{"d":"M8 1.75v12.5M8 4.5h4.75M8 8h6.25M8 11.5h4.75"}]]],"copy":[16,"s",[["rect",{"height":"8","rx":"1.5","width":"8","x":"5.5","y":"5.5"}],["path",{"d":"M10.5 5.5V4A1.5 1.5 0 0 0 9 2.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5"}]]],"crashed":[16,"s",[["path",{"d":"M14.01 10.49 10.49 14.01 5.51 14.01 1.99 10.49 1.99 5.51 5.51 1.99 10.49 1.99 14.01 5.51z"}],["path",{"d":"M6 6l4 4M10 6l-4 4"}]]],"crashed-fill":[16,"f",[["path",{"d":"M14.7 10.77 10.77 14.7 5.23 14.7 1.3 10.77 1.3 5.23 5.23 1.3 10.77 1.3 14.7 5.23zM9.63 5.24 10.76 6.37 9.13 8 10.76 9.63 9.63 10.76 8 9.13 6.37 10.76 5.24 9.63 6.87 8 5.24 6.37 6.37 5.24 8 6.87z","fill-rule":"evenodd"}]]],"diff":[16,"s",[["path",{"d":"M9 1.75H4.75a1 1 0 0 0-1 1v10.5a1 1 0 0 0 1 1h6.5a1 1 0 0 0 1-1V5zM9 1.75V5h3.25"}],["path",{"d":"M8 6.5v3M6.5 8h3M6.5 11.75h3"}]]],"done":[16,"s",[["circle",{"cx":"8","cy":"8","r":"6.25"}],["path",{"d":"M5.25 8.25 7.1 10.1l3.65-3.85"}]]],"done-fill":[16,"f",[["path",{"d":"M1 8a7 7 0 1 0 14 0a7 7 0 1 0 -14 0zM4.35 8.88 7.12 11.53 11.67 6.86 10.53 5.74 7.08 9.27 5.45 7.72z","fill-rule":"evenodd"}]]],"download":[16,"s",[["path",{"d":"M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10"}]]],"edit":[16,"s",[["path",{"d":"M10.5 2.5l3 3L6 13H3v-3zM9 4l3 3"}]]],"expand":[16,"s",[["path",{"d":"M9.5 2.5h4v4M13.5 2.5 9.5 6.5M6.5 13.5h-4v-4M2.5 13.5l4-4"}]]],"external":[16,"s",[["path",{"d":"M9.5 2.5h4v4M13.5 2.5 7.5 8.5M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3"}]]],"file":[16,"s",[["path",{"d":"M9 1.75H4.75a1 1 0 0 0-1 1v10.5a1 1 0 0 0 1 1h6.5a1 1 0 0 0 1-1V5zM9 1.75V5h3.25"}]]],"file-text":[16,"s",[["path",{"d":"M9 1.75H4.75a1 1 0 0 0-1 1v10.5a1 1 0 0 0 1 1h6.5a1 1 0 0 0 1-1V5zM9 1.75V5h3.25"}],["path",{"d":"M6 8.5h4M6 11h4"}]]],"flag":[16,"s",[["path",{"d":"M3.5 14V2.5M3.5 3H12l-1.75 3.25L12 9.5H3.5"}]]],"folder":[16,"s",[["path",{"d":"M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6l1.5 1.5H12.5A1.5 1.5 0 0 1 14 6v6a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12z"}]]],"graduation":[16,"s",[["path",{"d":"M8 3 1.5 6.25 8 9.5l6.5-3.25zM4 7.5v3.25c1 .95 2.4 1.5 4 1.5s3-.55 4-1.5V7.5M14.5 6.25v4"}]]],"grid":[16,"s",[["rect",{"height":"4.5","rx":"1","width":"4.5","x":"2.5","y":"2.5"}],["rect",{"height":"4.5","rx":"1","width":"4.5","x":"9","y":"2.5"}],["rect",{"height":"4.5","rx":"1","width":"4.5","x":"2.5","y":"9"}],["rect",{"height":"4.5","rx":"1","width":"4.5","x":"9","y":"9"}]]],"hammer":[16,"s",[["path",{"d":"M9.75 2.25l4 4-1.75 1.75-4-4zM8 6 2.5 11.5a1.41 1.41 0 0 0 2 2L10 8"}]]],"hex":[16,"s",[["path",{"d":"M8 1.75l5.4 3.13v6.24L8 14.25l-5.4-3.13V4.88z"}]]],"hex-fill":[16,"f",[["path",{"d":"M8 1 14.06 4.5 14.06 11.5 8 15 1.94 11.5 1.94 4.5z"}]]],"host":[16,"s",[["rect",{"height":"8.5","rx":"1.5","width":"12.5","x":"1.75","y":"2.5"}],["path",{"d":"M5.5 13.75h5M8 11v2.75"}]]],"info":[16,"s",[["circle",{"cx":"8","cy":"8","r":"6.25"}],["path",{"d":"M8 7.25v3.75M8 5h.01"}]]],"keyboard":[16,"s",[["rect",{"height":"8.5","rx":"1.75","width":"13","x":"1.5","y":"3.75"}],["path",{"d":"M4.25 6.5h.01M6.75 6.5h.01M9.25 6.5h.01M11.75 6.5h.01M5 9.5h6"}]]],"laptop":[16,"s",[["path",{"d":"M3.25 10.5V4.25A1.25 1.25 0 0 1 4.5 3h7a1.25 1.25 0 0 1 1.25 1.25v6.25M1.75 13h12.5l-1.5-2.5H3.25z"}]]],"lightbulb":[16,"s",[["path",{"d":"M6 12.25h4M6.75 14.25h2.5M5.75 10.25C4.6 9.4 3.75 8.1 3.75 6.5a4.25 4.25 0 0 1 8.5 0c0 1.6-.85 2.9-2 3.75z"}]]],"lock":[16,"s",[["rect",{"height":"7","rx":"1.5","width":"10","x":"3","y":"7"}],["path",{"d":"M5.25 7V5a2.75 2.75 0 0 1 5.5 0v2"}]]],"merge":[16,"s",[["circle",{"cx":"4.5","cy":"3.5","r":"1.5"}],["circle",{"cx":"4.5","cy":"12.5","r":"1.5"}],["circle",{"cx":"11.5","cy":"9","r":"1.5"}],["path",{"d":"M4.5 5v6M4.5 5c0 2.75 2.5 4 5.5 4"}]]],"mic":[16,"s",[["rect",{"height":"7.5","rx":"2.25","width":"4.5","x":"5.75","y":"1.75"}],["path",{"d":"M3.5 7.75a4.5 4.5 0 0 0 9 0M8 12.25v2"}]]],"mic-off":[16,"s",[["rect",{"height":"7.5","rx":"2.25","width":"4.5","x":"5.75","y":"1.75"}],["path",{"d":"M3.5 7.75a4.5 4.5 0 0 0 9 0M8 12.25v2"}],["path",{"d":"M2.5 2.5l11 11"}]]],"mr":[16,"s",[["circle",{"cx":"4.5","cy":"3.5","r":"1.5"}],["circle",{"cx":"4.5","cy":"12.5","r":"1.5"}],["circle",{"cx":"11.5","cy":"12.5","r":"1.5"}],["path",{"d":"M4.5 5v6M11.5 11V6.5a2 2 0 0 0-2-2H7M8.5 3 7 4.5 8.5 6"}]]],"needs":[16,"s",[["path",{"d":"M8 1.75 14.25 8 8 14.25 1.75 8z"}],["path",{"d":"M8 5.25v3.25M8 10.75h.01"}]]],"needs-fill":[16,"f",[["path",{"d":"M8 0.75 15.25 8 8 15.25 0.75 8zM7.2 4.5h1.6v4.5H7.2zM7.2 10.2h1.6v1.6H7.2z","fill-rule":"evenodd"}]]],"openai":[24,"f",[["path",{"d":"M9.205 8.658v-2.26c0-.19.072-.333.238-.428l4.543-2.616c.619-.357 1.356-.523 2.117-.523 2.854 0 4.662 2.212 4.662 4.566 0 .167 0 .357-.024.547l-4.71-2.759a.797.797 0 00-.856 0l-5.97 3.473zm10.609 8.8V12.06c0-.333-.143-.57-.429-.737l-5.97-3.473 1.95-1.118a.433.433 0 01.476 0l4.543 2.617c1.309.76 2.189 2.378 2.189 3.948 0 1.808-1.07 3.473-2.76 4.163zM7.802 12.703l-1.95-1.142c-.167-.095-.239-.238-.239-.428V5.899c0-2.545 1.95-4.472 4.591-4.472 1 0 1.927.333 2.712.928L8.23 5.067c-.285.166-.428.404-.428.737v6.898zM12 15.128l-2.795-1.57v-3.33L12 8.658l2.795 1.57v3.33L12 15.128zm1.796 7.23c-1 0-1.927-.332-2.712-.927l4.686-2.712c.285-.166.428-.404.428-.737v-6.898l1.974 1.142c.167.095.238.238.238.428v5.233c0 2.545-1.974 4.472-4.614 4.472zm-5.637-5.303l-4.544-2.617c-1.308-.761-2.188-2.378-2.188-3.948A4.482 4.482 0 014.21 6.327v5.423c0 .333.143.571.428.738l5.947 3.449-1.95 1.118a.432.432 0 01-.476 0zm-.262 3.9c-2.688 0-4.662-2.021-4.662-4.519 0-.19.024-.38.047-.57l4.686 2.71c.286.167.571.167.856 0l5.97-3.448v2.26c0 .19-.07.333-.237.428l-4.543 2.616c-.619.357-1.356.523-2.117.523zm5.899 2.83a5.947 5.947 0 005.827-4.756C22.287 18.339 24 15.84 24 13.296c0-1.665-.713-3.282-1.998-4.448.119-.5.19-.999.19-1.498 0-3.401-2.759-5.947-5.946-5.947-.642 0-1.26.095-1.88.31A5.962 5.962 0 0010.205 0a5.947 5.947 0 00-5.827 4.757C1.713 5.447 0 7.945 0 10.49c0 1.666.713 3.283 1.998 4.448-.119.5-.19 1-.19 1.499 0 3.401 2.759 5.946 5.946 5.946.642 0 1.26-.095 1.88-.309a5.96 5.96 0 004.162 1.713z"}]]],"palette":[16,"s",[["path",{"d":"M8 1.75a6.25 6.25 0 1 0 0 12.5c.9 0 1.4-.6 1.4-1.3 0-1-.95-1.35-.95-2.3 0-.85.6-1.4 1.5-1.4h1.6a2.7 2.7 0 0 0 2.7-2.7C14.25 4.3 11.5 1.75 8 1.75z"}],["circle",{"cx":"4.75","cy":"7.25","fill":"currentColor","r":".9","stroke":"none"}],["circle",{"cx":"6.25","cy":"4.5","fill":"currentColor","r":".9","stroke":"none"}],["circle",{"cx":"9.5","cy":"4.25","fill":"currentColor","r":".9","stroke":"none"}],["circle",{"cx":"11.75","cy":"6.25","fill":"currentColor","r":".9","stroke":"none"}]]],"panel":[16,"s",[["rect",{"height":"11","rx":"2","width":"12","x":"2","y":"2.5"}],["path",{"d":"M9.5 2.5v11"}]]],"pause":[16,"s",[["path",{"d":"M5.5 3.5v9M10.5 3.5v9"}]]],"play":[16,"s",[["path",{"d":"M5 3.25v9.5L12.75 8z"}]]],"plus":[16,"s",[["path",{"d":"M8 3v10M3 8h10"}]]],"question":[16,"s",[["circle",{"cx":"8","cy":"8","r":"6.25"}],["path",{"d":"M6.25 6.25a1.8 1.8 0 1 1 2.55 1.65c-.5.25-.8.7-.8 1.2v.4M8 11.5h.01"}]]],"queued":[16,"s",[["circle",{"cx":"8","cy":"8","r":"6.25","stroke-dasharray":"0.01 3.27"}]]],"rebase":[16,"s",[["circle",{"cx":"4.5","cy":"12.5","r":"1.5"}],["circle",{"cx":"11.5","cy":"3.5","r":"1.5"}],["path",{"d":"M4.5 11V7a1.5 1.5 0 0 1 1.5-1.5h3.75M8.25 3.5l1.75 2-1.75 2"}]]],"refresh":[16,"s",[["path",{"d":"M13.25 8a5.25 5.25 0 1 1-1.54-3.71M12.25 1.75v3h-3"}]]],"review":[16,"s",[["circle",{"cx":"7","cy":"7","r":"4.75"}],["path",{"d":"M10.5 10.5l3 3M5.25 7.1 6.6 8.45 9 6"}]]],"ring":[16,"s",[["circle",{"cx":"8","cy":"8","r":"6.25"}]]],"search":[16,"s",[["circle",{"cx":"7","cy":"7","r":"4.75"}],["path",{"d":"M10.5 10.5l3 3"}]]],"server":[16,"s",[["rect",{"height":"5","rx":"1.25","width":"12","x":"2","y":"2.25"}],["rect",{"height":"5","rx":"1.25","width":"12","x":"2","y":"8.75"}],["path",{"d":"M4.75 4.75h.01M4.75 11.25h.01M8 4.75h3.25M8 11.25h3.25"}]]],"settings":[16,"s",[["path",{"d":"M12.88 6.91 14.54 7.14 14.54 8.86 12.88 9.09 12.22 10.68 13.23 12.02 12.02 13.23 10.68 12.22 9.09 12.88 8.86 14.54 7.14 14.54 6.91 12.88 5.32 12.22 3.98 13.23 2.77 12.02 3.78 10.68 3.12 9.09 1.46 8.86 1.46 7.14 3.12 6.91 3.78 5.32 2.77 3.98 3.98 2.77 5.32 3.78 6.91 3.12 7.14 1.46 8.86 1.46 9.09 3.12 10.68 3.78 12.02 2.77 13.23 3.98 12.22 5.32z"}],["circle",{"cx":"8","cy":"8","r":"2"}]]],"sidebar":[16,"s",[["rect",{"height":"11","rx":"2","width":"12","x":"2","y":"2.5"}],["path",{"d":"M6.5 2.5v11"}]]],"sliders":[16,"s",[["path",{"d":"M2.5 4.5h6.5M12.5 4.5h1M2.5 11.5h1M7 11.5h6.5"}],["circle",{"cx":"10.75","cy":"4.5","r":"1.75"}],["circle",{"cx":"5.25","cy":"11.5","r":"1.75"}]]],"spark":[16,"s",[["path",{"d":"M8 2c.45 3.05 1.95 4.55 5 5-3.05.45-4.55 1.95-5 5-.45-3.05-1.95-4.55-5-5 3.05-.45 4.55-1.95 5-5z"}]]],"sparkles":[16,"s",[["path",{"d":"M6.5 4c.4 2.7 1.8 4.1 4.5 4.5-2.7.4-4.1 1.8-4.5 4.5-.4-2.7-1.8-4.1-4.5-4.5 2.7-.4 4.1-1.8 4.5-4.5zM12.25 1.5c.2 1.15.6 1.55 1.75 1.75-1.15.2-1.55.6-1.75 1.75-.2-1.15-.6-1.55-1.75-1.75 1.15-.2 1.55-.6 1.75-1.75z"}]]],"split-down":[16,"s",[["rect",{"height":"11","rx":"2","width":"12","x":"2","y":"2.5"}],["path",{"d":"M2 8h12"}]]],"split-right":[16,"s",[["rect",{"height":"11","rx":"2","width":"12","x":"2","y":"2.5"}],["path",{"d":"M8 2.5v11"}]]],"star":[16,"s",[["path",{"d":"M8 1.75l1.9 3.85 4.25.62-3.08 3 .73 4.23L8 11.45l-3.8 2 .73-4.23-3.08-3 4.25-.62z"}]]],"star-fill":[16,"f",[["path",{"d":"M8 1l2.35 4.76 5.25.77-3.8 3.7.9 5.23L8 12.99l-4.7 2.47.9-5.23-3.8-3.7 5.25-.77z"}]]],"stop":[16,"s",[["rect",{"height":"8.5","rx":"1.5","width":"8.5","x":"3.75","y":"3.75"}]]],"terminal":[16,"s",[["rect",{"height":"11","rx":"2","width":"12.5","x":"1.75","y":"2.5"}],["path",{"d":"M4.75 6.25 6.75 8l-2 1.75M8.5 10h3"}]]],"threads":[16,"s",[["path",{"d":"M2.5 3.75A1.25 1.25 0 0 1 3.75 2.5h6.5a1.25 1.25 0 0 1 1.25 1.25v4.5a1.25 1.25 0 0 1-1.25 1.25H6L3.75 11.25V9.5A1.25 1.25 0 0 1 2.5 8.25zM13.5 6.5v4.75a1.25 1.25 0 0 1-1.25 1.25H12v1.75L9.75 12.5H7.5"}]]],"trash":[16,"s",[["path",{"d":"M2.5 4h11M6 4V2.5h4V4M3.75 4l.7 9.1a1 1 0 0 0 1 .9h5.1a1 1 0 0 0 1-.9l.7-9.1M6.75 7v4M9.25 7v4"}]]],"undo":[16,"s",[["path",{"d":"M5.5 2.75 2.5 5.75l3 3M2.5 5.75H10a3.5 3.5 0 0 1 0 7H7"}]]],"verify":[16,"s",[["path",{"d":"M8 1.75 13.25 4v4c0 3.1-2.2 5.4-5.25 6.25C4.95 13.4 2.75 11.1 2.75 8V4z"}],["path",{"d":"M5.6 8.1 7.2 9.7 10.4 6.5"}]]],"waiting":[16,"s",[["path",{"d":"M4 1.75h8M4 14.25h8M4.75 1.75v2.5c0 1.6 3.25 2.6 3.25 3.75S4.75 10.15 4.75 11.75v2.5M11.25 1.75v2.5c0 1.6-3.25 2.6-3.25 3.75s3.25 2.15 3.25 3.75v2.5"}]]],"wand":[16,"s",[["path",{"d":"M2.5 13.5 9.5 6.5M8.25 5.25l2.5 2.5M12 1.75v3M10.5 3.25h3M4.5 2.25v2M3.5 3.25h2M13 9.5v2M12 10.5h2"}]]],"waveform":[16,"s",[["path",{"d":"M2.5 6.5v3M5.25 4v8M8 2.25v11.5M10.75 5v6M13.5 7v2"}]]],"window":[16,"s",[["rect",{"height":"8","rx":"1.5","width":"8.5","x":"2","y":"5.5"}],["path",{"d":"M5.5 5.5V4a1.5 1.5 0 0 1 1.5-1.5h5A1.5 1.5 0 0 1 13.5 4v5a1.5 1.5 0 0 1-1.5 1.5h-1.5"}]]],"working":[16,"s",[["path",{"d":"M8 1.75a6.25 6.25 0 1 1-6.25 6.25"}]]],"your-move":[16,"s",[["circle",{"cx":"8","cy":"8","r":"6.25"}],["path",{"d":"M5.25 8h5.25M8.25 5.5 10.75 8l-2.5 2.5"}]]],"zoom":[16,"s",[["path",{"d":"M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"}]]]};
@@ -282,26 +279,95 @@ const TONE = {needs: ["M8 1.75 14.25 8 8 14.25 1.75 8z", "M8 5.25v3.25M8 10.75h.
 const TONE_SAY = {needs: "Needs you", bad: "Failed", now: "Now", ok: "Done"};
 function toneGlyph(t){ const NS = "http://www.w3.org/2000/svg", g = document.createElementNS(NS, "svg"); g.setAttribute("viewBox", "0 0 16 16"); g.setAttribute("class", "tone");
   g.setAttribute("role", "img"); g.setAttribute("aria-label", TONE_SAY[t]); for (const d of TONE[t]) { const p = document.createElementNS(NS, "path"); p.setAttribute("d", d); g.append(p); } return g; }
-function show(node, cls, keep = !/\b(wait|skeleton)\b/.test(cls || "")){
+// Closed shadow-DOM ghost layer: fades outgoing content in place (or with a directional micro-slide for card history)
+// without leaving stale nodes in the main DOM.
+const ghost = (() => {
+  const host = document.getElementById("ghost");
+  const root = host.attachShadow({ mode: "closed" });
+  let ready = false, timer = 0;
+  function init(){
+    if (ready) return; ready = true;
+    const styles = document.querySelectorAll("head > style");
+    if (styles[1]) root.append(styles[1].cloneNode(true));
+    const g = document.createElement("style");
+    g.textContent = ".gw{position:fixed;inset:0;overflow:hidden;pointer-events:none}"
+      + ".gw.out{animation:gOut var(--ds-duration-base) var(--ds-easing-out) forwards}"
+      + ".gw.back{animation:gBack var(--ds-duration-fast) var(--ds-easing-out) forwards}"
+      + ".gw.fwd{animation:gFwd var(--ds-duration-fast) var(--ds-easing-out) forwards}"
+      + "@keyframes gOut{from{opacity:1}to{opacity:0}}"
+      + "@keyframes gBack{from{opacity:1;transform:translateX(0)}to{opacity:0;transform:translateX(6px)}}"
+      + "@keyframes gFwd{from{opacity:1;transform:translateX(0)}to{opacity:0;transform:translateX(-6px)}}"
+      + "@media (prefers-reduced-motion: reduce){.gw.out,.gw.back,.gw.fwd{animation:gOut var(--ds-duration-fast) linear forwards}}";
+    root.append(g);
+  }
+  function clear(){
+    clearTimeout(timer); timer = 0;
+    root.querySelectorAll(".gw").forEach(e => e.remove());
+  }
+  function leave(el, dir = "out"){
+    clear();
+    if (!el || !el.childElementCount || /\b(thinking|skeleton|frame|born)\b/.test(el.className)) return;
+    init();
+    const sy = Math.max(window.scrollY, document.body.scrollTop, document.documentElement.scrollTop);
+    const wrap = document.createElement("div");
+    wrap.className = "gw " + dir;
+    const lk = document.documentElement.dataset.look;
+    if (lk) wrap.dataset.look = lk;
+    const c = el.cloneNode(true);
+    c.id = "s";
+    delete c.dataset.anim;
+    c.classList.remove("born", "streaming");
+    c.querySelectorAll(".caret").forEach(e => e.remove());
+    c.querySelectorAll(".fresh").forEach(e => e.classList.remove("fresh"));
+    c.style.animation = "none";
+    if (sy) c.style.transform = `translateY(${-sy}px)`;
+    if (document.body.classList.contains("past")) { c.style.color = "var(--dim)"; }
+    wrap.append(c);
+    wrap.addEventListener("animationend", clear, { once: true });
+    root.append(wrap);
+    timer = setTimeout(clear, 260);
+  }
+  return { leave, clear };
+})();
+function animEl(el, name){
+  if (!name) { delete el.dataset.anim; return; }
+  el.dataset.anim = name;
+  el.addEventListener("animationend", () => { if (el.dataset.anim === name) delete el.dataset.anim; }, { once: true });
+}
+function show(node, cls, keep = !/\b(wait|skeleton|thinking)\b/.test(cls || ""), anim = ""){
   if (streamEl) { streamEl.classList.remove("streaming"); caret(streamEl, false); streamEl = null; }  // anything drawn ends the stream, its card as it got
-  const old = document.getElementById("s"), s = $("div", cls); s.id = "s"; s.append(...[].concat(node)); old.replaceWith(s); document.body.scrollTop = 0; scrollTo(0, 0);
-  if (cls === "wait") fx.think(); else if (cls === "wait listening") fx.stop(); else fx.reveal(s);  // working, your turn, or a card to show
+  const old = document.getElementById("s"), s = $("div", cls); s.id = "s"; s.append(...[].concat(node));
+  const fromFx = fx.thinking();
+  const isWait = cls === "wait" || cls === "wait listening", isHold = cls === "thinking" || cls === "skeleton";
+  if (!fromFx && !isWait && !isHold && old && old.childElementCount && !/\b(thinking|skeleton)\b/.test(old.className)) {
+    ghost.leave(old, "out");
+    if (!anim) animEl(s, "cross");
+  }
+  old.replaceWith(s); document.body.scrollTop = 0; scrollTo(0, 0);
+  if (cls === "wait") fx.think();
+  else if (cls === "wait listening") fx.stop(true);
+  else if (isHold) { /* handled by stage.hold() */ }
+  else if (anim === "frontier") { if (fromFx && fx.visible()) animEl(s, "emerge"); fx.frontier(s); }
+  else fx.reveal(s);  // working, your turn, streaming frontier, or a card to show
   if (keep) remember(s); else histUI(); }
 // The last few cards (issue 208): each kept as its own element, so going back shows it exactly as it was (a streamed card as
 // it ended). A new card is the latest again. Waiting, the skeleton and the idle board aren't cards.
 const CARDS = [], KEEP_CARDS = 6; let atCard = -1, liveEl = null, streamEl = null;
 function remember(s){ CARDS.push(s); while (CARDS.length > KEEP_CARDS) CARDS.shift(); atCard = CARDS.length - 1; liveEl = null; histUI(); }
-function toCard(i){
+function toCard(i, dir = "back"){
   const cur = document.getElementById("s"), el = CARDS[i];
   if (!el) return;
-  if (!CARDS.includes(cur)) liveEl = cur;  // the board or Listening: forward from the latest card comes back to it
-  if (document.body.dataset.fx) fx.stop();  // the thinking field was behind the wait card: not behind a card
-  el.classList.remove("held");  // a streaming card keeps streaming off-screen (streamEl), and shows its progress when you come back
+  if (!CARDS.includes(cur)) liveEl = cur;  // the board, thinking, or Listening: forward from the latest card comes back to it
+  if (cur !== el) ghost.leave(cur, dir);
+  fx.stop(true);  // stop thinking while reading history; keep subtle ambient only in open space below
+  el.classList.remove("born");
+  animEl(el, dir === "fwd" ? "slide-fwd" : "slide-back");
   if (cur !== el) cur.replaceWith(el);
   freeze(el);
   el.querySelectorAll(".chip").forEach(c => Object.hasOwn(REFS, c.dataset.ref) ? c.replaceWith(chipFor(c.dataset.ref, REFS[c.dataset.ref])) : c.remove());  // today's status
   el.normalize(); chipify([...el.children]);  // a ref the snapshot only now knows gets its chip
   atCard = i; scrollTo(0, 0); histUI();
+  fx.ambient(el);
 }
 function histUI(){
   const h = document.getElementById("hist"), cur = document.getElementById("s"), on = CARDS.includes(cur);
@@ -313,6 +379,7 @@ function histUI(){
   h.querySelector("[data-go=back]").disabled = atCard <= 0;
   h.querySelector("[data-go=forward]").disabled = atCard >= CARDS.length - 1 && !liveEl;
   h.querySelector(".hh").hidden = atCard < CARDS.length - 1;  // the hint, on the latest card only
+  fx.reclear();
 }
 const head = o => (o.eyebrow ? [$("div", "eyebrow", String(o.eyebrow))] : []).concat([$("h1", null, String(o.title ?? ""))]);
 const str = v => v == null ? "" : String(v), int = v => Math.max(0, Math.round(+v) || 0), arr = v => Array.isArray(v) ? v : [];
@@ -521,95 +588,341 @@ function caret(s, on){
   while (t.lastElementChild && !["A", "CODE", "B", "EM", "BR", "SPAN", "svg"].includes(t.lastElementChild.tagName)) t = t.lastElementChild;
   t.append($("span", "caret"));
 }
-// The thinking field (brand/DESIGN.md §10.18). A grid of needles, each an oscillator pulled toward its four neighbours' phase
-// (Kuramoto: dθᵢ/dt = ωᵢ + K Σ sin(θⱼ − θᵢ)), drifts in and out of step while Chief works. When a card arrives they lock, lie
-// flat and slide onto the card's lines, and the card fades in over them. Never under reduced motion, nor with
-// data-motion="off" on the root (Settings ▸ Thinking motion). body[data-fx] says what it is doing: think, reveal, or nothing.
+// The thinking field (brand/DESIGN.md §10.18). A grid of needles, each a coupled oscillator pulled toward its four neighbours'
+// phase (Kuramoto: dθᵢ/dt = ωᵢ + K Σ sin(θⱼ − θᵢ)). Needles scatter off outgoing displays into the thinking field, condense
+// locally onto incoming cards in place, form a rolling crystallizing frontier ahead of streaming text, and breathe subtly in
+// open canvas space below short cards while listening or speaking (staying completely quiet when a card fills the viewport).
+// Never under reduced motion, nor with data-motion="off" (Settings ▸ Thinking motion). body[data-fx] reports the active mode.
 const fx = (() => {
   const cv = document.getElementById("fx"), g = cv.getContext("2d");
-  const LOCK = 420, LAND = 1000, GONE = 1250;  // ms into a reveal: in step, on the card's lines, faded out
+  const SCATTER = 360, LOCK = 180, LAND = 420, GONE = 540, CONDENSE = 240, PULSE = 650;
   const clamp = v => v < 0 ? 0 : v > 1 ? 1 : v, ease = p => p < .5 ? 4 * p * p * p : 1 - (2 - 2 * p) ** 3 / 2, mix = (a, b, t) => a + (b - a) * t;
-  let mode = "off", n = 0, cols = 1, pit = 20, w = 0, h = 0, ox = 0, oy = 0, th, nx, om, zone, seg, lev, aimAt = null, ink = "", t0 = 0, last = 0, raf = 0, vis = 0, v0 = 1, born = null;
-  const on = () => !matchMedia("(prefers-reduced-motion: reduce)").matches && document.documentElement.dataset.motion !== "off";  // asked afresh: WebKit can leave a kept query stale
-  // Every line of text under `root` as a box (a wrapped line is its own), and each bar: where the needles come to rest.
+  let mode = "off", vState = "off", vEnergy = 0, sEnergy = 0, n = 0, cols = 1, rows = 1, pit = 20, w = 0, h = 0, ox = 0, oy = 0;
+  let th, nx, om, zone, lockT, seg, lev, used, aimAt = null, ink = "", t0 = 0, last = 0, raf = 0, vis = 0, v0 = 1, born = null;
+  let frontierY = 0, targetFrontierY = 0, floorY = 0, pulseT = -1e9;
+  const on = () => !matchMedia("(prefers-reduced-motion: reduce)").matches && document.documentElement.dataset.motion !== "off";
+  const isCanvas = () => document.body.dataset.surface === "canvas";
+  const thinking = () => mode === "think" || mode === "scatter" || mode === "frontier" || mode === "reveal";
+  // Every visible line box under `root` (and bar tracks / chart bar tops); an iframe gets clean horizontal guide bands.
   function lines(root){
-    const out = [], add = (r, top) => { if (r.width > 3 && r.height > 3 && r.bottom > 0 && r.top < h && r.right > 0 && r.left < w && out.length < 400) out.push({x: r.left, y: top ? r.top : r.top + r.height / 2, w: r.width, hh: top ? 2 : r.height / 2}); };
+    const out = [];
+    if (!root) return out;
+    const add = (r, top) => { if (r.width > 3 && r.height > 3 && r.bottom > 0 && r.top < h && r.right > 0 && r.left < w && out.length < 400) out.push({x: r.left, y: top ? r.top : r.top + r.height / 2, w: r.width, hh: top ? 2 : r.height / 2}); };
     const tw = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), range = document.createRange();
     for (let t = tw.nextNode(); t; t = tw.nextNode()) { if (!t.nodeValue.trim()) continue; range.selectNodeContents(t); for (const r of range.getClientRects()) add(r); }
     root.querySelectorAll(".track, .diff .m").forEach(e => add(e.getBoundingClientRect()));
-    root.querySelectorAll("svg.chart rect").forEach(e => add(e.getBoundingClientRect(), true));  // a bar: along its top
+    root.querySelectorAll("svg.chart rect").forEach(e => add(e.getBoundingClientRect(), true));
+    if (!out.length && root.classList.contains("frame")) {
+      const fw = Math.max(80, Math.min(w - 48, 520)), fy = Math.max(36, Math.min(h * 0.24, 96));
+      for (let k = 0; k < 4 && fy + k * 28 < h - 32; k++) out.push({x: 24, y: fy + k * 28, w: fw * (k === 3 ? 0.62 : k === 0 ? 0.45 : 0.88), hh: k === 0 ? 9 : 6});
+    }
     return out.sort((a, b) => a.y - b.y || a.x - b.x);
   }
-  function size(){
+  // Bottom of visible card content (+24px clearance) for ambient whitespace; -1 for wait cards (dodge text), h for full iframes.
+  function contentBottom(root){
+    if (!root || root.classList.contains("thinking") || root.classList.contains("skeleton")) return 0;
+    if (root.classList.contains("frame")) return h;
+    let bot = 0;
+    for (const c of root.children) { const r = c.getBoundingClientRect(); if (r.height > 0) bot = Math.max(bot, r.bottom); }
+    return Math.min(h, Math.max(0, bot));
+  }
+  function contentFloor(root){
+    if (!root || root.classList.contains("thinking") || root.classList.contains("skeleton")) return 0;
+    if (root.classList.contains("frame")) return h;
+    if (root.classList.contains("wait")) return -1;
+    const b = contentBottom(root);
+    return b > 0 ? b + 24 : 0;
+  }
+  // Phase-safe lattice layout: preserves existing oscillator phases across resizes instead of re-randomizing.
+  function size(preserve = false){
+    const oldCols = cols, oldRows = rows, oldTh = th, oldOm = om, keep = preserve && n > 0 && oldTh;
     w = innerWidth; h = innerHeight; const d = Math.min(2, devicePixelRatio || 1);
     cv.width = Math.round(w * d); cv.height = Math.round(h * d); g.setTransform(d, 0, 0, d, 0, 0);
-    pit = Math.max(20, Math.sqrt(w * h / 1600)); cols = Math.max(1, Math.floor(w / pit)); const rows = Math.floor(h / pit); n = cols * rows;  // 1600 needles at most
+    pit = Math.max(20, Math.sqrt(w * h / 1600)); cols = Math.max(1, Math.floor(w / pit)); rows = Math.max(1, Math.floor(h / pit)); n = cols * rows;
     ox = (w - (cols - 1) * pit) / 2; oy = (h - (rows - 1) * pit) / 2;
-    th = new Float32Array(n); nx = new Float32Array(n); om = new Float32Array(n); zone = new Float32Array(n).fill(1); seg = new Float32Array(n * 4); lev = new Uint8Array(n);
-    for (let i = 0; i < n; i++) { th[i] = Math.random() * 2 * Math.PI; om[i] = .4 + Math.random() * 1.6; }  // each its own pace
+    th = new Float32Array(n); nx = new Float32Array(n); om = new Float32Array(n); zone = new Float32Array(n).fill(1);
+    lockT = new Float32Array(n); seg = new Float32Array(n * 4); lev = new Uint8Array(n); used = new Uint8Array(n);
+    if (keep) {
+      for (let i = 0; i < n; i++) {
+        const r = Math.floor(i / cols), c = i % cols;
+        const sr = rows > 1 ? Math.round(r * (oldRows - 1) / (rows - 1)) : 0;
+        const sc = cols > 1 ? Math.round(c * (oldCols - 1) / (cols - 1)) : 0;
+        const si = sr * oldCols + sc;
+        th[i] = oldTh[si]; om[i] = oldOm[si];
+      }
+    } else {
+      for (let i = 0; i < n; i++) { th[i] = Math.random() * 2 * Math.PI; om[i] = .4 + Math.random() * 1.6; }
+    }
   }
-  // While Chief works the needles keep clear of the wait card's words.
-  function clear(){
-    const ls = lines(document.getElementById("s"));
-    for (let i = 0; i < n; i++) { const x = ox + (i % cols) * pit, y = oy + Math.floor(i / cols) * pit; let d = 1e9;
-      for (const l of ls) d = Math.min(d, Math.hypot(Math.max(l.x - x, 0, x - l.x - l.w), Math.max(Math.abs(y - l.y) - l.hh, 0)));
-      zone[i] = clamp((d - 10) / 30); }
+  // Spatial clearance mask: wait cards dodge their words; displayed cards clear everything above their bottom + 24px.
+  // Also softly clears a halo around #hist when visible so needles never clip sharply against its box.
+  function histMask(){
+    const el = document.getElementById("hist");
+    if (!el || el.hidden) return;
+    const r = el.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return;
+    for (let i = 0; i < n; i++) {
+      const x = ox + (i % cols) * pit, y = oy + Math.floor(i / cols) * pit;
+      const d = Math.hypot(Math.max(r.left - x, 0, x - r.right), Math.max(r.top - y, 0, y - r.bottom));
+      zone[i] = Math.min(zone[i], clamp((d - 6) / 22));
+    }
   }
-  // Each line gets needles in proportion to its width, laid end to end; the rest fade out where they stand.
+  function syncZone(root){
+    floorY = contentFloor(root);
+    if (floorY === 0) { zone.fill(1); histMask(); return; }
+    if (floorY < 0) {
+      const ls = lines(root);
+      for (let i = 0; i < n; i++) { const x = ox + (i % cols) * pit, y = oy + Math.floor(i / cols) * pit; let d = 1e9;
+        for (const l of ls) d = Math.min(d, Math.hypot(Math.max(l.x - x, 0, x - l.x - l.w), Math.max(Math.abs(y - l.y) - l.hh, 0)));
+        zone[i] = clamp((d - 10) / 30); }
+      histMask(); return;
+    }
+    for (let i = 0; i < n; i++) { const y = oy + Math.floor(i / cols) * pit; zone[i] = clamp((y - floorY) / 36); }
+    histMask();
+  }
+  // Local spatial assignment: each target line segment claims its nearest unused lattice needle, eliminating cross-screen streaks.
   function aim(ls){
+    aimAt = new Float32Array(n * 4).fill(-1);
+    if (!ls.length || !n) return;
     const total = ls.reduce((s, l) => s + l.w, 0), spots = [];
-    for (const l of ls) { const c = Math.max(1, Math.min(Math.round(l.w / 4), Math.round(n * l.w / total))), each = l.w / c;
-      for (let j = 0; j < c && spots.length < n * 3; j++) spots.push(l.x + each * (j + .5), l.y, each); }
-    aimAt = new Float32Array(n * 3).fill(-1); const m = spots.length / 3;
-    for (let j = 0; j < m; j++) { const i = Math.floor(j * n / m) * 3; aimAt[i] = spots[j * 3]; aimAt[i + 1] = spots[j * 3 + 1]; aimAt[i + 2] = spots[j * 3 + 2]; }
+    if (total <= 0) return;
+    for (const l of ls) {
+      const c = Math.max(1, Math.min(Math.round(l.w / 6), Math.round(n * 0.85 * l.w / total))), each = l.w / c;
+      for (let j = 0; j < c && spots.length < n * 4; j++) spots.push(l.x + each * (j + .5), l.y, each, l.hh);
+    }
+    used.fill(0);
+    const maxR = Math.max(rows, cols);
+    for (let s = 0; s < spots.length; s += 4) {
+      const sx = spots[s], sy = spots[s + 1];
+      const cr = Math.max(0, Math.min(rows - 1, Math.round((sy - oy) / pit)));
+      const cc = Math.max(0, Math.min(cols - 1, Math.round((sx - ox) / pit)));
+      let picked = -1;
+      for (let rad = 0; rad <= maxR && picked < 0; rad++) {
+        const r0 = Math.max(0, cr - rad), r1 = Math.min(rows - 1, cr + rad);
+        const c0 = Math.max(0, cc - rad), c1 = Math.min(cols - 1, cc + rad);
+        for (let r = r0; r <= r1 && picked < 0; r++) {
+          for (let c = c0; c <= c1; c++) {
+            if (rad && r !== r0 && r !== r1 && c !== c0 && c !== c1) continue;
+            const idx = r * cols + c;
+            if (!used[idx]) { picked = idx; break; }
+          }
+        }
+      }
+      if (picked < 0) break;
+      used[picked] = 1;
+      const k = picked * 4;
+      aimAt[k] = sx; aimAt[k + 1] = sy; aimAt[k + 2] = spots[s + 2]; aimAt[k + 3] = spots[s + 3];
+    }
   }
-  function step(dt, lock, now){  // the coupling swells and ebbs while thinking; a reveal turns it up and pulls every phase to zero
-    const K = mix(1.1 + .7 * Math.sin(now * .0009), 6, lock), k = dt * .0009;
+  function step(dt, lock, now, baseK, alignPull){
+    const pe = now - pulseT, waveY = pe >= 0 && pe < PULSE ? (pe / PULSE) * h : -1e9, pAmp = waveY > -1e8 ? 1 - pe / PULSE : 0;
+    const k = dt * .0009, fr = mode === "frontier";
     for (let s = 0; s < 2; s++) {
-      for (let i = 0; i < n; i++) { const a = th[i], x = i % cols; let c = 0;
-        if (x) c += Math.sin(th[i - 1] - a); if (x < cols - 1) c += Math.sin(th[i + 1] - a); if (i >= cols) c += Math.sin(th[i - cols] - a); if (i + cols < n) c += Math.sin(th[i + cols] - a);
-        nx[i] = a + k * (om[i] * (1 - lock) + K * c - 9 * lock * Math.sin(a)); }
+      for (let i = 0; i < n; i++) {
+        const a = th[i], x = i % cols, y = oy + Math.floor(i / cols) * pit;
+        let c = 0;
+        if (x) c += Math.sin(th[i - 1] - a); if (x < cols - 1) c += Math.sin(th[i + 1] - a);
+        if (i >= cols) c += Math.sin(th[i - cols] - a); if (i + cols < n) c += Math.sin(th[i + cols] - a);
+        let K = baseK, pull = alignPull;
+        if (pAmp > 0) { const pw = Math.exp(-(((y - waveY) / 90) ** 2)) * pAmp; K += 1.6 * pw; }
+        if (fr) {
+          const dy = y - frontierY;
+          if (dy >= -10 && dy <= 60) { const edge = 1 - clamp((dy + 10) / 70); K += 3.2 * edge; pull += 5.5 * edge; }
+        }
+        nx[i] = a + k * (om[i] * (1 - lock) + K * c - pull * Math.sin(a));
+      }
       const z = th; th = nx; nx = z;
     }
   }
-  function draw(lock, q){  // a needle in step with the field is brighter: order shows as it forms
+  function draw(lock, q, e, now){
     let sx = 0, sy = 0; for (let i = 0; i < n; i++) { sx += Math.cos(th[i]); sy += Math.sin(th[i]); }
-    const psi = Math.atan2(sy, sx);
-    for (let i = 0; i < n; i++) { const a = th[i], k = i * 3, j = i * 4, to = !!aimAt && aimAt[k + 2] >= 0, m = to ? q : 0;
-      const x = mix(ox + (i % cols) * pit, to ? aimAt[k] : 0, m), y = mix(oy + Math.floor(i / cols) * pit, to ? aimAt[k + 1] : 0, m), half = mix(pit * .29, to ? aimAt[k + 2] / 2 + .3 : 0, m);
-      const ux = mix(Math.cos(a), 1, q) * half, uy = Math.sin(a) * half * (1 - q); seg[j] = x - ux; seg[j + 1] = y - uy; seg[j + 2] = x + ux; seg[j + 3] = y + uy;
-      lev[i] = Math.round(8 * vis * mix(.08 + .2 * (1 + Math.cos(a - psi)), .7, q) * mix(zone[i], 1, lock) * (aimAt && !to ? 1 - q : 1)); }
-    g.clearRect(0, 0, w, h); g.lineCap = "round"; g.lineWidth = mix(1.4, 3, q); g.strokeStyle = ink;
-    for (let l = 1; l <= 8; l++) { g.globalAlpha = l / 8; g.beginPath();
+    const psi = Math.atan2(sy, sx), pe = now - pulseT, waveY = pe >= 0 && pe < PULSE ? (pe / PULSE) * h : -1e9, pAmp = waveY > -1e8 ? 1 - pe / PULSE : 0;
+    const amb = mode === "ambient", sc = mode === "scatter", fr = mode === "frontier", rev = mode === "reveal";
+    let lw = mix(1.4, 2.5, rev ? q : 0);
+    if (amb) lw = 1.3;
+    for (let i = 0; i < n; i++) {
+      const a = th[i], k = i * 4, j = i * 4, gx = ox + (i % cols) * pit, gy = oy + Math.floor(i / cols) * pit;
+      const coh = .5 * (1 + Math.cos(a - psi));
+      let x = gx, y = gy, half = pit * .29, ux, uy, alpha = 0;
+      if (sc) {
+        const delay = (gy / Math.max(1, h)) * .22, p = ease(clamp((e / SCATTER - delay) / (1 - delay)));
+        const has = !!aimAt && aimAt[k + 2] >= 0;
+        if (has) {
+          x = mix(aimAt[k], gx, p); y = mix(aimAt[k + 1], gy, p); half = mix(aimAt[k + 2] / 2 + .3, pit * .29, p);
+          ux = mix(1, Math.cos(a), p) * half; uy = Math.sin(a) * half * p;
+          alpha = vis * mix(.65, .08 + .4 * coh, p);
+        } else {
+          ux = Math.cos(a) * half; uy = Math.sin(a) * half;
+          alpha = vis * p * (.08 + .4 * coh);
+        }
+      } else if (rev) {
+        const to = !!aimAt && aimAt[k + 2] >= 0, m = to ? q : 0;
+        const boost = to && aimAt[k + 3] > 10 ? 1.15 : 1;
+        x = mix(gx, to ? aimAt[k] : gx, m); y = mix(gy, to ? aimAt[k + 1] : gy, m);
+        half = mix(pit * .29, to ? aimAt[k + 2] / 2 + .3 : pit * .29, m);
+        ux = mix(Math.cos(a), 1, q) * half; uy = Math.sin(a) * half * (1 - q);
+        alpha = vis * mix(.08 + .4 * coh, .68 * boost, q) * mix(zone[i], 1, lock) * (aimAt && !to ? 1 - q : 1);
+      } else if (fr) {
+        if (lockT[i] > 0) {
+          const cf = ease(clamp((now - lockT[i]) / CONDENSE));
+          half = mix(pit * .29, pit * .48, cf);
+          ux = mix(Math.cos(a), 1, cf) * half; uy = Math.sin(a) * half * (1 - cf);
+          alpha = vis * (1 - cf) * mix(.45, .62, cf);
+        } else if (gy < frontierY - 6) {
+          alpha = 0; ux = half; uy = 0;
+        } else {
+          const dy = gy - frontierY, edge = dy <= 60 ? 1 - clamp((dy + 6) / 66) : 0;
+          half = mix(pit * .29, pit * .38, edge * .6);
+          ux = mix(Math.cos(a), 1, edge * .45) * half; uy = Math.sin(a) * half * (1 - edge * .45);
+          alpha = vis * mix(.08 + .38 * coh, .46, edge * .7) * zone[i];
+        }
+      } else if (amb) {
+        const base = vState === "speak" ? .09 + .14 * sEnergy + .06 * coh : .08 + .12 * sEnergy + .05 * coh;
+        ux = Math.cos(a) * half; uy = Math.sin(a) * half;
+        alpha = vis * base * zone[i];
+      } else {
+        let pBoost = 0;
+        if (pAmp > 0) pBoost = .14 * Math.exp(-(((gy - waveY) / 90) ** 2)) * pAmp;
+        ux = Math.cos(a) * half; uy = Math.sin(a) * half;
+        alpha = vis * (.08 + .4 * coh + pBoost) * zone[i];
+      }
+      seg[j] = x - ux; seg[j + 1] = y - uy; seg[j + 2] = x + ux; seg[j + 3] = y + uy;
+      lev[i] = Math.min(16, Math.max(0, Math.round(16 * alpha)));
+    }
+    g.clearRect(0, 0, w, h);
+    g.lineCap = document.documentElement.dataset.look === "phosphor" ? "butt" : "round";
+    g.lineWidth = lw; g.strokeStyle = ink;
+    for (let l = 1; l <= 16; l++) {
+      g.globalAlpha = l / 16; g.beginPath();
       for (let i = 0; i < n; i++) if (lev[i] === l) { const j = i * 4; g.moveTo(seg[j], seg[j + 1]); g.lineTo(seg[j + 2], seg[j + 3]); }
-      g.stroke(); }
+      g.stroke();
+    }
   }
-  const land = () => { if (born) { born.classList.remove("born"); born = null; } };  // the card enters as it always has
+  const canAmbient = el => on() && !isCanvas() && (vState === "listen" || vState === "speak") && contentFloor(el) < h - 24;
+  const land = () => { if (born) { born.classList.remove("born"); animEl(born, "emerge"); born = null; } };
+  function clearOut(){ mode = "off"; vis = 0; aimAt = null; g.clearRect(0, 0, w, h); delete document.body.dataset.fx; }
   function frame(now){
-    raf = 0; if (mode !== "off" && !on()) return stop();  // switched off mid-thought: stop() runs the fade, one loop only
-    const dt = Math.min(40, now - (last || now)), e = now - t0, card = mode === "reveal"; last = now;
-    ink = getComputedStyle(document.body).color;  // every frame: the window's appearance can flip mid-thought
-    const lock = card ? ease(clamp(e / LOCK)) : 0, q = card ? ease(clamp((e - LOCK * .6) / (LAND - LOCK * .6))) : 0;
-    vis = mode === "think" ? Math.min(1, vis + dt / 400) : card ? v0 * (1 - clamp((e - LAND) / (GONE - LAND))) : Math.max(0, vis - dt / 200);
-    if (card && e >= LAND) land();
-    if ((card && e >= GONE) || (mode === "off" && vis <= 0)) { mode = "off"; vis = 0; aimAt = null; g.clearRect(0, 0, w, h); delete document.body.dataset.fx; return; }
-    step(dt, lock, now); draw(lock, q); raf = requestAnimationFrame(frame);
+    raf = 0;
+    if (mode !== "off" && !on()) return stop();
+    const dt = Math.min(40, now - (last || now)), e = now - t0; last = now;
+    ink = getComputedStyle(document.body).color;  // every frame: appearance can flip mid-thought
+    sEnergy += (vEnergy - sEnergy) * Math.min(1, dt / 110);
+    if (mode === "scatter" && e >= SCATTER) { mode = "think"; aimAt = null; document.body.dataset.fx = "think"; }
+    if (mode === "frontier") frontierY += (targetFrontierY - frontierY) * Math.min(1, dt / 90);
+    const rev = mode === "reveal", lock = rev ? ease(clamp(e / LOCK)) : 0;
+    const q = rev ? ease(clamp((e - LOCK * .45) / (LAND - LOCK * .45))) : 0;
+    if (mode === "think" || mode === "scatter" || mode === "frontier") vis = Math.min(1, vis + dt / 320);
+    else if (mode === "ambient") vis = Math.min(1, vis + dt / 360);
+    else if (rev) vis = v0 * (1 - clamp((e - (LAND - 60)) / (GONE - (LAND - 60))));
+    else vis = Math.max(0, vis - dt / 200);
+    if (rev && e >= LAND - 80) land();
+    if (rev && e >= GONE) {
+      const cur = document.getElementById("s");
+      if (canAmbient(cur)) { aimAt = null; syncZone(cur); mode = "ambient"; vis = 0; document.body.dataset.fx = vState; }
+      else { clearOut(); return; }
+    }
+    if (mode === "off" && vis <= 0) { clearOut(); return; }
+    const baseK = rev ? mix(1.1 + .7 * Math.sin(now * .0009), 6.5, lock)
+      : mode === "ambient" ? (vState === "speak" ? 2.4 + 2.2 * sEnergy : .8 + 1.4 * sEnergy)
+      : mode === "scatter" ? mix(4.2, 1.1, ease(clamp(e / SCATTER)))
+      : 1.1 + .7 * Math.sin(now * .0009);
+    const pull = rev ? 10 * lock : (mode === "ambient" && vState === "speak" ? 2.2 : 0);
+    step(dt, lock, now, baseK, pull);
+    draw(lock, q, e, now);
+    raf = requestAnimationFrame(frame);
   }
   const kick = () => { if (!raf) { last = 0; raf = requestAnimationFrame(frame); } };
-  function stop(){ land(); if (mode === "reveal") vis = 0; if (mode !== "off") { mode = "off"; kick(); } }  // fades out; a reveal cut short just clears
+  function ambient(el = document.getElementById("s")){
+    if (thinking()) return;
+    if (!canAmbient(el)) { if (mode === "ambient") { mode = "off"; kick(); } return; }
+    if (!n || w !== innerWidth || h !== innerHeight) size(vis > 0);
+    syncZone(el);
+    mode = "ambient"; aimAt = null; document.body.dataset.fx = vState; kick();
+  }
+  function stop(keepAmbient = false){
+    land();
+    if (mode === "reveal" || mode === "scatter") vis = 0;
+    if (keepAmbient) {
+      const cur = document.getElementById("s");
+      if (canAmbient(cur)) {
+        if (!n || w !== innerWidth || h !== innerHeight) size(vis > 0);
+        syncZone(cur); mode = "ambient"; aimAt = null; document.body.dataset.fx = vState; kick(); return;
+      }
+    }
+    if (mode !== "off") { mode = "off"; kick(); }
+  }
+  function scatter(oldEl){
+    if (!on()) return stop();
+    if (!n || w !== innerWidth || h !== innerHeight) size(vis > 0);
+    const ls = lines(oldEl);
+    land(); lockT.fill(0);
+    if (!ls.length) return think();
+    aim(ls);
+    for (let i = 0; i < n; i++) if (aimAt[i * 4 + 2] >= 0) th[i] = 0;
+    zone.fill(1); mode = "scatter"; t0 = performance.now(); vis = Math.max(vis, .85);
+    document.body.dataset.fx = "scatter"; kick();
+  }
   function think(){
     if (!on()) return stop();
-    if (mode !== "think") { if (mode === "off" && (vis <= 0 || w !== innerWidth || h !== innerHeight)) size(); land(); mode = "think"; aimAt = null; document.body.dataset.fx = "think"; }
-    clear(); kick();
+    if (mode === "off" && (vis <= 0 || !n || w !== innerWidth || h !== innerHeight)) size(vis > 0);
+    else if (!n || w !== innerWidth || h !== innerHeight) size(true);
+    land(); lockT.fill(0); mode = "think"; aimAt = null; document.body.dataset.fx = "think";
+    syncZone(document.getElementById("s")); kick();
   }
   function reveal(el){
-    if (mode === "off" || !on() || (mode === "think" && vis < .3)) return stop();  // nothing (yet) to see: the card just enters
-    if (mode === "think") { mode = "reveal"; t0 = performance.now(); v0 = vis; document.body.dataset.fx = "reveal"; }
-    if (performance.now() - t0 < LAND) { land(); born = el; el.classList.add("born"); }  // a newer card mid-reveal takes the needles over
+    if (!on()) return stop();
+    if (mode === "off" || mode === "ambient" || ((mode === "think" || mode === "scatter") && vis < .08)) { stop(true); return; }
+    if (mode !== "reveal") { mode = "reveal"; t0 = performance.now(); v0 = vis; document.body.dataset.fx = "reveal"; }
+    if (performance.now() - t0 < LAND - 80) { land(); born = el; el.classList.add("born"); }
     aim(lines(el)); kick();
   }
-  addEventListener("resize", () => { if (mode === "think") { size(); clear(); } else if (mode === "reveal") stop(); });
-  return {think, reveal, stop};
+  function frontier(el){
+    if (!on()) return stop();
+    if (!thinking() && mode !== "frontier") { ambient(el); return; }
+    if (!n || w !== innerWidth || h !== innerHeight) size(true);
+    const b = contentBottom(el), now = performance.now();
+    if (mode !== "frontier") {
+      land(); aimAt = null; lockT.fill(0); zone.fill(1); histMask();
+      mode = "frontier"; document.body.dataset.fx = "frontier";
+      frontierY = 0; targetFrontierY = b;
+      for (let i = 0; i < n; i++) { const y = oy + Math.floor(i / cols) * pit; if (y <= b + 8) lockT[i] = now; }
+    } else {
+      const prev = targetFrontierY; targetFrontierY = b;
+      for (let i = 0; i < n; i++) { const y = oy + Math.floor(i / cols) * pit; if (!lockT[i] && y >= prev - 10 && y <= b + 8) lockT[i] = now; }
+    }
+    kick();
+  }
+  function settle(el){
+    if (mode === "frontier") {
+      if (canAmbient(el)) { syncZone(el); mode = "ambient"; document.body.dataset.fx = vState; kick(); }
+      else { mode = "off"; kick(); }
+      return;
+    }
+    ambient(el);
+  }
+  function voice(st, energy){
+    if (isCanvas()) return;
+    vState = ["listen", "speak", "think", "muted", "off"].includes(st) ? st : "off";
+    vEnergy = clamp(+energy || 0);
+    if (!thinking()) ambient(document.getElementById("s"));
+  }
+  function pulse(){ if (mode === "think" || mode === "scatter" || mode === "frontier") pulseT = performance.now(); }
+  function reclear(){
+    if (mode === "think" || mode === "ambient") syncZone(document.getElementById("s"));
+    else if (mode === "frontier") { zone.fill(1); histMask(); }
+  }
+  addEventListener("resize", () => {
+    if (mode === "off") return;
+    size(true);
+    const cur = document.getElementById("s");
+    if (mode === "think") syncZone(cur);
+    else if (mode === "ambient") { if (canAmbient(cur)) syncZone(cur); else { mode = "off"; kick(); } }
+    else if (mode === "frontier") targetFrontierY = contentBottom(cur);
+    else if (mode === "reveal") aim(lines(born || cur));
+    else if (mode === "scatter") { mode = "think"; aimAt = null; document.body.dataset.fx = "think"; syncZone(cur); }
+  });
+  addEventListener("scroll", () => { if (mode === "ambient" || mode === "frontier") reclear(); }, { passive: true });
+  return {enabled: on, thinking, visible: () => vis >= .08, scatter, think, reveal, frontier, settle, voice, ambient, pulse, reclear, stop};
 })();
 // The snapshot's MR chips by ref ({"!12": {tone, label}}), and where a ref sits in text: not inside a word, a path or code.
 let REFS = {};
@@ -682,19 +995,23 @@ function specNodes(o){
 window.stage = {
   // The always-on placeholder: "One minute" while Chief works, with what it's doing.
   wait(title, sub){ const h = $("h1", null, title || "One minute"); h.append($("span", "cursor")); show([h, $("div", "sub", sub || "")], (title || "") === "Listening" ? "wait listening" : "wait"); },
-  // A turn began (issue 208): a card already up stays, stepped down to muted, as the last answer; with none (or only the
-  // listening card) a still skeleton of the answer stands in. The line goes on the status strip. Whatever comes next replaces it.
+  // A turn began: dissolve any displayed card cleanly into the Kuramoto thinking field (previous cards stay in history).
+  // Under reduced motion or Thinking motion off, a still skeleton stands in so the stage is never blank.
   hold(line){
     if (streamEl) { streamEl.classList.remove("streaming"); caret(streamEl, false); streamEl = null; }  // a new turn ends any off-screen stream
     CARDS.concat(document.getElementById("s")).forEach(c => c.querySelectorAll(":scope > .options").forEach(o => o.remove()));  // a new turn: every earlier reply's options are stale
-    const s = document.getElementById("s"), card = s.childElementCount && !/\b(wait|skeleton|board)\b/.test(s.className);
-    if (card) { s.classList.remove("streaming"); caret(s, false); s.classList.add("held"); }
-    else if (!s.classList.contains("skeleton")) {
+    const s = document.getElementById("s");
+    if (fx.enabled()) {
+      const had = s.childElementCount && !/\b(thinking|skeleton)\b/.test(s.className);
+      if (had) { ghost.leave(s, "out"); fx.scatter(s); }
+      else if (!s.classList.contains("thinking")) fx.think();
+      if (!s.classList.contains("thinking")) { show([], "thinking", false); }
+    } else if (!s.classList.contains("skeleton")) {
       const k = $("div", "skel"); k.setAttribute("aria-hidden", "true");
       [["lead", 58], [null, 92], [null, 84], [null, 88], [null, 46]].forEach(([c, w]) => { const i = $("i", c); i.style.width = w + "%"; k.append(i); });
-      show(k, "skeleton");
+      show(k, "skeleton", false);
+      fx.stop();
     }
-    fx.think();
     if (line != null) stage.status(line);
   },
   // Haiku's (or the local fallback's) drawing: {eyebrow, title, kind, stat, items:[{label, detail}]}; text only, never markup.
@@ -705,11 +1022,11 @@ window.stage = {
     if (o.kind === "board" && liveEl?.dataset.card === key) { morph(liveEl, nodes); return; }  // you went back: the board updates behind the card
     if (o.kind === "board" && CARDS.includes(s)) return;  // a card is up (an answer, or one you went back to): the board doesn't take it
     const latest = !CARDS.includes(s) || s === CARDS[CARDS.length - 1];  // an earlier card on show is history: a new card isn't morphed into it
-    if (s.dataset.card === key && latest && !s.classList.contains("skeleton")) {
+    if (s.dataset.card === key && latest && !s.classList.contains("skeleton") && !s.classList.contains("thinking")) {
       freeze(s); const cg = [...s.querySelectorAll("table.grid > colgroup")].map(c => [c.parentElement, c]); cg.forEach(([, c]) => c.remove());
-      morph(s, nodes); s.classList.remove("held");
+      morph(s, nodes);
       cg.forEach(([t, c]) => { if (t.isConnected) t.prepend(c); });  // the new rows, the same columns
-      if (document.body.dataset.fx === "think") fx.reveal(s);  // it was held while Chief thought: the field lands on it as on any card
+      if (fx.thinking()) fx.reveal(s); else fx.ambient(s);
       return;
     }
     show(nodes, o.kind === "board" ? "board" : undefined, o.kind !== "board"); document.getElementById("s").dataset.card = key;
@@ -764,20 +1081,24 @@ window.stage = {
     show((o.sub ? [$("div", "eyebrow", str(o.sub))] : []).concat([$("h1", null, str(o.title)), g], lg.children.length ? [lg] : [], o.note ? [$("div", "foot", str(o.note))] : []));
   },
   // Chief's [screen] text under the spoken gist: {lead, md, live}. Markdown is read for its structure; everything lands as text.
-  // live (issue 208): the reply is still being written. The first such call draws the page; each later one keeps the settled
-  // blocks, patches the last in place and appends new ones, with no reset of the scroll. A call without live ends the stream.
+  // live (issue 208): the reply is still being written. The first such call starts the rolling frontier; each later one keeps
+  // settled blocks, patches the last in place, appends new ones, and advances the frontier. A call without live settles it.
   text(o){
     o = o && typeof o === "object" ? o : {};
     const lead = str(o.lead).trim(), live = o.live === true, md = live ? settled(o.md) : o.md;
     const s = streamEl?.classList.contains("streaming") ? streamEl : document.getElementById("s");  // you may have gone back mid-stream
-    if (s.classList.contains("streaming")) { caret(s, false); patchDoc(s, lead, chipify(blocks(md))); }
+    const wasStreaming = s.classList.contains("streaming");
+    if (wasStreaming) { caret(s, false); patchDoc(s, lead, chipify(blocks(md))); }
     else {
-      if (live) fx.stop();
-      show((lead ? [$("p", "lead", lead)] : []).concat(chipify(blocks(md))), "doc");
+      show((lead ? [$("p", "lead", lead)] : []).concat(chipify(blocks(md))), "doc", true, live ? "frontier" : "");
     }
-    const now = s.classList.contains("streaming") ? s : document.getElementById("s");
+    const now = wasStreaming ? s : document.getElementById("s");
     now.classList.toggle("streaming", live); streamEl = live ? now : null;
+    if (!live) animEl(now, "");
     caret(now, live);
+    if (wasStreaming && now === document.getElementById("s")) {
+      if (live) fx.frontier(now); else fx.settle(now);
+    }
   },
   // The idle stage giving way to Listening (issue 208, the board emptied): behind a card you went back to, else on the stage.
   idle(title, sub){
@@ -785,12 +1106,19 @@ window.stage = {
     const h = $("h1", null, title || "Listening"), w = $("div", "wait listening"); h.append($("span", "cursor")); w.id = "s";
     w.append(h, $("div", "sub", str(sub))); liveEl = w; histUI();
   },
-  // The card history (issue 208): "go back" and the ‹ › buttons. Back from the board or Listening shows the latest card;
+  // The card history (issue 208): "go back" and the ‹ › buttons. Back from the board, thinking or Listening shows the latest card;
   // forward past the latest returns to it.
-  back(){ const cur = document.getElementById("s"); if (!CARDS.length) return; toCard(CARDS.includes(cur) ? Math.max(0, atCard - 1) : CARDS.length - 1); },
+  back(){ const cur = document.getElementById("s"); if (!CARDS.length) return; toCard(CARDS.includes(cur) ? Math.max(0, atCard - 1) : CARDS.length - 1, "back"); },
   forward(){
-    if (atCard < CARDS.length - 1 && CARDS.includes(document.getElementById("s"))) return toCard(atCard + 1);
-    if (liveEl) { const cur = document.getElementById("s"); cur.replaceWith(liveEl); liveEl = null; histUI(); }
+    if (atCard < CARDS.length - 1 && CARDS.includes(document.getElementById("s"))) return toCard(atCard + 1, "fwd");
+    if (liveEl) {
+      const cur = document.getElementById("s"), next = liveEl;
+      ghost.leave(cur, "fwd");
+      next.classList.remove("born");
+      animEl(next, next.classList.contains("thinking") ? "" : "slide-fwd");
+      cur.replaceWith(next); liveEl = null; histUI();
+      if (next.classList.contains("thinking")) fx.think(); else fx.ambient(next);
+    }
   },
   // The snapshot's MR chips (issue 208): the whole map, then patch() with what changed ({ref: {tone, label}} or null to drop).
   // A chip on the card that's up changes in place: no redraw, and nothing else on the card moves.
@@ -817,17 +1145,21 @@ window.stage = {
     const row = $("div", "options"); row.setAttribute("role", "group"); row.setAttribute("aria-label", "Options");
     os.forEach(([t, i]) => { const a = $("a", "option", t); a.href = "greenlight-option:" + i; row.append(a); });
     host.append(row);
+    if (host === s) { if (fx.thinking()) fx.reclear(); else fx.ambient(s); }
   },
   // The status line under the stage (issue 176): one short line of what Chief is doing, text only, updated in place; "" clears it.
   status(line){
     const el = document.getElementById("status"), t = str(line).trim();
     document.body.classList.toggle("status", !!t);
-    if (document.body.dataset.fx === "think") fx.think();  // the strip lifts the wait card's words: the needles make way again
+    fx.reclear();  // the strip lifts a wait card's words: the needles make way again
     if (!t) { el.hidden = true; el.replaceChildren(); return; }
-    const span = el.querySelector("span");
+    const span = el.querySelector("span"), changed = !span || span.textContent !== t;
+    if (changed) fx.pulse();
     if (span && !el.hidden) { span.textContent = t; return; }  // in place: no re-entry for each new line
     el.replaceChildren(toneGlyph("now"), $("span", null, t)); el.hidden = false;
   },
+  // Live voice state and audio energy (listen | speak | think | muted | off, 0..1) for the subtle reactive field.
+  voice(state, energy){ fx.voice(state, energy); },
   // Chief's own page (a ```stage block): sandboxed, so it can't run scripts, reach the app or load anything.
   html(str){
     const f = $("iframe"); f.setAttribute("sandbox", "");

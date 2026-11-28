@@ -47,11 +47,14 @@ final class Voice: NSObject, ObservableObject {
     var stageQueued: String? { stageNav?.queued }  // the call waiting for the stage page to load (VoiceTests)
     /// The stage's side of thinkingMotion: data-motion on its root, which it reads as each wait begins (and mid-thought).
     var motionVars: String { thinkingMotion ? "document.documentElement.dataset.motion = 'on';" : "document.documentElement.dataset.motion = 'off';" }
-    @Published var transcript = false  // the chat instead of the stage
+    @Published var transcript = false {  // the chat instead of the stage
+        didSet { if !transcript, on { pushVoiceFX(force: true) } }
+    }
     @Published var speaking = 0 {  // speech buffers queued and not yet played
         didSet {
             guard (oldValue > 0) != (speaking > 0) else { return }
             lock.lock(); voiceOut = speaking > 0; lock.unlock()
+            pushVoiceFX(force: true)
         }
     }
     @Published var fallback = ""  // why Apple's voice is standing in for the chosen one ("" when it isn't)
@@ -139,7 +142,7 @@ final class Voice: NSObject, ObservableObject {
         let u = page("stage")
         let nav = StageNav(u); stageNav = nav
         nav.option = { [weak self] i in self?.pickOption(i) }
-        nav.loaded = { [weak self] in guard let self else { return }; self.refsSent = nil; if let c = self.core { self.refs(c.pucks) } }  // the chips again (#208)
+        nav.loaded = { [weak self] in guard let self else { return }; self.refsSent = nil; if let c = self.core { self.refs(c.pucks) }; if self.on { self.pushVoiceFX(force: true) } }  // the chips and reactive state again (#208)
         let v = WKWebView(frame: .zero, configuration: cfg)
         v.navigationDelegate = nav; v.uiDelegate = nav
         v.setValue(false, forKey: "drawsBackground")
@@ -195,6 +198,20 @@ final class Voice: NSObject, ObservableObject {
         refsSent = nil; if let c = core { refs(c.pucks) }  // a new page (or a new voice mode) starts from the whole map
         if let r = core?.run, !r.watch, !r.checkIn { put("stage.hold", [byline(r, now: Date(), lead: true)], by: "app"); statusUp = true }
         else { idleStage = true; boardUp = false; board(core?.pucks ?? [], first: true) }  // what needs you, or Listening when nothing does
+        pushVoiceFX(force: true)
+    }
+    /// Throttled voice state and audio energy pushed to stage.html's subtle reactive field (~16 Hz while active, immediate on state change).
+    var voiceFxAt = 0.0, voiceFxState = "", voiceFxEnergy = -1.0
+    func pushVoiceFX(force: Bool = false, thinking: Bool? = nil) {
+        guard on, !transcript else { return }
+        let p = voiceFXPayload(speaking: speaking > 0, thinking: thinking ?? (core?.run != nil), micMuted: micMuted,
+                               youLevel: Double(meter.you.last ?? 0), chiefLevel: Double(meter.chief.last ?? 0))
+        let now = ProcessInfo.processInfo.systemUptime
+        let changed = p.state != voiceFxState
+        guard force || changed || (now - voiceFxAt >= 0.06 && abs(p.energy - voiceFxEnergy) >= 0.02) else { return }
+        voiceFxAt = now; voiceFxState = p.state; voiceFxEnergy = p.energy
+        if stageNav?.ready == true { stageWeb.callJS("stage.voice", [p.state, p.energy]) }
+        else if force { js("stage.voice", [p.state, p.energy]) }
     }
     /// The stage is idle (#208): voice mode's start, before any turn draws. Each snapshot redraws the board in place (the same
     /// card: only what changed moves), or goes to Listening when nothing's left, and back to the board when something is.
@@ -345,12 +362,12 @@ final class Voice: NSObject, ObservableObject {
             guard !off, let conv, let m = convert(b, conv, self.micFormat) else { return }  // muted: nothing for Apple's recognizer or the meter
             r?.append(m)
             let l = level(m)
-            DispatchQueue.main.async { self.meter.you = Array(self.meter.you.dropFirst()) + [l] }
+            DispatchQueue.main.async { self.meter.you = Array(self.meter.you.dropFirst()) + [l]; self.pushVoiceFX() }
         }
         inputTapped = true
         try engine.mainMixerNode.tap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] b, _ in
             let l = level(b)
-            DispatchQueue.main.async { guard let self else { return }; self.meter.chief = Array(self.meter.chief.dropFirst()) + [self.speaking > 0 ? l : 0] }
+            DispatchQueue.main.async { guard let self else { return }; self.meter.chief = Array(self.meter.chief.dropFirst()) + [self.speaking > 0 ? l : 0]; self.pushVoiceFX() }
         }
         mixerTapped = true
         engine.prepare()
@@ -437,8 +454,9 @@ final class Voice: NSObject, ObservableObject {
         Voice.turnSeq += 1; turnNo = Voice.turnSeq; turnAt = Date(); turnDraws = 0  // per process: each session's Voice shares the trail's `run`
         guard on else { return }
         startStatus(r)
-        put("stage.hold", [byline(r, now: Date(), lead: true)], by: "app")  // the last card, muted, or a skeleton; never an empty stage
+        put("stage.hold", [byline(r, now: Date(), lead: true)], by: "app")  // dissolve into the thinking field (or skeleton with motion off)
         statusUp = true
+        pushVoiceFX(force: true, thinking: true)
         if r.spoken { instant(r.question) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
             guard let self, self.core?.run === r, self.said == 0, self.speaking == 0 else { return }
@@ -545,6 +563,7 @@ final class Voice: NSObject, ObservableObject {
         defer {  // after whichever card this turn ends on: the reply's options as buttons under it (#208)
             stageOptions = st.parts.options
             js("stage.options", [stageOptions])  // [] too: no earlier row can outlive this turn
+            pushVoiceFX(force: true, thinking: false)
         }
         clearStatus()
         if let h = st.stage { stage(h, lead: gist) } else if let o = st.stageOpen { stage(o, lead: gist) }  // a block never closed: drawn as it stands
@@ -572,6 +591,7 @@ final class Voice: NSObject, ObservableObject {
         clearStatus()
         said = 0
         wait("Listening", plain(text))
+        pushVoiceFX(force: true, thinking: false)
         say(forEar(text))
     }
     /// Chief's own ```stage block: a chart or a catalog card drawn natively, HTML as is, plain notes as markdown (#208: no second
@@ -753,6 +773,7 @@ final class Voice: NSObject, ObservableObject {
             heard = ""
             meter.you = meter.you.map { _ in 0 }
         } else if on { listen() }
+        pushVoiceFX(force: true)
     }
 
     /// Never started (or long since stopped): nothing for stopAll to stop. It touches engine.inputNode, which on a Mac that hasn't
@@ -761,6 +782,8 @@ final class Voice: NSObject, ObservableObject {
     func stopAll() {
         startGen += 1; starting = false  // and any start still retrying
         hush(); clearStatus(); endStream(); instantUp = false  // a send still on its way doesn't land on the next voice mode's stage
+        voiceFxState = ""; voiceFxEnergy = -1
+        if stageWebLoaded && stageNav?.ready == true { stageWeb.callJS("stage.voice", ["off", 0]) }
         live.close(); liveUp = false; delegation = nil; liveOut = nil
         endTurn?.cancel()
         task?.cancel(); task = nil
@@ -775,6 +798,14 @@ final class Voice: NSObject, ObservableObject {
         meter.you = meter.you.map { _ in 0 }; meter.chief = meter.chief.map { _ in 0 }
         LivePreview.shared.voiceModeEnded()
     }
+}
+
+/// Voice mode's reactive-field state and clamped RMS energy (rounded to 2 decimals) for stage.html's `stage.voice(state, energy)`.
+func voiceFXPayload(speaking: Bool, thinking: Bool, micMuted: Bool, youLevel: Double, chiefLevel: Double) -> (state: String, energy: Double) {
+    let state = speaking ? "speak" : thinking ? "think" : micMuted ? "muted" : "listen"
+    let raw = state == "speak" ? chiefLevel : state == "listen" ? youLevel : 0
+    let energy = (max(0, min(1, raw.isFinite ? raw : 0)) * 100).rounded() / 100
+    return (state, energy)
 }
 
 /// Voice mode's claim on the mic, posted to every Greenlight on this Mac as it starts.

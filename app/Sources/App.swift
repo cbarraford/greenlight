@@ -556,6 +556,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         pushTrees()
         streamDash()
         rescan()
+        ensureLocalDashIfNeeded()
         if !uitest { hotKey() }
         mainMenu()
         detached.forEach(detach)  // views the user gave their own windows last time
@@ -808,10 +809,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
     }
 
-    // MARK: dashboard data (dash.py where greenlight runs, plus local Mac when any project runs there)
+    // MARK: dashboard data (dash.py where greenlight runs, plus the local Mac)
 
     var rescanning = false
-    var dashSnapObj: [String: Any]?  // newest validated snapshot (merged across server + local Mac when needed)
+    var dashSnapObj: [String: Any]?  // newest validated snapshot (merged across server + local Mac)
     var serverSnapObj: [String: Any]?, localSnapObj: [String: Any]?
     var repoHosts = [String: RepoHostInfo]()  // per-repo host preference & resolved target ("server" | "mac")
     var snapHostByName = [String: String](), snapHostByPath = [String: String]()
@@ -820,11 +821,6 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     var wsHostByName = [String: String](), wsHostByPath = [String: String]()  // rebuilt from merged trees + snapshots
     var localScanned = false
     var initialServerTreesDone = false, initialLocalTreesDone = isLocalHost(host)
-
-    var anyMacNeeded: Bool {
-        !isLocalHost(host) && (repoHosts.values.contains { $0.target == "mac" }
-            || isLocalHost(greenlight.chatHost) || l1s.values.contains { isLocalHost($0.c.chatHost) })
-    }
 
     private func rebuildWorkspaceHostIndex() {
         let fresh = snapHostByPath.merging(treeHostByPath) { _, t in t }  // native trees win over snapshots
@@ -934,7 +930,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 self?.termWebs.forEach { $0.callJS("window.term && term.rescanned", [code]) }; self?.pushTrees()  // the Basement's footer: its ↻ stops, the new scan time follows
             }
         })
-        if anyMacNeeded && !uitest && !selftest {
+        if !isLocalHost(host) && !uitest && !selftest {
             localScanned = true
             ssh("\(pyCmd(on: "local"))/greenlight.py scan >/dev/null", on: "local")
         }
@@ -960,7 +956,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
 
     func ensureLocalDashIfNeeded() {
-        guard anyMacNeeded, localDashProc == nil, !uitest, !selftest else { return }
+        guard !isLocalHost(host), localDashProc == nil, !uitest, !selftest else { return }
         if !localScanned {
             localScanned = true
             ssh("\(pyCmd(on: "local"))/greenlight.py scan >/dev/null", on: "local")

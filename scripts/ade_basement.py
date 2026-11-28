@@ -67,7 +67,7 @@ SPIN = re.compile(r"^[^\w\s❯>] ?\S[^(]*…(?: \(\d+[smh]\b|$)")  # Claude's "�
 
 
 def agent_type(title, cmd=""):
-    """Identify a Basement pane's agent (claude, codex, agy) from its title glyph or tmux command, else None."""
+    """Identify a Basement pane's agent (claude, codex, agy, gemini, opencode, pi) from its title glyph or tmux command, else None."""
     g = (title or "")[:1]
     if "⠀" <= g <= "⣿" or g == "✳":
         return "claude"
@@ -82,6 +82,12 @@ def agent_type(title, cmd=""):
         return "codex"
     if low in ("agy", "antigravity") or low.startswith("agy-"):
         return "agy"
+    if low == "gemini" or low.startswith("gemini-"):
+        return "gemini"
+    if low == "opencode" or low.startswith("opencode-"):
+        return "opencode"
+    if low == "pi":
+        return "pi"
     return None
 
 
@@ -196,18 +202,16 @@ def worktrees():
         if owner is not None:
             owned.setdefault(owner, []).append(p)
     out, ext = [], external.by_worktree_safe(paths)  # agents another ADE or a plain terminal runs in these worktrees
+    recs, now_ms = _load_recs(), int(time.time() * 1000)
     for path in dict.fromkeys(paths):
         mine = owned.get(path, [])
         ags = []
         for p in mine:
-            kind = agent_type(p["title"], p.get("cmd", ""))
-            if not kind:
-                continue
-            needs_tail = kind != "claude" or not ("⠀" <= p["title"][:1] <= "⣿")
-            s = state(p["title"], screen(p["handle"]) if needs_tail else None, p.get("cmd", ""))
-            if s:
-                ags.append({"state": s, "agentType": kind, "updatedAt": int(p["at"] or 0) * 1000,
-                            "stateStartedAt": int(p["at"] or 0) * 1000, "handle": p["handle"]})
+            kind, s = _pane_agent(p, path, recs, now_ms)
+            if kind and s:
+                at_ms = int(p["at"] or 0) * 1000
+                ags.append({"state": s, "agentType": kind, "updatedAt": at_ms, "stateStartedAt": at_ms,
+                            "handle": p["handle"], "session": p.get("session"), "paneKey": f"basement:{p['handle']}"})
         # passive coexistence: busy, not ours to drive. updatedAt 0: an agent of ours here that's active still comes first
         ags += [{"state": "working", "agentType": e["agent"], "external": True, "pid": e["pid"], "updatedAt": 0,
                  "stateStartedAt": e["start"] * 1000 if e.get("start") else None} for e in ext.get(path, [])]
@@ -234,6 +238,42 @@ def send(handle, text, enter):
         tmux("send-keys", "-t", handle, "Enter")
     else:  # a menu pick
         tmux("send-keys", "-t", handle, "-l", "--", text)
+
+
+def _load_recs():
+    try:
+        raw = last_agent.load()
+    except OSError:
+        return {}
+    out = {}
+    for p, rec in raw.items():
+        np = os.path.normpath(p)
+        out[np] = rec
+        rp = os.path.realpath(np)
+        if rp != np:
+            out.setdefault(rp, rec)
+    return out
+
+
+def _pane_agent(p, owner=None, recs=None, now_ms=None):
+    """Identify (kind, state) for a Basement tmux pane, falling back to last_agent for starting or wrapped harnesses."""
+    title, cmd = p["title"], p.get("cmd", "")
+    kind = agent_type(title, cmd)
+    raw_rec = (recs or {}).get(owner) if owner else None
+    rec = raw_rec if isinstance(raw_rec, dict) and raw_rec.get("session") == p.get("session") else None
+    fresh_rec = bool(rec and now_ms is not None and rec.get("used") and 0 <= now_ms - rec["used"] < 15_000)
+    if not kind and rec is not None:
+        if last_agent.cmd(p) in last_agent.CMDS.get(rec["harness"], ()):
+            kind = rec["harness"]
+        elif fresh_rec:
+            return rec["harness"], "working"
+    if not kind:
+        return None, None
+    needs_tail = kind != "claude" or not ("⠀" <= title[:1] <= "⣿")
+    s = state(title, screen(p["handle"]) if needs_tail else None, kind)
+    if s == "done" and fresh_rec and rec is not None and last_agent.cmd(p) in last_agent.CMDS.get(rec["harness"], ()):
+        s = "working"
+    return kind, s
 
 
 def outside(path, paths=None):

@@ -416,26 +416,88 @@ def test_dash_new_task_and_tree_new_preflight_gates(lifestage_env):
     assert out["ok"] and lifestage.record("preflight", {"name": "make-it-worse"})["forced"]
 
     # New workspace: asked only when an agent would start on a goal
-    tcalls = []
+    import ade_basement
+
+    tcalls, launches = [], []
 
     def tree_call(*a):
         tcalls.append(a)
         return {"worktree": {"path": "/w/new", "worktreeId": "t1"}} if a[:2] == ("worktree", "create") else {}
 
+    def fake_launch(path, agent, prompt):
+        launches.append((path, agent, prompt))
+        return {"terminal": {"handle": "%9", "session": "mc-pf"}}
+
     with (
         mock.patch.object(dash, "tree", return_value=(tree_call, {"repoId": "r"}, [{"repoId": "r"}])),
         mock.patch.object(dash, "repo_cfg", return_value={}),
+        mock.patch.object(ade_basement, "launch", side_effect=fake_launch),
         mock.patch.dict(sys.modules, {"decide": FakeDecide(0.9, clarity=0.2)}),
     ):
         p = dash.tree_new("/w/repo", {"name": "better", "goal": "make it better", "agent": True})
-        assert p["paused"] and len(p["questions"]) == 2 and not tcalls
-        assert dash.tree_new("/w/repo", {"name": "better", "goal": "make it better", "agent": False})["ok"] and tcalls
+        assert p["paused"] and len(p["questions"]) == 2 and not tcalls and not launches
+        assert dash.tree_new("/w/repo", {"name": "better", "goal": "make it better", "agent": False})["ok"] and tcalls and not launches
         tcalls.clear()
-        assert dash.tree_new("/w/repo", {"name": "better", "goal": "make it better", "agent": True, "answers": {"scope": "Investigate and report back first"}})["ok"]
-        launch = next(a for a in tcalls if a[:2] == ("agent", "launch"))
-        assert launch[launch.index("--prompt") + 1].startswith("make it better\n\nBefore you started I answered these:\n- How far should it go? Investigate and report back first")
-        assert "lifestage.py selftest -- <the test command>" in launch[launch.index("--prompt") + 1]
+        out = dash.tree_new("/w/repo", {"name": "better", "goal": "make it better", "agent": True, "answers": {"scope": "Investigate and report back first"}})
+        assert out["ok"] and out["session"] == "mc-pf"
+        assert not any(a[:2] == ("agent", "launch") for a in tcalls)
+        assert len(launches) == 1 and launches[0][0] == "/w/new"
+        assert launches[0][2].startswith("make it better\n\nBefore you started I answered these:\n- How far should it go? Investigate and report back first")
+        assert "lifestage.py selftest -- <the test command>" in launches[0][2]
         assert lifestage.record("preflight", {"path": "/w/new"})["answers"]
+
+
+def test_tree_new_starts_default_harness_in_basement_preserving_goal_newlines(monkeypatch):
+    import ade_basement
+
+    create_calls, launches = [], []
+
+    def fake_create(*args, **kw):
+        create_calls.append(args)
+        if args[:2] == ("worktree", "create"):
+            return {"worktree": {"path": "/w/new"}}
+        return {}
+
+    def fake_launch(path, agent, prompt):
+        launches.append((path, agent, prompt))
+        return {"terminal": {"handle": "%4", "session": "mc-new"}}
+
+    monkeypatch.setattr(dash, "tree", lambda path, every=False: (fake_create, {"repoId": "/w/repo", "hostId": "local"}, [{"repoId": "/w/repo", "hostId": "local"}]))
+    monkeypatch.setattr(dash, "repo_cfg", lambda path: {})
+    monkeypatch.setattr(dash, "main_of", lambda path: None)
+    monkeypatch.setattr(dash, "preflight", lambda *args: None)
+    monkeypatch.setattr(ade_basement, "launch", fake_launch)
+    monkeypatch.setitem(greenlight.CONFIG, "agents", ["codex", "claude"])
+
+    goal = "Fix login\nKeep the existing API"
+    out = dash.tree_new("/w/repo", {"name": "login", "goal": goal, "agent": True})
+    assert out["ok"] and out["path"] == "/w/new" and out["session"] == "mc-new"
+    assert not any(args[:2] == ("agent", "launch") for args in create_calls)
+    assert len(launches) == 1
+    assert launches[0][0] == "/w/new" and launches[0][1] == "codex"
+    assert launches[0][2].startswith(goal) and "gate push --execute" in launches[0][2]
+
+
+def test_tree_new_warns_on_basement_launch_failure_and_remote_missing_id(monkeypatch):
+    import ade_basement
+
+    def local_call(*args):
+        if args[:2] == ("worktree", "create"):
+            return {"worktree": {"path": "/w/new"}}
+        return {"worktrees": []}
+
+    monkeypatch.setattr(dash, "tree", lambda path, every=False: (local_call, {"repoId": "r"}, [{"repoId": "r"}]))
+    monkeypatch.setattr(dash, "repo_cfg", lambda path: {})
+    monkeypatch.setattr(dash, "main_of", lambda path: None)
+    monkeypatch.setattr(dash, "preflight", lambda *args: None)
+    monkeypatch.setattr(ade_basement, "launch", lambda *args: (_ for _ in ()).throw(RuntimeError("tmux isn't installed")))
+    out = dash.tree_new("/w/repo", {"name": "login", "goal": "Fix login", "agent": True})
+    assert out["ok"] and "didn't start" in out["warn"] and "session" not in out
+
+    # Remote Orca worktree falls back to ADE launch and warns when worktree ID is missing
+    monkeypatch.setattr(dash, "tree", lambda path, every=False: (local_call, {"repoId": "r", "hostId": "ssh:t1"}, [{"repoId": "r", "hostId": "ssh:t1"}]))
+    out = dash.tree_new("/w/repo", {"name": "login", "goal": "Fix login", "agent": True})
+    assert out["ok"] and "no agent started" in out["warn"]
 
 
 def test_lifestage_cli_piles_and_custom_phases(lifestage_env, tmp_path):

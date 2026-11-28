@@ -1129,14 +1129,38 @@ def local_twin(w, twins):
     return next((x for x in twins if greenlight.is_local(x) and same(x)), w)
 
 
+def _tree_new_launch(call, w, new, wid, goal, gate):
+    """Start the default harness for tree_new: in Basement's tmux for local worktrees (even under Orca), else via the ADE."""
+    agent = (greenlight.CONFIG.get("agents") or ["claude"])[0]
+    prompt = (goal + (gate or {}).get("brief", "") + PUSH_RULE
+              + f"\n\nIf you implement code, run its tests with `python3 {Path(lifestage.__file__).resolve()} selftest -- <the test command>` "
+                "in this worktree before opening a draft PR, so the self-test is on record.") if goal else ""
+    if greenlight.is_local(w):
+        try:
+            return importlib.import_module("ade_basement").launch(new, agent, prompt)
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as e:
+            return {"error": str(e)}
+    if not wid:
+        found: dict = next((x for x in call("worktree", "ps", "--limit", "10000")["worktrees"]
+                            if x.get("path") == new and x.get("repoId") == w["repoId"]), {})
+        wid = found.get("worktreeId") or found.get("id")
+    if not wid:
+        return {"warn": "The workspace was made, but its ID couldn't be found; no agent started"}
+    try:
+        return call("agent", "launch", "--agent", agent, "--worktree", f"id:{wid}",
+                    *(["--prompt", prompt] if goal else []))
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as e:
+        return {"error": str(e)}
+
+
 def tree_new(path, o):
     """The sidebar's New workspace: branch `name` off `base` as a worktree of path's repo, made by the ADE that holds path;
-    then the repo's setup command in it, then the default agent on the goal. Setup runs only when the page showed it (o.setup)
-    and the file still says the same: a repo can't slip a new command in between."""
+    then the repo's setup command in it, then the default agent on the goal in Basement's tmux. Setup runs only when the
+    page showed it (o.setup) and the file still says the same: a repo can't slip a new command in between."""
     name, base = str(o.get("name") or "").strip(), str(o.get("base") or "").strip()
     if not BRANCH_RE.fullmatch(name) or ".." in name or base and (not BRANCH_RE.fullmatch(base) or ".." in base):
         return {"error": "a branch name is letters, digits, and . _ - /"}
-    goal = " ".join(str(o.get("goal") or "").split())[:500]
+    goal = str(o.get("goal") or "").strip()[:500]
     gate = preflight(goal, "", o) if o.get("agent") and goal else None
     if gate and gate["pause"]:  # 1.3: ask before anything is made, so a dismissed question leaves nothing behind
         return paused(gate)
@@ -1167,12 +1191,12 @@ def tree_new(path, o):
     if isinstance(cmd, str) and o.get("setup") and o["setup"] == cmd and (err := hook(cmd, new)):
         return {"ok": True, "path": new, "repo": path, "warn": f"Setup failed ({err}); no agent started"}
     out = {"ok": True, "path": new, "repo": path}  # repo: the checkout it was asked for, so the page files the new row under that repo's project at once
-    if o.get("agent") and wid:
-        prompt = (goal + (gate or {}).get("brief", "") + PUSH_RULE
-                  + f"\n\nIf you implement code, run its tests with `python3 {Path(lifestage.__file__).resolve()} selftest -- <the test command>` "
-                    "in this worktree before opening a draft PR, so the self-test is on record.")
-        r = call("agent", "launch", "--agent", greenlight.CONFIG["agents"][0], "--worktree", f"id:{wid}",
-                 *(["--prompt", prompt] if goal else []))
+    if o.get("agent"):
+        r = _tree_new_launch(call, w, new, wid, goal, gate)
+        if r.get("warn"):
+            out["warn"] = r["warn"]
+        elif r.get("error"):
+            out["warn"] = f"The workspace was made, but its agent didn't start: {str(r['error'])[:200]}"
         if gate:
             lifestage.save("preflight", new, gate["record"])
         if s := (r.get("terminal") or {}).get("session"):
