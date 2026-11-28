@@ -2661,7 +2661,7 @@ window.term = {
     if (x.autoBusy) { x.autoBusy = false; if (name && !x.manual) x.name = name } else { x.naming = false; if (name) { x.name = name; x.manual = false; x.sig = sigOf(x) } }
     render();
   },
-  focus: () => { if (!ready || !restored) return; if (!tabs.length) newTab(acctHome()); else cur.focus.t.focus() },
+  focus: () => { if (!ready || !restored) return; if (!tabs.length) { if (!waitTrees.length) newTab(acctHome()) } else cur.focus.t.focus() },  // a waiting request opens the first tab
   restore,
   tree: o => { treeDone(o) },
   turn: o => turnRead(o),

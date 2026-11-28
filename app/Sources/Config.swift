@@ -331,6 +331,9 @@ func mergeTreesPayload(_ primary: [String: Any]?, _ secondary: [String: Any]?, p
     out["usage"] = usageOf(primary, secondary)
     let scan = primary?["scanned"] != nil ? primary : secondary  // the Basement footer's scan facts, all from one host: greenlight's, else the Mac's
     for k in ["ts", "scanned", "scan_error"] { out[k] = scan?[k] }
+    // whether each host's tmux answered (dash.py trees): unknown on either is unknown, as a pane's session may be on either;
+    // so is greenlight's host's not in yet (a merge has the Mac's: primary nil is the server's trees still to come)
+    out["tmuxOk"] = primary != nil && primary?["tmuxOk"] as? Bool != false && secondary?["tmuxOk"] as? Bool != false
     return out
 }
 /// The trees payload to publish after one host's `dash.py trees` answered: both hosts' worktrees (merged when greenlight runs on

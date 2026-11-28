@@ -1358,6 +1358,11 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     let uBoth = mergeSnapshots(["usage": srvUsage], ["usage": macUsage], primaryHost: "devbox", secondaryHost: "local")?["usage"] as? [[String: Any]]
     let uMac = mergeTreesPayload(["usage": [[String: Any]]()], ["usage": macUsage], primaryHost: "devbox", secondaryHost: "local")?["usage"] as? [[String: Any]]
     let uNone = mergeTreesPayload(["trees": [[String: Any]]()], nil, primaryHost: "devbox", secondaryHost: "local")?["usage"]
+    let tmuxOf: ([String: Any]?, [String: Any]?) -> Bool? = { mergeTreesPayload($0, $1, primaryHost: "devbox", secondaryHost: "local")?["tmuxOk"] as? Bool }
+    check("trees merge: tmuxOk is false when either host's tmux didn't answer, true when both did or said nothing",
+          tmuxOf(["tmuxOk": true], ["tmuxOk": true]) == true && tmuxOf(["tmuxOk": false], ["tmuxOk": true]) == false
+          && tmuxOf(["tmuxOk": true], ["tmuxOk": false]) == false && tmuxOf(["trees": [[String: Any]]()], nil) == true
+          && tmuxOf(nil, ["tmuxOk": true]) == false)  // the server's trees not in yet: its sessions are unknown
     let uDup = mergeSnapshots(["usage": srvUsage], ["usage": srvUsage.map { var m = $0; m["state"] = "failed"; return m }],
                               primaryHost: "devbox", secondaryHost: "local")?["usage"] as? [[String: Any]]
     let rescueWin: [[String: Any]] = [["label": "5h", "pct": 20]]

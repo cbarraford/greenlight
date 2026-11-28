@@ -468,6 +468,8 @@ test("Chief's console that comes before the first trees waits for them, then att
   await fresh.goto(page.url()); await fresh.waitForFunction(() => window.term);
   await fresh.evaluate(() => { term.ws("review"); term.restore({tabs: []}) });  // the app sends it before the layout
   assert.equal((await posts(fresh, "open")).filter(o => o.session === "mc-1a2b3c4d").length, 0, "no trees yet: nothing to attach");
+  await fresh.evaluate(() => term.focus());  // the app focusing the Basement (toWorkspace): the waiting request opens the first tab
+  assert.equal(await fresh.evaluate(() => tabs.length), 0, "no home shell while it waits");
   await fresh.evaluate(t => term.workspaces(t), {trees: TREES.trees.map(w => w.path === "/w/review" ? {...w, resume: {harness: "claude", session: "mc-1a2b3c4d"}} : w)});
   assert.equal((await posts(fresh, "open")).filter(o => o.session === "mc-1a2b3c4d").length, 1, "the first trees: the agent's session");
   assert.equal(await fresh.evaluate(() => tabs.length), 1, "no stray first shell beside it");
@@ -475,6 +477,17 @@ test("Chief's console that comes before the first trees waits for them, then att
   await fresh.evaluate(t => term.workspaces({...t, tmuxOk: false}), TREES);
   await fresh.evaluate(() => closeTab(cur));
   assert.equal((await posts(fresh, "close")).pop().keep, true, "tmux unknown: keep the agent");
+  await fresh.close();
+});
+test("trees that never come: after 5 s the waiting request opens as before, once", async page => {
+  const b = page.context().browser(), fresh = await b.newPage({viewport: {width: 1200, height: 800}, colorScheme: "dark"});
+  await fresh.addInitScript(() => { window.__posts = []; window.webkit = {messageHandlers: {term: {postMessage: m => window.__posts.push(JSON.parse(JSON.stringify(m)))}}} });
+  await fresh.goto(page.url()); await fresh.waitForFunction(() => window.term);
+  await fresh.evaluate(() => { term.ws("/w/review"); term.restore({tabs: []}) });
+  assert.equal(await fresh.evaluate(() => tabs.length), 0);
+  await fresh.waitForFunction(() => tabs.length > 0, null, {timeout: 8000});
+  await fresh.waitForTimeout(300);
+  assert.deepEqual(await fresh.evaluate(() => tabs.map(t => t.ws)), ["/w/review"], "its own tab, no home shell beside it");
   await fresh.close();
 });
 test("a restored kept pane closed before the first trees keeps its agent", async page => {
