@@ -22,6 +22,8 @@ import threading
 import time
 from pathlib import Path
 
+import bins
+
 AGENTS = ("claude", "codex", "agy", "gemini", "opencode", "pi")
 ALIASES = {"claude-code": "claude"}  # not "antigravity": that's the editor, open for days in a folder; its CLI is agy
 TTL = 5.0
@@ -179,7 +181,7 @@ def _tmux_roots():
     """{pane pid: its folder} for every pane on greenlight's tmux server: what descends from one, in that folder, is ours."""
     sock = os.environ.get("GREENLIGHT_TMUX_SOCKET") or "greenlight"
     try:
-        p = subprocess.run(["tmux", "-L", sock, "list-panes", "-a", "-F", "#{pane_pid}\t#{pane_current_path}"],
+        p = subprocess.run([bins.find("tmux") or "tmux", "-L", sock, "list-panes", "-a", "-F", "#{pane_pid}\t#{pane_current_path}"],
                            capture_output=True, text=True, timeout=10)
     except FileNotFoundError:
         return {}  # no tmux: nothing of ours runs

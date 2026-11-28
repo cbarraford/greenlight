@@ -45,6 +45,7 @@ import termios
 import time
 from typing import Any
 
+import bins
 import diag
 
 SESSION_RE = re.compile(r"^mc-[\w-]{1,64}\Z")
@@ -109,16 +110,22 @@ def default_shell(env: dict[str, str]) -> str:
     return "/bin/zsh" if os.access("/bin/zsh", os.X_OK) else "/bin/sh"
 
 
+_SYS_PATH_DIRS = frozenset({"/usr/bin", "/bin", "/usr/sbin", "/sbin"})
+
+
 def build_env(base: dict[str, str] | None = None) -> dict[str, str]:
     env = dict(os.environ if base is None else base)
     env.pop("GREENLIGHT_RUN", None)
     env["TERM"] = "xterm-256color"
     env["COLORTERM"] = "truecolor"
     env["TERM_PROGRAM"] = "Greenlight"
-    cur = [p for p in env.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin").split(":") if p]
-    extra = [os.path.expanduser(d) for d in FAST_PATH_DIRS]
-    prefix = [d for d in extra if d not in cur]
-    env["PATH"] = ":".join(prefix + cur)
+    cur = [p for p in (env.get("PATH") or "/usr/bin:/bin:/usr/sbin:/sbin").split(":") if p]
+    extra = list(dict.fromkeys(os.path.expanduser(d) for d in FAST_PATH_DIRS))
+    extra_set = set(extra)
+    rest = [p for p in cur if p not in extra_set]
+    # first ahead of system dirs even when diag.install's bins.ensure_path appended them, without demoting user venv/pyenv prefixes
+    sys_idx = next((i for i, p in enumerate(rest) if p in _SYS_PATH_DIRS), len(rest))
+    env["PATH"] = ":".join(rest[:sys_idx] + extra + rest[sys_idx:])
     if not any(env.get(k) for k in ("LANG", "LC_ALL", "LC_CTYPE")):
         env["LANG"] = "en_US.UTF-8"
     return env
@@ -451,7 +458,12 @@ class TermBridge:
     ) -> None:
         self.env = build_env()
         self.socket = valid_socket(socket or os.environ.get("GREENLIGHT_TMUX_SOCKET") or "greenlight")
-        self.tmux_bin = shutil.which("tmux", path=self.env["PATH"])
+        ov = bins.configured("tmux")
+        if ov:
+            cand = ov if os.sep in ov else shutil.which(ov, path=self.env["PATH"]) or bins.find(ov)
+            self.tmux_bin = cand if cand and bins.is_executable(cand) else None
+        else:
+            self.tmux_bin = shutil.which("tmux", path=self.env["PATH"])
         self.pool = StandbyPool(self.tmux_bin, self.socket, self.env)
         self.tmux_mark = DEFAULT_TMUX_MARK
         self.run_mark = DEFAULT_RUN_MARK

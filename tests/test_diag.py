@@ -306,6 +306,7 @@ def test_crash_reports_bundle_and_report_flow(diag_env, monkeypatch):
     assert (diag_env / "gh.body").read_text() == "as previewed"  # the shown body is filed, not a rebuild with newer events
 
     monkeypatch.setenv("PATH", "/nonexistent")
+    monkeypatch.setattr(diag.bins, "DIRS", ())
     r = diag.report("Crash on scan", "It crashed.", execute=True)
     assert r["filed"] is False and r["url"].startswith(f"https://github.com/{diag.REPO}/issues/new?"), r
 
@@ -427,3 +428,49 @@ def test_doctor_and_summary_readonly_and_worktrunk_bin(diag_env, monkeypatch):
     diag.doctor(quick=True)
     diag.summary(0)
     assert json.loads(cfg.read_text())["ade"] == "orca"
+
+
+def test_cli_checks_reject_dirs_and_honour_harnesses_and_bins_gh(diag_env, tmp_path, monkeypatch):
+    home = tmp_path / "u"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.setattr(diag.bins, "DIRS", ("~/.local/bin",))
+    monkeypatch.delenv("WORKTRUNK_BIN", raising=False)
+
+    # a directory path in WORKTRUNK_BIN or bins.wt must not pass _cli()
+    not_a_bin = tmp_path / "folder"
+    not_a_bin.mkdir()
+    monkeypatch.setenv("WORKTRUNK_BIN", str(not_a_bin))
+    assert diag._cli("wt") is False
+    monkeypatch.delenv("WORKTRUNK_BIN", raising=False)
+
+    # harnesses.<agent>.bin and ~/.<agent>/bin/<agent> are recognized by _cli()
+    h_claude = home / "bin-custom" / "claude"
+    h_claude.parent.mkdir(parents=True)
+    h_claude.write_text("#!/bin/sh\nexit 0\n")
+    h_claude.chmod(0o755)
+    alt_oc = home / ".opencode" / "bin" / "opencode"
+    alt_oc.parent.mkdir(parents=True)
+    alt_oc.write_text("#!/bin/sh\nexit 0\n")
+    alt_oc.chmod(0o755)
+    gh_stub = home / "opt" / "gh"
+    gh_stub.parent.mkdir(parents=True)
+    gh_stub.write_text("#!/bin/sh\necho https://github.com/x/y/issues/42\n")
+    gh_stub.chmod(0o755)
+    (diag_env / "config.json").write_text(json.dumps({
+        "harnesses": {"claude": {"bin": str(h_claude)}},
+        "bins": {"gh": str(gh_stub)},
+    }))
+    assert diag._cli("claude") is True
+    assert diag._cli("opencode") is True
+    assert diag._cli("gh") is True
+
+    r = diag.report("Crash on scan", "It crashed.", execute=True)
+    assert r["filed"] is True and r["url"] == "https://github.com/x/y/issues/42", r
+
+    # diag.install augments PATH with existing bins.DIRS
+    local_bin = home / ".local" / "bin"
+    local_bin.mkdir(parents=True)
+    diag.install("test_cli")
+    assert str(local_bin) in os.environ["PATH"].split(os.pathsep)

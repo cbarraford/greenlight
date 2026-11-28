@@ -91,9 +91,42 @@ def test_validation_env_and_tmux_cmd_splitting(tmp_path):
     assert env["TERM_PROGRAM"] == "Greenlight"
     assert env["LANG"] == "en_US.UTF-8"
     assert "/opt/homebrew/bin" in env["PATH"].split(":")
+    # diag.install's bins.ensure_path appends the same folders: the terminal still puts them before /usr/bin, once each
+    env = term_bridge.build_env({"PATH": "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin"})
+    parts = env["PATH"].split(":")
+    assert parts.index("/opt/homebrew/bin") < parts.index("/usr/bin") and parts.count("/opt/homebrew/bin") == 1
+    # custom user prefixes (venv, pyenv, mise) stay ahead of FAST_PATH_DIRS, while empty PATH keeps /usr/bin
+    env = term_bridge.build_env({"PATH": "/my/venv/bin:/usr/bin:/bin:/opt/homebrew/bin"})
+    parts = env["PATH"].split(":")
+    assert parts[0] == "/my/venv/bin" and parts.index("/opt/homebrew/bin") < parts.index("/usr/bin")
+    assert "/usr/bin" in term_bridge.build_env({"PATH": ""})["PATH"].split(":")
 
     toks = term_bridge._split_tmux_cmds(["set -g status off", "bind -n WheelUpPane 'send -M'", "   ", "unclosed 'quote"])
     assert toks == [";", "set", "-g", "status", "off", ";", "bind", "-n", "WheelUpPane", "send -M"]
+
+
+def test_term_bridge_honours_bins_tmux(gl_home, tmp_path, monkeypatch):
+    r_in, w_in = os.pipe()
+    r_out, w_out = os.pipe()
+    try:
+        fake_tmux = tmp_path / "custom-tmux"
+        fake_tmux.write_text("#!/bin/sh\nexit 0\n")
+        fake_tmux.chmod(0o755)
+        (gl_home / "config.json").write_text(json.dumps({"bins": {"tmux": str(fake_tmux)}}))
+        b = term_bridge.TermBridge(in_fd=r_in, out_fd=w_out)
+        assert b.tmux_bin == str(fake_tmux)
+        b.sel.close()
+
+        # a directory override is rejected (tmux disabled)
+        bad_dir = tmp_path / "not-tmux"
+        bad_dir.mkdir()
+        (gl_home / "config.json").write_text(json.dumps({"bins": {"tmux": str(bad_dir)}}))
+        b2 = term_bridge.TermBridge(in_fd=r_in, out_fd=w_out)
+        assert b2.tmux_bin is None
+        b2.sel.close()
+    finally:
+        for fd in (r_in, w_in, r_out, w_out):
+            os.close(fd)
 
 
 def test_ade_basement_panes_ignores_warm_standby_sessions(monkeypatch):

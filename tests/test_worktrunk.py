@@ -17,11 +17,13 @@ LIST_FLAGS = [
 
 
 @pytest.fixture(autouse=True)
-def no_host_wt(request, monkeypatch):
+def no_host_wt(request, tmp_path, monkeypatch):
     """These tests pin the argv to a bare "wt": hide the host's own Worktrunk (~/.local/bin/wt) from bins.find."""
     if request.node.name == "test_real_worktrunk_end_to_end":
         return
     real = shutil.which
+    monkeypatch.setenv("GREENLIGHT_HOME", str(tmp_path / "gl"))
+    monkeypatch.delenv("WORKTRUNK_BIN", raising=False)
     monkeypatch.setattr(worktrunk.bins, "DIRS", ())
     monkeypatch.setattr(worktrunk.bins.shutil, "which", lambda n, *a, **k: None if n == "wt" else real(n, *a, **k))
 
@@ -92,7 +94,7 @@ def test_missing_binary_and_bad_schema(monkeypatch):
         raise FileNotFoundError("wt")
 
     monkeypatch.setattr(worktrunk.subprocess, "run", missing)
-    with pytest.raises(RuntimeError, match="Worktrunk"):
+    with pytest.raises(RuntimeError, match="not found on PATH or in.*bins\\.wt in config\\.json"):
         worktrunk.items("/repo")
     monkeypatch.setattr(worktrunk.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "{}", ""))
     with pytest.raises(RuntimeError, match="schema 2"):
@@ -105,6 +107,18 @@ def test_worktrunk_env_override_and_error_paths(monkeypatch):
     monkeypatch.setattr(worktrunk.subprocess, "run", lambda argv, **kw: (calls.append(argv), subprocess.CompletedProcess(argv, 0, "", ""))[1])
     worktrunk.remove("/repo", "/worktrees/feature")
     assert calls == [["/custom/bin/wt", "-C", "/repo", "remove", "--foreground", "--no-hooks", "--no-delete-branch", "--", "/worktrees/feature"]]
+
+    for err, says in ((FileNotFoundError, "Worktrunk not found at /custom/bin/wt"),
+                      (PermissionError, r"Worktrunk at /custom/bin/wt can't run \(PermissionError\)")):
+        monkeypatch.setattr(worktrunk.subprocess, "run", lambda argv, err=err, **kw: (_ for _ in ()).throw(err(argv[0])))
+        with pytest.raises(RuntimeError, match=says):
+            worktrunk.run("/repo", "list")
+
+    monkeypatch.setenv("WORKTRUNK_BIN", "wt-nightly")
+    monkeypatch.setattr(worktrunk.subprocess, "run", lambda argv, **kw: (_ for _ in ()).throw(FileNotFoundError(argv[0])))
+    with pytest.raises(RuntimeError, match="Worktrunk not found at wt-nightly"):
+        worktrunk.run("/repo", "list")
+    monkeypatch.setenv("WORKTRUNK_BIN", "/custom/bin/wt")
 
     monkeypatch.setattr(worktrunk.subprocess, "run", lambda argv, **kw: (_ for _ in ()).throw(subprocess.TimeoutExpired(argv, 1)))
     with pytest.raises(RuntimeError, match="wt list timed out"):

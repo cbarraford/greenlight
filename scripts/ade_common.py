@@ -9,6 +9,8 @@ import re
 import subprocess
 from pathlib import Path
 
+import bins
+
 GOALS = Path(os.environ.get("GREENLIGHT_HOME") or Path.home() / ".greenlight") / "goals.json"  # {workspace path: goal}
 MENU_ITEM_RE = re.compile(r"[❯›●▸]\s*\d\.")  # a picker's highlighted row: Claude ❯, Codex ›, Gemini ●, agy ▸
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\r")
@@ -25,7 +27,7 @@ def plain(line, ghost=True):
 
 
 def git(path, *args):
-    p = subprocess.run(["git", "-C", path, *args], capture_output=True, text=True, timeout=30)
+    p = subprocess.run(bins.argv(["git", "-C", path, *args]), capture_output=True, text=True, timeout=30)
     return p.stdout.strip() if p.returncode == 0 else ""
 
 
@@ -49,7 +51,7 @@ def worktree_add(repo, name, base=None):
     if not name or name.startswith("-") or (base and base.startswith("-")):
         raise RuntimeError("git worktree add: invalid branch or base ref")
     path = str(Path(repo).parent / f"{Path(repo).name}-{name.replace('/', '-')}")
-    p = subprocess.run(["git", "-C", repo, "worktree", "add", "-b", name, "--", path, *([base] if base else [])],
+    p = subprocess.run(bins.argv(["git", "-C", repo, "worktree", "add", "-b", name, "--", path, *([base] if base else [])]),
                        capture_output=True, text=True)
     if p.returncode:
         raise RuntimeError(f"git worktree add: {p.stderr.strip()[:300]}")
@@ -58,7 +60,7 @@ def worktree_add(repo, name, base=None):
 
 def worktree_remove(ws, force=False):
     if not ws["isMainWorktree"]:  # git refuses a dirty tree without --force: only the Basement passes it, after the page showed the risks
-        p = subprocess.run(["git", "-C", ws["repoId"], "worktree", "remove", *(["--force"] if force else []), "--", ws["path"]], capture_output=True, text=True)
+        p = subprocess.run(bins.argv(["git", "-C", ws["repoId"], "worktree", "remove", *(["--force"] if force else []), "--", ws["path"]]), capture_output=True, text=True)
         if p.returncode:
             raise RuntimeError(f"git worktree remove {ws['path']}: {p.stderr.strip()[:300]}")
 

@@ -42,6 +42,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ade  # noqa: E402
+import bins  # noqa: E402
 import blocking  # noqa: E402
 import diag  # noqa: E402
 import external  # noqa: E402
@@ -57,7 +58,7 @@ MR_BRANCH = re.compile(r"^mr-(\d+)$")  # review checkouts of someone else's MR: 
 
 
 def run(cmd, cwd=None, timeout=60, check=True):
-    p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    p = subprocess.run(bins.argv(cmd), cwd=cwd, capture_output=True, text=True, timeout=timeout)
     if check and p.returncode != 0:
         raise RuntimeError(f"{' '.join(cmd)}: {(p.stderr or p.stdout).strip()[:300]}")
     return p

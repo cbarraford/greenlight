@@ -43,6 +43,7 @@ from urllib.parse import quote, urlparse
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import bins  # noqa: E402
 
 CONTRACTS = {  # check: (contract, the question, phrased so True means the contract holds)
     "diff_matches_goal": ("NoScopeCreep", "Does every change in this diff serve the stated goal, with no unrelated features, refactors, "
@@ -668,7 +669,7 @@ def create_draft_pr(path, project, forge, branch, target, title, body):
                    "--draft", "--title", title, "--description-file", str(body_file)]
         else:
             raise ValueError(f"unsupported forge: {forge}")
-        p = subprocess.run(cmd, cwd=path, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+        p = subprocess.run(bins.argv(cmd), cwd=path, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
     print(redact_diff_pii(redact_secrets((p.stdout if p.returncode == 0 else p.stderr).strip())))
     return p.returncode
 
@@ -858,7 +859,7 @@ def branch_history(path, target=None, sha="HEAD"):
 
 def _run(cmd, timeout=90):
     try:
-        p = subprocess.run(cmd, capture_output=True, timeout=timeout)
+        p = subprocess.run(bins.argv(cmd), capture_output=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired):
         return None
     return p.stdout.decode("utf-8", errors="replace") if p.returncode == 0 else None
@@ -1201,7 +1202,7 @@ def checked_merge(forge, project, iid, target, sha, target_oid, cmd):
         return 4
     pin = ["--match-head-commit" if forge == "github" else "--sha", sha]
     try:
-        rc = subprocess.run(cmd + pin, timeout=90).returncode
+        rc = subprocess.run(bins.argv(cmd + pin), timeout=90).returncode
     except (OSError, subprocess.TimeoutExpired) as e:
         print(f"AUDIT ERROR merge command failed: {type(e).__name__}: {e}")
         return 4

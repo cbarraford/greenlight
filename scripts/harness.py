@@ -104,9 +104,10 @@ def conf(name):
 
 
 def binary(name):
-    # systemd/launchd/ssh PATHs miss the per-user install dirs: bins looks in ~/.local/bin and the like, then ~/.<name>/bin
-    return conf(name).get("bin") or bins.find(name) or next(
-        (p for p in (os.path.expanduser(f"~/.{name}/bin/{name}"),) if os.path.exists(p)), name)
+    # harnesses.<name>.bin wins over bins.<name>; systemd/launchd/ssh PATHs miss the per-user install dirs, so bins also
+    # looks in ~/.local/bin and the like, then ~/.<name>/bin (codex's, opencode's own installers)
+    alt = os.path.expanduser(f"~/.{name}/bin/{name}")
+    return bins.find(name, override=conf(name).get("bin")) or (alt if bins.is_executable(alt) else name)
 
 
 def permissions(name):
@@ -248,7 +249,7 @@ CLAUDE_MODELS = [("claude-opus-5-5", "Opus 5.5"), ("claude-sonnet-5-5", "Sonnet 
 
 def installed(name):
     b = binary(name)
-    return os.path.isabs(b) and os.access(b, os.X_OK) or bool(shutil.which(b))
+    return bins.is_executable(b) if os.sep in b else bool(shutil.which(b))
 
 
 def _id(h, slug):

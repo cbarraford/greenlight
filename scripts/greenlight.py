@@ -51,6 +51,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import bins  # noqa: E402
 import ade  # noqa: E402
 import ade_common  # noqa: E402
 import diag  # noqa: E402
@@ -67,7 +68,8 @@ DEFAULTS = {
     "me": None,                       # your GitLab/GitHub username; None = ask glab (else gh) once, cached in me.json
     "review_bot": None,               # a bot the `review_bot` step assigns as assignee + reviewer; None skips the step
     "agents": ["claude", "codex"],    # dispatch order: on a usage limit greenlight moves to the next one (claude|codex|opencode|pi|gemini|agy)
-    "bins": {},                       # CLI paths when they're off the PATH greenlight runs with, e.g. {"wt": "~/bin/wt"}; see bins.py
+    "bins": {},                       # CLI paths when they're off the PATH greenlight runs with, e.g. {"wt": "~/tools/wt"}; see bins.py
+                                      # (an agent's harnesses.<h>.bin wins over bins.<h>)
     "harnesses": {},                  # per agent: {"bypass": true} for full access, {"bin": path}, {"model": id} its default model; see harness.py
     "model_fallbacks": {},            # per slot (chat/page/suggest/auto/decide) or per harness fallback model+effort specs; see harness.py
     "llm_harness": "claude",          # runs the dashboard's own LLM calls (design, suggestions)
@@ -141,10 +143,15 @@ def _run(cmd, timeout, tries, d):
         d.pop("rc", None), d.pop("msg_class", None)  # an earlier try's failure isn't this one's
         last = i == tries - 1
         try:
-            p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        except subprocess.TimeoutExpired:
+            p = subprocess.run(bins.argv(cmd), capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired as e:
             if last:
+                e._gl_tool = Path(cmd[0]).name  # type: ignore[attr-defined]
                 raise
+        except OSError as e:
+            cls = diag.classify(e)
+            d.update(msg_class=cls)
+            raise _cmd_error(f"{cmd[0]}: {e.strerror or type(e).__name__}", tool=Path(cmd[0]).name, msg_class=cls) from None
         else:
             if p.returncode == 0:
                 return p.stdout
@@ -163,6 +170,7 @@ def whoami():
         return json.loads(f.read_text())["me"]
     except (OSError, ValueError, KeyError):
         pass
+    bins.ensure_path()  # ssh/launchd/systemd PATHs lack ~/.local/bin's glab/gh
     for cmd, key in ((["glab", "api", "user"], "username"), (["gh", "api", "user"], "login")):
         try:
             me = json.loads(run(cmd, timeout=20))[key]
@@ -193,15 +201,36 @@ def primary_agent(agents):
                                              a.get("updatedAt") or a.get("stateStartedAt") or 0))
 
 
+def _branch_name(w):
+    return (w.get("branch") or "").removeprefix("refs/heads/")
+
+
+def _repo_default_branch(path):
+    if not path or not os.path.isdir(path):
+        return ""
+    head = ade_common.git(path, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+    return head.split("/", 1)[1] if "/" in head else ""
+
+
 def base_branches(wts):
-    """{repoId: branch} of each repo's main checkout: a second worktree on that branch is a copy of the base, not a workspace."""
-    return {w.get("repoId"): w.get("branch") for w in wts if w.get("isMainWorktree") and w.get("branch")}
+    """{repoId: branch} of each repo's base branch (origin/HEAD when readable locally, else the main checkout's branch):
+    a second worktree on that branch is a copy of the base, not a workspace."""
+    out = {}
+    for w in wts:
+        rid = w.get("repoId")
+        if not rid or not w.get("isMainWorktree"):
+            continue
+        br = _repo_default_branch(w.get("path")) or _branch_name(w)
+        if br:
+            out[rid] = br
+    return out
 
 
 def on_base(w, bases):
     """A non-main worktree checked out on its repo's base branch (a Claude subagent's checkout of main, say): no MR can come
     from it and there's nothing to rebase, so it gets no lifecycle."""
-    return not w.get("isMainWorktree") and bool(w.get("branch")) and bases.get(w.get("repoId")) == w["branch"]
+    rid, br = w.get("repoId"), _branch_name(w)
+    return not w.get("isMainWorktree") and bool(rid) and bool(br) and bases.get(rid) == br
 
 
 ORCA_AGENTS = {"agy": "antigravity"}  # greenlight's harness names that Orca knows by another id
@@ -2286,7 +2315,7 @@ def scan_failed(e, started_ns=None):
                 f.unlink(missing_ok=True)
         return
     if isinstance(e, subprocess.TimeoutExpired):
-        cmd0 = e.cmd[0] if isinstance(e.cmd, (list, tuple)) and e.cmd else str(e.cmd or "").split(" ", 1)[0]
+        cmd0 = getattr(e, "_gl_tool", None) or (e.cmd[0] if isinstance(e.cmd, (list, tuple)) and e.cmd else str(e.cmd or "").split(" ", 1)[0])
         cand = str(cmd0).rsplit("/", 1)[-1]
         tool, cls = cand if cand in SCAN_TOOLS else "", "timeout"
     elif getattr(e, "_gl_tool", None) is not None:

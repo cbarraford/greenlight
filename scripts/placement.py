@@ -69,10 +69,13 @@ def is_misplaced(w, ms, expect, repo_target="server"):
 def rows(worktrees, ms, expect, every=False):
     """One row per workspace with an agent (every: or a goal), main checkouts and archived ones left out."""
     main_paths = {w.get("repo"): w.get("path") for w in worktrees if w.get("isMainWorktree") and w.get("repo") and w.get("path")}
+    bases = greenlight.base_branches(worktrees)
     targets: dict[str, str] = {}
     out = []
     for w in worktrees:
         if w.get("isMainWorktree") or w.get("isArchived") or not (w.get("agents") or every and w.get("comment")):
+            continue
+        if not w.get("agents") and greenlight.on_base(w, bases):
             continue
         host = host_of(w, ms)
         ag = greenlight.primary_agent(w.get("agents"))
