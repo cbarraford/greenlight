@@ -75,6 +75,7 @@ def worktrees():
                 "lastOutputAt": (ags[0].get("updatedAt") or 0) * 1000 if ags else None,
                 "agents": [{"state": STATES.get(a.get("agentLifecycle"), "unknown"),
                             "agentType": (a.get("launchCommand") or {}).get("launcher") or "claude",
+                            **({"sessionId": a["sessionId"]} if isinstance(a.get("sessionId"), str) and a["sessionId"] else {}),
                             "lastAssistantMessage": a.get("lastBody") or "", "updatedAt": (a.get("updatedAt") or 0) * 1000,
                             "stateStartedAt": (a.get("updatedAt") or 0) * 1000} for a in ags],
             })

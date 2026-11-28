@@ -1073,3 +1073,179 @@ with mock.patch.object(dash, "live_agents", return_value={"w-ua": ({"displayName
     finally:
         (dash.greenlight.STATE / "last.json").write_text(_ua_bak)
 print("dash usage integration ok")
+
+# dash.add_sessions discovers Claude, Codex, agy, opencode, and explicit ADE session IDs safely
+with tempfile.TemporaryDirectory() as _sd:
+    _sroot = Path(_sd)
+    _fake_home = _sroot / "home"
+    _w_claude = str(_sroot / "ws-claude")
+    _w_codex = str(_sroot / "ws-codex")
+    _w_agy = str(_sroot / "ws-agy")
+    _w_oc = str(_sroot / "ws-oc")
+    _w_explicit = str(_sroot / "ws-explicit")
+    _w_multi = str(_sroot / "ws-multi")
+    for _p in (_w_claude, _w_codex, _w_agy, _w_oc, _w_explicit, _w_multi):
+        Path(_p).mkdir(parents=True, exist_ok=True)
+
+    # Claude transcripts: older + newer + invalid name
+    _cproj = _fake_home / ".claude/projects" / dash.re.sub(r"[^A-Za-z0-9]", "-", _w_claude)
+    _cproj.mkdir(parents=True)
+    _c_old = _cproj / "11111111-1111-1111-1111-111111111111.jsonl"
+    _c_new = _cproj / "22222222-2222-2222-2222-222222222222.jsonl"
+    _c_bad = _cproj / "-bad-flag.jsonl"
+    _c_old.write_text("{}\n")
+    _c_new.write_text("{}\n")
+    _c_bad.write_text("{}\n")
+    _now = time.time()
+    os.utime(_c_old, (_now - 100, _now - 100))
+    os.utime(_c_new, (_now - 10, _now - 10))
+    os.utime(_c_bad, (_now, _now))
+
+    # Multi workspace: both claude (older) and codex (newer); active agent is claude so claude wins
+    _mproj = _fake_home / ".claude/projects" / dash.re.sub(r"[^A-Za-z0-9]", "-", _w_multi)
+    _mproj.mkdir(parents=True)
+    _m_cl = _mproj / "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.jsonl"
+    _m_cl.write_text("{}\n")
+    os.utime(_m_cl, (_now - 50, _now - 50))
+
+    # Codex rollouts
+    _cx_day = _sroot / "codex/sessions/2026/11/27"
+    _cx_day.mkdir(parents=True)
+    _cx1 = _cx_day / "rollout-2026-11-27T10-00-00-33333333-3333-3333-3333-333333333333.jsonl"
+    _cx1.write_text(json.dumps({"type": "session_meta", "payload": {"id": "33333333-3333-3333-3333-333333333333", "cwd": _w_codex}}) + "\n")
+    _cx2 = _cx_day / "rollout-2026-11-27T11-00-00-44444444-4444-4444-4444-444444444444.jsonl"
+    _cx2.write_text(json.dumps({"type": "session_meta", "payload": {"id": "44444444-4444-4444-4444-444444444444", "cwd": _w_multi}}) + "\n")
+    os.utime(_cx2, (_now - 5, _now - 5))
+
+    # agy conversation_summaries.db: top-level + newer subagent (subagent must be skipped)
+    _agy_home = _sroot / "agy"
+    _agy_home.mkdir()
+    _adb = sqlite3.connect(_agy_home / "conversation_summaries.db")
+    _adb.execute("create table conversation_summaries (conversation_id TEXT, workspace_uris TEXT, last_modified_time TEXT, parent_conversation_id TEXT)")
+    _adb.execute("insert into conversation_summaries values (?, ?, ?, ?)",
+                 ("55555555-5555-5555-5555-555555555555", json.dumps([Path(_w_agy).as_uri()]), "2026-11-27T12:00:00Z", ""))
+    _adb.execute("insert into conversation_summaries values (?, ?, ?, ?)",
+                 ("66666666-6666-6666-6666-666666666666", json.dumps([Path(_w_agy).as_uri()]), "2026-11-27T13:00:00Z", "55555555-5555-5555-5555-555555555555"))
+    _adb.commit()
+    _adb.close()
+
+    # opencode opencode.db: active session + archived session (archived skipped)
+    _oc_home = _sroot / "opencode"
+    _oc_home.mkdir()
+    _odb = sqlite3.connect(_oc_home / "opencode.db")
+    _odb.execute("create table session (id TEXT, parent_id TEXT, directory TEXT, time_updated INTEGER, time_archived INTEGER)")
+    _odb.execute("insert into session values (?, ?, ?, ?, ?)", ("ses_live_1", None, _w_oc, int(_now * 1000) - 5000, None))
+    _odb.execute("insert into session values (?, ?, ?, ?, ?)", ("ses_arch_2", None, _w_oc, int(_now * 1000), int(_now * 1000)))
+    _odb.commit()
+    _odb.close()
+
+    _spucks = [
+        {"name": "p-cl", "path": _w_claude, "agent": {"state": "working", "type": "claude"}},
+        {"name": "p-cx", "path": _w_codex, "agent": {"state": "working", "type": "codex"}},
+        {"name": "p-ag", "path": _w_agy, "agent": {"state": "working", "type": "agy"}},
+        {"name": "p-oc", "path": _w_oc, "agent": {"state": "working", "type": "opencode"}},
+        {"name": "p-ex", "path": _w_explicit, "agent": {"state": "working", "type": "claude"}},
+        {"name": "p-mu", "path": _w_multi, "agent": {"state": "working", "type": "claude"}},
+    ]
+    _sagents = [
+        (_w_claude, {"agentType": "claude"}),
+        (_w_codex, {"agentType": "codex"}),
+        (_w_agy, {"agentType": "antigravity"}),
+        (_w_oc, {"agentType": "opencode"}),
+        (_w_explicit, {"agentType": "claude", "sessionId": "77777777-7777-7777-7777-777777777777"}),
+        (_w_multi, {"agentType": "claude"}),
+    ]
+    dash._CODEX_HEAD_CACHE.clear()
+    with mock.patch.object(Path, "home", return_value=_fake_home), \
+         mock.patch.dict(os.environ, {"CODEX_HOME": str(_sroot / "codex"), "AGY_HOME": str(_agy_home), "OPENCODE_DATA_HOME": str(_oc_home)}), \
+         mock.patch.dict(dash.greenlight.CONFIG, {"harnesses": {"claude": {"bin": "/opt/local/claude"}}}):
+        dash.add_sessions(_spucks, _sagents)
+    _by = {p["name"]: p["agent"] for p in _spucks}
+    assert _by["p-cl"]["session_id"] == "22222222-2222-2222-2222-222222222222" and _by["p-cl"]["session_harness"] == "claude"
+    assert _by["p-cl"]["session_bin"] == "/opt/local/claude"
+    assert _by["p-cx"]["session_id"] == "33333333-3333-3333-3333-333333333333" and _by["p-cx"]["session_harness"] == "codex"
+    assert _by["p-ag"]["session_id"] == "55555555-5555-5555-5555-555555555555" and _by["p-ag"]["session_harness"] == "agy"
+    assert _by["p-oc"]["session_id"] == "ses_live_1" and _by["p-oc"]["session_harness"] == "opencode"
+    assert _by["p-ex"]["session_id"] == "77777777-7777-7777-7777-777777777777" and _by["p-ex"]["session_harness"] == "claude"
+    assert _by["p-mu"]["session_id"] == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" and _by["p-mu"]["session_harness"] == "claude"
+
+    # Regression 1: brand-new 0-byte Codex rollout WITH a UUID filename must not raise KeyError('') or get negative-cached
+    _w_race = str(_sroot / "ws-race")
+    Path(_w_race).mkdir()
+    _cx_race = _cx_day / "rollout-2026-11-27T12-00-00-88888888-8888-8888-8888-888888888888.jsonl"
+    _cx_race.write_text("")
+    # Also add a newer Codex subagent rollout for _w_race — parent session must win over subagent
+    _cx_sub = _cx_day / "rollout-2026-11-27T12-05-00-99999999-9999-9999-9999-999999999999.jsonl"
+    _cx_sub.write_text(json.dumps({"type": "session_meta", "payload": {"id": "99999999-9999-9999-9999-999999999999", "cwd": _w_race, "source": {"subagent": {"thread_spawn": {"depth": 1}}}}}) + "\n")
+    _rp = [{"name": "p-race", "path": _w_race, "agent": {"state": "working", "type": "codex"}}]
+    with mock.patch.object(Path, "home", return_value=_fake_home), \
+         mock.patch.dict(os.environ, {"CODEX_HOME": str(_sroot / "codex"), "AGY_HOME": str(_agy_home), "OPENCODE_DATA_HOME": str(_oc_home)}):
+        dash.add_sessions(_rp, [(_w_race, {"agentType": "codex"})])
+        assert "session_id" not in _rp[0]["agent"], "0-byte rollout and subagent rollout must both be skipped"
+        _cx_race.write_text(json.dumps({"type": "session_meta", "payload": {"id": "88888888-8888-8888-8888-888888888888", "cwd": _w_race}}) + "\n")
+        os.utime(_cx_race, (_now - 20, _now - 20))
+        os.utime(_cx_sub, (_now - 5, _now - 5))
+        dash.add_sessions(_rp, [(_w_race, {"agentType": "codex"})])
+    assert _rp[0]["agent"]["session_id"] == "88888888-8888-8888-8888-888888888888"
+
+    # Regression 2: symlinked workspace paths resolve to realpath transcripts
+    _w_real = _sroot / "real-ws"
+    _w_real.mkdir()
+    _w_link = _sroot / "link-ws"
+    _w_link.symlink_to(_w_real)
+    _lproj = _fake_home / ".claude/projects" / dash.re.sub(r"[^A-Za-z0-9]", "-", str(_w_real.resolve()))
+    _lproj.mkdir(parents=True)
+    (_lproj / "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.jsonl").write_text("{}\n")
+    _lp = [{"name": "p-link", "path": str(_w_link), "agent": {"state": "working", "type": "claude"}}]
+    with mock.patch.object(Path, "home", return_value=_fake_home), \
+         mock.patch.dict(os.environ, {"CODEX_HOME": str(_sroot / "codex"), "AGY_HOME": str(_agy_home), "OPENCODE_DATA_HOME": str(_oc_home)}):
+        dash.add_sessions(_lp, [(str(_w_link), {"agentType": "claude"})])
+    assert _lp[0]["agent"]["session_id"] == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+
+    # Regression 3: recreated linked worktree (.git file mtime newer than old transcript) ignores stale transcript,
+    # whereas a standalone repo (.git directory) does NOT invalidate transcripts on git commands
+    _w_reused = _sroot / "ws-reused"
+    _w_reused.mkdir()
+    _git_marker = _w_reused / ".git"
+    _git_marker.write_text("gitdir: /tmp/x\n")
+    _rproj = _fake_home / ".claude/projects" / dash.re.sub(r"[^A-Za-z0-9]", "-", str(_w_reused.resolve()))
+    _rproj.mkdir(parents=True)
+    _stale_tr = _rproj / "cccccccc-cccc-cccc-cccc-cccccccccccc.jsonl"
+    _stale_tr.write_text("{}\n")
+    os.utime(_stale_tr, (_now - 500, _now - 500))
+    os.utime(_git_marker, (_now - 10, _now - 10))
+    _w_main = _sroot / "ws-main"
+    (_w_main / ".git").mkdir(parents=True)
+    _m_tr_dir = _fake_home / ".claude/projects" / dash.re.sub(r"[^A-Za-z0-9]", "-", str(_w_main.resolve()))
+    _m_tr_dir.mkdir(parents=True)
+    _m_tr = _m_tr_dir / "dddddddd-dddd-dddd-dddd-dddddddddddd.jsonl"
+    _m_tr.write_text("{}\n")
+    os.utime(_m_tr, (_now - 500, _now - 500))
+    os.utime(_w_main / ".git", (_now - 10, _now - 10))
+    # Regression 4: active gemini/codex agent must never cross-match a stale Claude session; remote nativeHost=False skips local disk/bin;
+    # non-array JSON in agy workspace_uris must not crash
+    _adb2 = sqlite3.connect(_agy_home / "conversation_summaries.db")
+    _adb2.execute("insert into conversation_summaries values (?, ?, ?, ?)", ("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee", "null", "2026-11-27T14:00:00Z", ""))
+    _adb2.commit()
+    _adb2.close()
+    _up = [
+        {"name": "p-reused", "path": str(_w_reused), "agent": {"state": "working", "type": "claude"}},
+        {"name": "p-main", "path": str(_w_main), "agent": {"state": "working", "type": "claude"}},
+        {"name": "p-cross", "path": _w_claude, "agent": {"state": "working", "type": "gemini"}},
+        {"name": "p-remote", "path": _w_claude, "nativeHost": False, "agent": {"state": "working", "type": "claude"}},
+    ]
+    with mock.patch.object(Path, "home", return_value=_fake_home), \
+         mock.patch.dict(os.environ, {"CODEX_HOME": str(_sroot / "codex"), "AGY_HOME": str(_agy_home), "OPENCODE_DATA_HOME": str(_oc_home)}), \
+         mock.patch.dict(dash.greenlight.CONFIG, {"harnesses": {"claude": {"bin": "/opt/local/claude"}}}):
+        dash.add_sessions(_up, [
+            (str(_w_reused), {"agentType": "claude"}),
+            (str(_w_main), {"agentType": "claude"}),
+            (_w_claude, {"agentType": "gemini"}),
+            (_w_claude, {"agentType": "claude"}),
+        ])
+    _uby = {p["name"]: p["agent"] for p in _up}
+    assert "session_id" not in _uby["p-reused"]
+    assert _uby["p-main"]["session_id"] == "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    assert "session_id" not in _uby["p-cross"], "active gemini must not cross-match a Claude transcript"
+    assert "session_id" not in _uby["p-remote"] and "session_bin" not in _uby["p-remote"], "remote workspace must not get local disk session/bin"
+print("dash add_sessions ok")

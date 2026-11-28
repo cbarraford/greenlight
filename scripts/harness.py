@@ -55,7 +55,8 @@ H: dict[str, dict[str, Any]] = {
 }
 HAIKU = "claude-haiku-5-5"  # the cheap default for background calls when Claude runs them
 EFFORT_SUFFIX = re.compile(r"-(low|medium|high|xhigh|max)$")  # agy bakes effort into its model ids
-ALIASES = {"antigravity": "agy"}  # ADE-specific agent identifiers -> greenlight's harness name
+ALIASES = {"antigravity": "agy", "claude-code": "claude", "claude code": "claude", "gemini-cli": "gemini"}  # ADE-specific agent identifiers -> greenlight's harness name
+SESSION_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}")  # fullmatch: ASCII-only safe session/conversation ID token (matches Swift & JS)
 
 
 def canonical(name):
@@ -171,6 +172,23 @@ def interactive(name, prompt):
     if flag:
         return [*base, *flag, prompt]
     return [*base, "--", prompt]
+
+
+def resume_cmd(name, sid, binary_override=None):
+    """The interactive command line that connects a terminal to a specific session ID for `name`."""
+    name = canonical(name)
+    if name not in H:
+        raise ValueError(f"unknown harness {name!r}: one of {', '.join(H)}")
+    if not isinstance(sid, str) or not SESSION_ID_RE.fullmatch(sid):
+        raise ValueError(f"invalid session id {sid!r}")
+    b = binary_override or binary(name)
+    if name == "codex":
+        return [b, "resume", sid]
+    if name == "opencode":
+        return [b, "-s", sid]
+    if name == "pi":
+        return [b, "--session", sid]
+    return [b, "--resume", sid]
 
 
 EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "max", "ultra")
