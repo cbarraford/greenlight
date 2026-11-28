@@ -332,8 +332,9 @@ func mergeTreesPayload(_ primary: [String: Any]?, _ secondary: [String: Any]?, p
     let scan = primary?["scanned"] != nil ? primary : secondary  // the Basement footer's scan facts, all from one host: greenlight's, else the Mac's
     for k in ["ts", "scanned", "scan_error"] { out[k] = scan?[k] }
     // whether each host's tmux answered (dash.py trees): unknown on either is unknown, as a pane's session may be on either;
-    // so is greenlight's host's not in yet (a merge has the Mac's: primary nil is the server's trees still to come)
-    out["tmuxOk"] = primary != nil && primary?["tmuxOk"] as? Bool != false && secondary?["tmuxOk"] as? Bool != false
+    // hostsPending: greenlight's host's trees not in yet (a merge has the Mac's: primary nil is the server's still to come)
+    out["tmuxOk"] = primary?["tmuxOk"] as? Bool != false && secondary?["tmuxOk"] as? Bool != false
+    if primary == nil { out["hostsPending"] = true }
     return out
 }
 /// The trees payload to publish after one host's `dash.py trees` answered: both hosts' worktrees (merged when greenlight runs on
@@ -342,7 +343,7 @@ func mergeTreesPayload(_ primary: [String: Any]?, _ secondary: [String: Any]?, p
 /// pinged the turn again (terminal.html syncPanes). Spent states are dropped from `server`/`local`.
 func treesToPublish(server: inout [String: Any]?, local: inout [String: Any]?, merge: Bool, primaryHost: String, localPending: Bool = false) -> [String: Any]? {
     var obj = merge && local != nil ? mergeTreesPayload(server, local, primaryHost: primaryHost, secondaryHost: "local") : server ?? local
-    if merge && local == nil && localPending { obj?["tmuxOk"] = false }  // the Mac's first trees still coming: its sessions are unknown (terminal.html keeps)
+    if merge && local == nil && localPending { obj?["hostsPending"] = true }  // the Mac's first trees still coming: its sessions are unknown (terminal.html)
     server?["panes"] = nil; local?["panes"] = nil
     return obj
 }

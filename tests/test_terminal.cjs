@@ -457,8 +457,10 @@ test("Chief's console opens the live agent session by name or worktree, ahead of
   await page.evaluate(() => term.ws("mc-1a2b3c4d"));
   await page.evaluate(t => term.workspaces({...t, trees: t.trees.map(w => w.path === "/w/review" ? {...w, resume: {harness: "claude", session: "mc-9z9z9z9z"}} : w),
     panes: {"mc-1a2b3c4d": {state: "working", title: "✳ Busy"}}}), agentTrees);
+  await page.evaluate(t => term.workspaces({...t, trees: t.trees.map(w => w.path === "/w/review" ? {...w, resume: {harness: "claude", session: "mc-9z9z9z9z"}} : w),
+    panes: {}}), agentTrees);  // the other host's publish: none of its panes are agents
   await page.evaluate(() => closeTab(latestTab(t => paneOf(t).some(p => p.session === "mc-1a2b3c4d"))));
-  assert.equal((await posts(page, "close")).filter(m => m.session === "mc-1a2b3c4d").pop().keep, true, "its agent still runs: kept");
+  assert.equal((await posts(page, "close")).filter(m => m.session === "mc-1a2b3c4d").pop().keep, true, "its agent still runs (seen on its host): kept");
   // deleting the workspace ends its sessions, agent or not
   await page.evaluate(t => term.workspaces(t), agentTrees);
   await page.evaluate(() => term.ws("mc-1a2b3c4d"));
@@ -474,7 +476,7 @@ test("Chief's console that comes before the first trees waits for them, then att
   await fresh.addInitScript(() => { window.__posts = []; window.webkit = {messageHandlers: {term: {postMessage: m => window.__posts.push(JSON.parse(JSON.stringify(m)))}}} });
   await fresh.goto(page.url()); await fresh.waitForFunction(() => window.term);
   await fresh.evaluate(() => { term.ws("review"); term.restore({tabs: []}) });  // the app sends it before the layout
-  await fresh.evaluate(t => term.workspaces({...t, tmuxOk: false}), TREES);  // the Mac's trees first (the server's still out)
+  await fresh.evaluate(t => term.workspaces({...t, hostsPending: true}), TREES);  // the Mac's trees first (the server's still out)
   assert.equal(await fresh.evaluate(() => tabs.length), 0, "one host's trees: still waiting, no plain shell");
   await fresh.evaluate(() => term.ws("/w/review"));  // a second request while a host is still out: it waits too
   assert.equal(await fresh.evaluate(() => tabs.length), 0, "a later request waits for every host as well");
@@ -509,6 +511,12 @@ test("a restored kept pane closed before the first trees keeps its agent", async
   await fresh.evaluate(() => closeTab(cur));
   assert.equal((await posts(fresh, "close")).pop().keep, true);
   await fresh.close();
+});
+test("a click in the page (sidebar, palette, card) on a worktree with a live agent still shows your own tab", async page => {
+  await page.evaluate(t => term.workspaces(t), {trees: TREES.trees.map(w => w.path === "/w/review" ? {...w, resume: {harness: "claude", session: "mc-1a2b3c4d"}} : w)});
+  await page.evaluate(() => { newTab("/w/review"); openWs("/w/review") });
+  assert.equal((await posts(page, "open")).filter(o => o.session === "mc-1a2b3c4d").length, 0, "no agent tab from a click");
+  assert.notEqual(await page.evaluate(() => cur.focus.session), "mc-1a2b3c4d");
 });
 test("Chief's console by a worktree's last part attaches only when one live agent's worktree ends that way", async page => {
   const mk = (path, session) => ({ade: "orca", project: "acme/" + path.split("/")[1], name: "api", path, branch: "b", main: false, agent: "working",
