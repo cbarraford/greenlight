@@ -2745,20 +2745,26 @@ test("Agents view: copy session ID and launch new terminal window connected to t
   assert.equal(afterScroll, beforeScroll, "clicking Copy must not reset the page's scroll");
 });
 
-test("classic scrollbars: a tall Agents strip or a board at its floor never scrolls the page sideways", async () => {
+test("classic scrollbars: a tall Agents strip, a board at its floor or a honeycomb past the page never scrolls it sideways", async () => {
   if (ENGINE !== "chromium") return;  // Playwright hides Chromium's scrollbars; this run shows them, as macOS does with a mouse attached
   const b = await chromium.launch({executablePath: browserPath(), ignoreDefaultArgs: ["--hide-scrollbars"]});
   try {
-    for (const [n, height] of [[10, 900], [2, 480], [3, 420]]) {  // cards past 240; the board's 260 floor in a short window; a honeycomb past it
-      const p = await b.newPage({viewport: {width: 1300, height}});
+    // cards past 240; the board's 260 floor in a short window; 60 lone hexes (distinct steps: none stack) whose honeycomb outgrows the page
+    for (const [n, height, agent, cells, above] of [[10, 900, "working", 1, true], [2, 480, "working", 2, false], [60, 600, "idle", 60, true]]) {
+      const p = await b.newPage({viewport: {width: 1300, height}}), errs = [];
+      p.on("pageerror", e => errs.push(e.message));
       await p.addInitScript(() => { window.webkit = {messageHandlers: {mc: {postMessage: () => {}}}} });
       await p.goto(PAGE);
-      const pucks = Array.from({length: n}, (_, k) => ({...puck(`c-${k}`, `Task ${k}`, "working"), path: `/w/c-${k}`}));
+      const pucks = Array.from({length: n}, (_, k) => { const q = puck(`c-${k}`, `Task ${k}`, agent); return {...q, path: `/w/c-${k}`, step: cells > 1 ? `s-${k}` : q.step} });
       await p.evaluate(s => window.mc.update(s), {...SNAP, pucks});
-      const g = await p.evaluate(() => { const m = document.getElementById("main"); return {sw: m.scrollWidth, cw: m.clientWidth, sh: m.scrollHeight, ch: m.clientHeight, bar: m.offsetWidth - m.clientWidth} });
+      const g = await p.evaluate(() => { const m = document.getElementById("main"); return {sw: m.scrollWidth, cw: m.clientWidth, sh: m.scrollHeight, ch: m.clientHeight, bar: m.offsetWidth - m.clientWidth,
+        cells: m.querySelectorAll(".fieldwrap > .cell, .fieldwrap > .fan").length, board: m.querySelector(".fieldwrap").offsetHeight} });
+      assert.equal(g.cells, cells, `${n} workspaces should lay out as ${cells} hex(es)`);
+      assert.equal(g.board > 260, above, `${n} workspaces: the board should ${above ? "be past" : "sit at"} its 260 floor (${g.board})`);
       assert.ok(g.sh > g.ch, `${n} agents at ${height}px tall should scroll the page down (${g.sh} <= ${g.ch})`);
       assert.ok(g.bar > 0, "this run should draw classic scrollbars");
       assert.ok(g.sw <= g.cw + 1, `${n} agents at ${height}px tall: the page scrolls sideways (${g.sw} > ${g.cw})`);
+      assert.deepEqual(errs, [], "page errors: " + errs.join("; "));
       await p.close();
     }
   } finally { await b.close() }
