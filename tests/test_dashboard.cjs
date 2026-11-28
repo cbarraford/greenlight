@@ -1517,10 +1517,13 @@ test("All output, pane log: real short output, errors, replies and program outpu
     L("a.g0:9", "● OK"), L("a.g0:10", "run 1: 50.2 tok/s"), L("a.g0:11", "run 2: 51.0 tok/s"), L("a.g0:12", "Compiling… crate foo"), L("a.g0:13", "Compiling… crate bar"),
     L("a.g0:14", "● Bash(seq 3)"), L("a.g0:15", "  ⎿  1"), L("a.g0:16", "     2"), L("a.g0:17", "     3"), L("a.g0:18", "Building…"), L("a.g0:19", "Linking…"),
     L("a.g0:20", "| llama3 | 50.2 tok/s"), L("a.g0:21", "✻ Thinking… (esc to interrupt)"), L("a.g0:22", "  - a"), L("a.g0:23", "• Working (3s • esc to interrupt)"),
-    L("a.g0:24", "◦ Working (4s • esc to interrupt)"), L("a.g0:25", "g"), L("a.g0:26", "• Working (5s • esc to interrupt)")]});
+    L("a.g0:24", "◦ Working (4s • esc to interrupt)"), L("a.g0:25", "g"), L("a.g0:26", "• Working (5s • esc to interrupt)"),
+    L("a.g0:27", "  ✻ Thinking… (esc to interrupt)"), L("a.g0:28", "  ✻ Thinking… (esc to interrupt)"), L("a.g0:29", "* Downloading… (50%)"), L("a.g0:30", "* Downloading… (100%)"),
+    ...["✻ Philosophizing… 6", "", "*", "", "✶", "Checking for updates…", "✢", "✻ Philosophizing…", "7m 10s · ↓ 24.3k tokens · thought for 2s)", "✶", "· Philosophizing…"]
+      .map((t, i) => L(`d.g0:${i}`, t))]});
   const hidden = await page.$$eval("#aout-list > .aoe.line[hidden]", es => es.map(e => e.dataset.id));
-  assert.deepEqual(hidden, ["a.g0:4", "a.g0:23", "a.g0:24", "a.g0:25"],
-    "only the blank row and the spinner's redraws go (Codex's too): short results, another session's line, errors, a short reply, a build's progress and a results table stay");
+  assert.deepEqual(hidden, ["a.g0:4", "a.g0:23", "a.g0:24", "a.g0:25", ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(i => `d.g0:${i}`)],
+    "only the blank row and the spinner's redraws go (Codex's too, and a real Claude Code run down to its last line): short results, quoted spinner text, another session's line, errors, a short reply, a build's progress and a results table stay");
   assert.equal(await page.$eval("#aout-list [data-id='a.g0:26']", e => e.dataset.k), "status", "Codex's spinner is a status line, not the agent talking");
   assert.match(await page.textContent("#aout-filter [data-f='err']"), /Errors\s*2/, "short error lines are still errors");
   assert.equal(await page.$eval("#aout-list [data-id='a.g0:9']", e => e.dataset.k), "said", "a short reply is the agent talking, and ends the call");
