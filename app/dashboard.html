@@ -2487,7 +2487,8 @@ function outKind(e){
   if (e.role === "line" && TOOL_LINE.test(t)) return "tool";
   if (e.role === "line" && PROMPT_LINE.test(t)) return "prompt";
   if (e.role === "line" && (!t.trim() || TICK_LINE.test(t))) return "blank";
-  if (e.role === "line" && STATUS_LINE.test(t) && !ERR_LINE.test(t)) return "status";  // before said (Codex's spinner starts with a bullet); an error-looking line is never hidden
+  if (e.role === "line" && STATUS_LINE.test(t)) return "status";  // before said (Codex's spinner starts with a bullet); its label ("Fixing 3 failed tests…") isn't an error
+  if (e.role === "line" && /^[●•✻✽✶✳✢·*◦] \d+$/.test(t)) return "frag";  // a spinner glyph and its counter (a reply is drawn after ⏺, "⏺ 3")
   if (e.role === "line" && SAID_LINE.test(t)) return "said";
   if (e.role === "line" && ERR_LINE.test(t)) return "err";
   return e.role === "line" && /^\S/.test(t) && (t.replace(/\s+/g, "").length <= 3 || /^[A-Z][a-z]+…(?: \d+)?$/.test(t)) ? "frag" : "out";  // frag: maybe a spinner's stray letters or its bare word
