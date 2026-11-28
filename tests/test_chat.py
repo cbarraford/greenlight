@@ -1619,34 +1619,105 @@ def test_stop_shell(tmp_path, monkeypatch):
 
 
 # The gpt-live-24h-cost bug: asked what GPT-Live cost over the last 24 hours, the chat created a workspace and
-# dispatched an agent to look it up. This fake `claude -p` does exactly that, through greenlight.py and a fake Orca
-# CLI that logs every call, so the test sees whether a workspace was really made.
+# dispatched an agent to look it up. This fake `claude -p` tries to create a real Worktrunk workspace
+# through greenlight.py, so the test sees whether a workspace was really made.
 FAKE_DISPATCH = """#!/usr/bin/env python3
 import json, subprocess, sys
 sys.stdin.read()
 p = subprocess.run([sys.executable, %r, "ade", "worktree", "create", "--name", "gpt-live-24h-cost", "--repo", "greenlight",
-                    "--comment", "Report GPT-Live's 24h spend", "--agent", "claude", "--prompt", "Query org costs for 24h"],
+                    "--comment", "Report GPT-Live's 24h spend"],
                    capture_output=True, text=True)
 reply = ("Created gpt-live-24h-cost" if p.returncode == 0 else "Answered directly: " + p.stderr.strip())
 print(json.dumps({"type": "assistant", "session_id": "s1", "message": {"content": [{"type": "text", "text": reply}]}}))
 print(json.dumps({"type": "result", "session_id": "s1", "result": reply, "is_error": False, "duration_ms": 10}))
 """
-FAKE_ORCA = """#!/usr/bin/env python3
-import json, sys
-open(sys.argv[0] + ".log", "a").write(json.dumps(sys.argv[1:]) + "\\n")
-print(json.dumps({"ok": True, "result": {"worktree": {"id": "w1"}}}))
-"""
+def _make_fake_wt(base_dir):
+    """Isolated executable `wt` stub backed by git worktree so tests never require host `wt`."""
+    wt = base_dir / "wt-stub"
+    wt.write_text(
+        f"#!{sys.executable}\n"
+        "import json, subprocess, sys\n"
+        "from pathlib import Path\n"
+        "args = sys.argv[1:]\n"
+        "repo, i = '.', 0\n"
+        "while i < len(args):\n"
+        "    if args[i] == '-C':\n"
+        "        repo = args[i + 1]; i += 2\n"
+        "    elif args[i] in ('-y', '--yes'):\n"
+        "        i += 1\n"
+        "    elif args[i] == '--config-set':\n"
+        "        i += 2\n"
+        "    else:\n"
+        "        break\n"
+        "sub, rest = args[i], args[i + 1:]\n"
+        "if sub == 'switch':\n"
+        "    base, pos, j = None, [], 0\n"
+        "    while j < len(rest):\n"
+        "        if rest[j] == '--base':\n"
+        "            base = rest[j + 1]; j += 2\n"
+        "        elif rest[j].startswith('-'):\n"
+        "            j += 1\n"
+        "        else:\n"
+        "            pos.append(rest[j]); j += 1\n"
+        "    branch = pos[0]\n"
+        "    r = Path(repo).resolve()\n"
+        "    dest = r.parent / f'{r.name}.{branch.replace(\"/\", \"-\")}'\n"
+        "    cmd = ['git', '-C', str(r), 'worktree', 'add', '-q', '-b', branch, '--', str(dest)]\n"
+        "    if base:\n"
+        "        cmd.append(base)\n"
+        "    p = subprocess.run(cmd, capture_output=True, text=True)\n"
+        "    if p.returncode:\n"
+        "        sys.stderr.write(p.stderr); sys.exit(p.returncode)\n"
+        "    print(json.dumps({'action': 'created', 'branch': branch, 'path': str(dest)}))\n"
+        "elif sub == 'list':\n"
+        "    p = subprocess.run(['git', '-C', repo, 'worktree', 'list', '--porcelain'], capture_output=True, text=True, check=True)\n"
+        "    items, cur = [], {}\n"
+        "    for line in p.stdout.splitlines() + ['']:\n"
+        "        if line.startswith('worktree '):\n"
+        "            cur = {'worktree': {'path': line[9:]}}\n"
+        "        elif line.startswith('branch '):\n"
+        "            cur['branch'] = line[7:].removeprefix('refs/heads/')\n"
+        "        elif not line and cur:\n"
+        "            items.append(cur); cur = {}\n"
+        "    print(json.dumps({'schema': 2, 'items': items}))\n"
+        "elif sub == 'remove':\n"
+        "    force = '--force' in rest or '-f' in rest\n"
+        "    target = [x for x in rest if not x.startswith('-')][-1]\n"
+        "    cmd = ['git', '-C', repo, 'worktree', 'remove', *(['--force'] if force else []), target]\n"
+        "    p = subprocess.run(cmd, capture_output=True, text=True)\n"
+        "    if p.returncode:\n"
+        "        sys.stderr.write(p.stderr); sys.exit(p.returncode)\n"
+        "else:\n"
+        "    sys.stderr.write(f'unsupported wt subcommand: {sub}\\n'); sys.exit(2)\n"
+    )
+    wt.chmod(wt.stat().st_mode | stat.S_IXUSR)
+    return wt
 
 
 def dispatch_turn(tmp_path, monkeypatch, msg):
     scripts = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts")
-    fake, orca = tmp_path / "claude", tmp_path / "orca"
+    run_id = 0
+    while (run_dir := tmp_path / f"turn-{run_id}").exists():
+        run_id += 1
+    run_dir.mkdir()
+    fake = run_dir / "claude"
     fake.write_text(FAKE_DISPATCH % os.path.join(scripts, "greenlight.py"))
-    orca.write_text(FAKE_ORCA)
-    for f in (fake, orca):
-        f.chmod(f.stat().st_mode | stat.S_IXUSR)
-    monkeypatch.setenv("ORCA_CLI_COMMAND", str(orca))
-    monkeypatch.setenv("GREENLIGHT_ADE", "orca")  # a fake Orca CLI: the test is Orca's (native is the default since #195)
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    wt = _make_fake_wt(run_dir)
+    repo, home = run_dir / "greenlight", run_dir / "home"
+    user_home, xdg_config = run_dir / "user-home", run_dir / "xdg-config"
+    for d in (repo, home, user_home, xdg_config):
+        d.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@localhost",
+                    "commit", "-q", "--allow-empty", "-m", "init"], check=True)
+    (home / "repos.json").write_text(json.dumps([str(repo)]))
+    (home / "imported.json").write_text("{}")
+    monkeypatch.setenv("HOME", str(user_home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg_config))
+    monkeypatch.setenv("GREENLIGHT_HOME", str(home))
+    monkeypatch.setenv("WORKTRUNK_BIN", str(wt))
+    monkeypatch.setenv("GREENLIGHT_ADE", "native")
     monkeypatch.setenv("GREENLIGHT_REQUEST", "")  # chat.turn sets it: restored after the test
     events = []
     monkeypatch.setattr(chat.harness, "binary", lambda n: str(fake))
@@ -1654,8 +1725,8 @@ def dispatch_turn(tmp_path, monkeypatch, msg):
     monkeypatch.setattr(chat, "PIDFILE", str(tmp_path / "pid"))
     monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
     chat.turn(msg, "claude-haiku-5-5", None)
-    log = str(orca) + ".log"
-    calls = [json.loads(l) for l in open(log)] if os.path.exists(log) else []
+    trees = subprocess.run(["git", "-C", str(repo), "worktree", "list", "--porcelain"], capture_output=True, text=True, check=True).stdout
+    calls = [["worktree", "create"]] if "gpt-live-24h-cost" in trees else []
     return [e["text"] for e in events if e["e"] == "done"], calls
 
 
@@ -1667,7 +1738,7 @@ def test_billing_question_creates_no_workspace(tmp_path, monkeypatch):
 
 def test_change_request_still_creates_workspace(tmp_path, monkeypatch):
     done, calls = dispatch_turn(tmp_path, monkeypatch, "Add a 24h GPT-Live cost meter to the dashboard")
-    assert [c[:2] for c in calls] == [["host", "list"], ["worktree", "create"]], calls  # placed first (#160)
+    assert [c[:2] for c in calls] == [["worktree", "create"]], calls
     assert done == ["Created gpt-live-24h-cost"], done
 
 
@@ -1682,7 +1753,7 @@ def test_answer_carries_the_request_it_answers(tmp_path, monkeypatch):
     # and an answer to a change request's question is a change, though alone it reads as a question
     (tmp_path / "asked").write_text("Add a 24h GPT-Live cost meter to the dashboard" + chat.ASKED + "Which repo?")
     done, calls = dispatch_turn(tmp_path, monkeypatch, "which repo would you put it in?")
-    assert [c[:2] for c in calls] == [["host", "list"], ["worktree", "create"]], calls  # placed first (#160)
+    assert [c[:2] for c in calls] == [["worktree", "create"]], calls
 
 
 def test_asked_question():

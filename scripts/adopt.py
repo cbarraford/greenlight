@@ -355,12 +355,43 @@ def ws_name(c):
     return c["source_branch"] if c["role"] == "author" else f"mr-{c['iid']}"
 
 
-def create_args(c, base):
-    name = ws_name(c)
+def create_args(c, base, name=None):
+    name = name or ws_name(c)
     goal = f"{'Merge' if c['role'] == 'author' else 'Review'} {greenlight.ref(c['forge'], c['iid'])}: {c['title']}"
     repo = f"id:{c['repo']['id']}" if orca_ade() else c["repo"]["id"]
     return ["worktree", "create", "--name", name, "--repo", repo, "--base-branch", base,
             *([{"github": "--pr"}.get(c["forge"], "--gitlab-mr"), str(c["iid"])] if orca_ade() else []), "--comment", goal, "--setup", "skip"]
+
+
+def _ref_sha(path, branch):
+    p = subprocess.run(["git", "-C", path, "rev-parse", "--verify", "-q", f"refs/heads/{branch}"],
+                       capture_output=True, text=True, timeout=60)
+    return p.stdout.strip() if p.returncode == 0 else ""
+
+
+def _prepare_branch(path, want, base):
+    """Handle a preserved local branch (from `--no-delete-branch`) before Worktrunk creates a worktree.
+
+    Returns `(create_name, restore_sha)`. If `want` already exists locally and is not checked out:
+    - when it is an ancestor of `base`, delete the stale ref so Worktrunk can create `want` cleanly
+      (and return `old_sha` so callers can restore it if creation fails);
+    - when it has diverged commits, leave `refs/heads/<want>` intact and pick a free `<want>-N` name.
+    """
+    if not base or base.startswith("-") or not os.path.isdir(path):
+        return want, None
+    old_sha = _ref_sha(path, want)
+    if not old_sha or want in checked_out(path):
+        return want, None
+    anc = subprocess.run(["git", "-C", path, "merge-base", "--is-ancestor", old_sha, base],
+                         capture_output=True, text=True, timeout=60)
+    if anc.returncode == 0:
+        subprocess.run(["git", "-C", path, "branch", "-D", "--", want],
+                       capture_output=True, text=True, timeout=60, check=True)
+        return want, old_sha
+    n = 2
+    while _ref_sha(path, f"{want}-{n}"):
+        n += 1
+    return f"{want}-{n}", None
 
 
 def ensure_branch(path, want, upstream=None):
@@ -393,10 +424,17 @@ def create(c):
         if orca_ade():  # Orca bases the worktree on the local branch, then names its own (fixed below)
             git(path, "fetch", "origin", f"+{head}:{want}")
             base = want
-        else:  # the shims run `git worktree add -b mr-N`, so mr-N mustn't exist yet: base on the commit
+        else:  # native/Worktrunk creates the branch at base: handle any preserved local ref safely first
             git(path, "fetch", "origin", head)
             base = c["sha"]
-    res = greenlight.orca(*create_args(c, base))
+    create_name, restore_sha = (want, None) if orca_ade() else _prepare_branch(path, want, base)
+    try:
+        res = greenlight.orca(*create_args(c, base, name=create_name))
+    except Exception:
+        if restore_sha:
+            subprocess.run(["git", "-C", path, "branch", "--", want, restore_sha],
+                           capture_output=True, text=True, timeout=60)
+        raise
     wt = (res.get("worktree") or res)
     branch = ensure_branch(wt["path"], want, upstream) if wt.get("path") else None
     return {"path": wt.get("path"), "branch": branch}

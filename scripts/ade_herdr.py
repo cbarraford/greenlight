@@ -1,5 +1,6 @@
-"""herdr backend (GREENLIGHT_ADE=herdr, a legacy live driver): ade.py's contract answered by herdr.
+"""Read-only herdr import source for importers.py (no longer a live GREENLIGHT_ADE=herdr backend).
 
+Live workspace operations use Worktrunk and ade_basement.py (`GREENLIGHT_ADE=native`).
 herdr has workspaces, git worktrees, panes and agent detection of its own; goals live in ~/.greenlight/goals.json
 (herdr has no workspace description). GREENLIGHT_HERDR_SESSION targets a named session instead of the default.
 """

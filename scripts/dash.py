@@ -11,7 +11,7 @@
     dash.py logextras <ws>                          one JSON line: All output's extras: the sessions' tokens and estimated cost
                                                     (log_view.usage), and the files the branch touched (tree diff branch, else head)
     dash.py logshare <ws> [--req N] < text          one JSON line: {text, removed}: the log text with private details taken out
-    dash.py trees                                   one JSON line: every worktree of every installed ADE (orca, cmux, herdr, t3), for the terminal's sidebar
+    dash.py trees                                   one JSON line: every native Worktrunk workspace, for the terminal's sidebar
                                                     (and `usage`, the footer's plan meters: usage.py)
     dash.py turn <mc-session>                       one JSON line: how a Basement pane's agent ended its turn (ade_common.agent_state)
     dash.py tree info|rm|goal|cfg|new|diff <path> [--force]  the sidebar's workspace menu: git facts and listening ports; remove
@@ -30,7 +30,7 @@
                                                     send it again with answers {id: text}, or force: true to start anyway
 
 Pucks join ~/.greenlight/last.json (lifecycle, MR, next step from greenlight.py scan, refreshed by every greenlight run; the interval is in Greenlight Settings → Dashboard)
-with a live `orca worktree ps` (agent state, seconds old). Never calls GitLab for the overview.
+with live native workspace state (`ade_basement.worktrees()`, agent state, seconds old). Never calls GitLab for the overview.
 Page layouts come from Claude Haiku picking widgets out of CATALOG; the page renders only known
 widgets, so a bad layout degrades to fewer cards, never to executed output.
 """
@@ -631,8 +631,7 @@ def advice(r, attempts=None):
 
 def live_agents():
     out = {}
-    wts, _ = greenlight.merge_basement_worktrees(greenlight.orca("worktree", "ps", "--limit", "10000")["worktrees"])
-    for w in wts:
+    for w in greenlight.orca("worktree", "ps", "--limit", "10000")["worktrees"]:
         out[w["worktreeId"]] = (w, greenlight.primary_agent(w.get("agents")))
     return out
 
@@ -819,23 +818,16 @@ ADES = None  # a fixed list in place of ades() (tests)
 
 
 def ades():
-    """The backends dash.py lists worktrees from, first wins a shared path: Orca (and a legacy driver in use) first, so
-    a workspace one of them knows is changed and deleted through it, then the native engine when it's in use (it lists
-    every registered repo's worktrees, whichever ADE or plain git made them)."""
+    """The native workspaces; other ADEs are available only through Settings → Import."""
     if ADES:
         return tuple(ADES)
-    try:
-        cur = ade.name()
-    except RuntimeError:  # a GREENLIGHT_ADE naming no backend: Orca's, if it's there
-        cur = "orca"
-    if cur == "native":  # the legacy live drivers aren't merged: the native engine finds their worktrees through git
-        return ("orca", "native")
-    return ("orca", "cmux", "herdr", "t3")  # Orca (or a legacy driver) in use: every installed ADE, as before
+    return ("native",)
 
 
 def ade_call(n):
-    """The `orca …`-shaped call for backend n: the Orca CLI itself for orca (tree_new places an Orca create its own
-    way, as the user's pick: `call is greenlight.orca_cli`), else n's dispatch."""
+    """Dispatch live workspace calls to native; the legacy path exists for historical tests only."""
+    if n != "native" and (ADES is None or n not in ADES):
+        raise RuntimeError(f"{n} is an import source, not a live workspace backend")
     return greenlight.orca_cli if n == "orca" else ade.get(n).call
 
 
@@ -855,8 +847,6 @@ def trees():
         try:
             call = ade_call(name)
             ws = call("worktree", "ps", "--limit", "10000")["worktrees"]
-            if name == "orca":
-                ws, _ = greenlight.merge_basement_worktrees(ws)
         except Exception:
             continue
         for w in ws:
@@ -1326,7 +1316,8 @@ def turn(session):
         meta = ade_basement.tmux("display-message", "-p", "-t", f"={session}:", "#{pane_title}\t#{pane_current_command}").strip()
         title, _, cmd = meta.partition("\t")
         kind = ade_basement.agent_type(title, cmd)
-        agent_label = {"claude": "Claude Code", "codex": "Codex", "agy": "Antigravity"}.get(kind or "", "Claude Code")
+        agent_label = {"claude": "Claude Code", "codex": "Codex", "agy": "Antigravity",
+                       "gemini": "Gemini CLI", "opencode": "opencode", "pi": "pi"}.get(kind or "", "Claude Code")
     except Exception:
         pass
     with diag.span("turn") as sp:
@@ -1363,8 +1354,7 @@ def tree_info(path):
 def outside_agent(path):
     """cleanup.outside_agent, for the Basement's Delete: an agent outside Greenlight in the tree is a risk to confirm."""
     import cleanup
-    paths = []
-    if not ade.is_native():
+    if not native_in_use():
         return None
     p = external.real(path).rstrip("/")  # resolved, as the agents' folders are (a worktree may be listed through a symlink)
     try:  # nothing in or under it, of anyone's: no need for the worktree list (it costs git calls per worktree)
@@ -1374,11 +1364,10 @@ def outside_agent(path):
         return "an agent (the process check failed, so it can't be ruled out)"
     if not near:
         return None
-    if ade.is_native():
-        try:  # every worktree: our agents' ownership depends on the nested ones
-            paths = [w["path"] for w in importlib.import_module("ade_basement").worktrees()]
-        except Exception:  # noqa: BLE001 - without the list it can't be ruled out: say so, Delete asks first
-            return "an agent (the worktree list failed, so it can't be ruled out)"
+    try:  # every worktree: our agents' ownership depends on the nested ones
+        paths = [w["path"] for w in importlib.import_module("ade_basement").worktrees()]
+    except Exception:  # noqa: BLE001 - without the list it can't be ruled out: say so, Delete asks first
+        return "an agent (the worktree list failed, so it can't be ruled out)"
     return cleanup.outside_agent(path, fresh=True, paths=paths)  # fresh again: the listing above takes a while
 
 
@@ -1972,10 +1961,10 @@ def waiting_term(name, done_ok=False):
     state = (ag or {}).get("state")
     if state != "waiting" and not (done_ok and state == "done"):
         return "its agent isn't waiting on you any more"
+    pane = (ag or {}).get("paneKey")
     terms = [t for t in greenlight.orca("terminal", "list", "--limit", "10000")["terminals"]
-             if t["worktreeId"] == w["worktreeId"] and t.get("agentIdentity")]
-    if pane := ag.get("paneKey"):
-        terms = [t for t in terms if f'{t.get("tabId")}:{t.get("leafId")}' == pane]
+             if t.get("worktreeId") == w["worktreeId"]
+             and (f'{t.get("tabId")}:{t.get("leafId")}' == pane if pane else t.get("agentIdentity"))]
     if not terms:
         return "no terminal found for its waiting agent"
     h = max(terms, key=lambda t: t.get("lastOutputAt") or 0)["handle"]

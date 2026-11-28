@@ -1,5 +1,6 @@
-"""cmux backend (GREENLIGHT_ADE=cmux, a legacy live driver): ade.py's contract answered by cmux.
+"""Read-only cmux import source for importers.py (no longer a live GREENLIGHT_ADE=cmux backend).
 
+Live workspace operations use Worktrunk and ade_basement.py (`GREENLIGHT_ADE=native`).
 cmux has workspaces and terminals but no worktrees, repos or agent records, so those come from git
 and from cmux's agent hook stores (~/.cmuxterm/*-hook-sessions.json). The goal lives in the
 workspace description, as it lives in the Orca comment. Needs cmux's socket in Automation mode

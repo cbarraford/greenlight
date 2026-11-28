@@ -4,10 +4,9 @@
     get(name=None)  that backend's module (ade_<module>.py)
     dispatch(b, *args)  an `orca …`-shaped call (greenlight.py ade, and every core caller today) answered by b's contract
 
-`native` is greenlight's own engine: git worktrees, the app's tmux server (`tmux -L greenlight`), repos.json and
-goals.json (ade_basement.py; `basement` is its old name), and the default. `orca` drives the Orca app (opt-in). cmux,
-herdr and t3 are the deprecated legacy live drivers: they still answer when set, but importers.py brings their repos
-and goals in once, and external.py sees the agents they run, so the native engine needs neither.
+`native` is Greenlight's engine: Worktrunk worktrees, the app's tmux server (`tmux -L greenlight`), repos.json and
+goals.json (ade_basement.py; `basement` is its old name). Orca, cmux, herdr and T3 adapters remain only as read-only
+sources for importers.py. external.py sees agents another app runs, so Greenlight avoids their active worktrees.
 
 The contract (what core code may ask of a backend; rows are in Orca's worktree/terminal shape, the one the scan reads):
 
@@ -31,11 +30,11 @@ from pathlib import Path
 
 import ade_common
 
-DEFAULT = "native"  # a new install's engine on macOS and Linux (#195); one that ran on Orca keeps it (settle)
+DEFAULT = "native"
 ALIASES = {"basement": "native"}
 MODULES = {"native": "ade_basement", "orca": "ade_orca", "cmux": "ade_cmux", "herdr": "ade_herdr", "t3": "ade_t3"}
 NAMES = tuple(MODULES)
-LEGACY = ("cmux", "herdr", "t3")  # deprecated live drivers: still answer when set, but importers.py + external.py replace them
+LEGACY = ("orca", "cmux", "herdr", "t3")  # import sources, never live workspace backends
 
 
 def _home():
@@ -52,23 +51,44 @@ def _config_raw_ade():
 
 def canonical(n):
     """A backend name as written (any case, an alias) → its name in NAMES, else None."""
-    n = (n or "").strip().lower()
+    n = (n or "").strip().lower() if isinstance(n, str) else ""
     n = ALIASES.get(n, n)
     return n if n in MODULES else None
 
 
-def name():
-    """The backend in use. An unknown GREENLIGHT_ADE is an error (it names a backend that isn't there); an unknown
-    config value is left alone and answered from the install's history (Orca if it ran before, else the default)."""
+def name(migrate=True):
+    """The native backend. Older ADE selections are migrated; importers still read those sources."""
     env = os.environ.get("GREENLIGHT_ADE")
     if env:
         if not (n := canonical(env)):
-            raise RuntimeError(f"GREENLIGHT_ADE={env!r}: not one of {', '.join(NAMES)}")
-        return n
-    raw = _config_raw_ade()
-    if raw not in (None, ""):  # set: a backend, or a typo left for the user to fix (diag doctor flags it, ade_config)
-        return canonical(raw if isinstance(raw, str) else None) or ("orca" if ran_before() else DEFAULT)
-    return settle()
+            raise RuntimeError(f"GREENLIGHT_ADE={env!r}: use native")
+        if n != DEFAULT:
+            raise RuntimeError(f"GREENLIGHT_ADE={env!r}: live ADE backends are retired; use greenlight.py import")
+        return DEFAULT
+    if migrate:
+        raw = _config_raw_ade()
+        if canonical(raw if isinstance(raw, str) else None) in LEGACY:
+            _migrate_config()
+        elif raw in (None, ""):
+            settle()
+    return DEFAULT
+
+
+def _migrate_config():
+    """Persist the native selection without changing any other user settings."""
+    f = _home() / "config.json"
+    try:
+        with open(f.with_suffix(".lock"), "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            cfg = json.loads(f.read_text())
+            if isinstance(cfg, dict) and canonical(cfg.get("ade")) in LEGACY:
+                cfg["ade"] = DEFAULT
+                cfg["ade_set_because"] = "live ADE backends retired; import remains available"
+                tmp = f.with_name(f".{f.name}.{os.getpid()}.tmp")
+                tmp.write_text(json.dumps(cfg, indent=1))
+                os.replace(tmp, f)
+    except (OSError, ValueError):
+        pass
 
 
 def ran_before():
@@ -84,13 +104,11 @@ def config_ok():
 
 
 def settle():
-    """The backend for an install that never chose one, decided once and written into config.json ("ade") so it never
-    flips later. A new install gets DEFAULT (native). One that already ran greenlight (a scan's last.json, log.jsonl,
-    decisions.jsonl or history/) ran on Orca, the old default, and keeps it: native is then an explicit switch (README, under Requirements)."""
+    """Record the native backend for an install that never chose one."""
     home = _home()
-    n = "orca" if ran_before() else DEFAULT
+    n = DEFAULT
     f = home / "config.json"
-    why = "this install ran on Orca before native became the default" if n == "orca" else "a new install: native by default"
+    why = "Worktrunk workspaces with Greenlight agent sessions"
     try:
         home.mkdir(parents=True, exist_ok=True)
         with open(f.with_suffix(".lock"), "w") as lock:  # decide.set_conf's lock: one writer at a time
@@ -101,7 +119,7 @@ def settle():
                 tmp.write_text(json.dumps({**cfg, "ade": n, "ade_set_because": why}, indent=1))
                 os.replace(tmp, f)
             elif isinstance(cfg, dict) and isinstance(cfg["ade"], str):
-                n = canonical(cfg["ade"]) or n  # another process settled it meanwhile (or a typo: decided, left alone)
+                n = DEFAULT
     except (OSError, ValueError):
         pass  # can't write it (or not settings we can add to): the same answer next time, from the same facts
     return n
@@ -116,12 +134,7 @@ def is_native():
 
 
 def deprecated():
-    """The legacy live driver in use (cmux, herdr, t3), else None: diag doctor says so."""
-    try:
-        n = name()
-    except RuntimeError:
-        return None
-    return n if n in LEGACY else None
+    return None
 
 
 def get(n=None):
@@ -164,5 +177,11 @@ def dispatch(b, *args):
 
 
 def call(*args, n=None):
-    """dispatch() on the backend in use (or n). Orca takes its own CLI's arguments whole."""
+    """Dispatch live workspace operations only through the native backend."""
+    if n is not None:
+        c = canonical(n)
+        if not c:
+            raise KeyError(f"no ADE backend {n!r}")
+        if c != DEFAULT:
+            raise RuntimeError(f"{n} is an import source, not a live workspace backend")
     return get(n).call(*args)

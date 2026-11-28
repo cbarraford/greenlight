@@ -69,6 +69,14 @@ jobs:
         run: |
           python3 -m venv "$RUNNER_TEMP/venv"
           "$RUNNER_TEMP/venv/bin/pip" install -q pytest "ruff==0.17.6" "mypy<2" coverage diff-cover
+          cat > "$RUNNER_TEMP/worktrunk.req" <<'EOF'
+          worktrunk==0.83.0 \
+            --hash=sha256:d924ec99ba4beba040ca2517c32f6495064cc1cccb304f07ba251ecd30e2ab8b \
+            --hash=sha256:ac05fbdee75e4bf5cb9d69860536cf8eebaac87930d04154da43e8baa8bff537 \
+            --hash=sha256:5cf571bb85e73e6ecd14bbb791d3566256367760961ae9f1100cde51a4517427 \
+            --hash=sha256:1f96d27d21aae484828d2b7d88de3888b58a3868613eb98b313e05437df6e7c5
+          EOF
+          "$RUNNER_TEMP/venv/bin/pip" install -q --require-hashes -r "$RUNNER_TEMP/worktrunk.req"
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
       - name: ruff lint & security
         run: ruff check scripts/ tests/ app/kokoro.py
@@ -150,6 +158,7 @@ jobs:
           GREENLIGHT_CODE: ${{ github.workspace }}
         run: |
           export GREENLIGHT_HOME="$RUNNER_TEMP/gl-ci-home"
+          export GREENLIGHT_TMUX_SOCKET="gl-ci-swift-$$"
           mkdir -p "$GREENLIGHT_HOME" "$RUNNER_TEMP/gl-ci-bin"
           cat > "$RUNNER_TEMP/gl-ci-bin/claude" <<'PY'
           #!/usr/bin/env python3
@@ -162,6 +171,7 @@ jobs:
           print(json.dumps({"type": "result", "is_error": False, "result": reply, "duration_ms": 10}), flush=True)
           PY
           chmod +x "$RUNNER_TEMP/gl-ci-bin/claude"
+          printf '{}\n' > "$GREENLIGHT_HOME/imported.json"
           printf '{"harnesses":{"claude":{"bin":"%s/gl-ci-bin/claude"}}}\n' "$RUNNER_TEMP" > "$GREENLIGHT_HOME/config.json"
           "$RUNNER_TEMP/Greenlight-ci" --unittest
           "$RUNNER_TEMP/Greenlight-ci" --vimtest

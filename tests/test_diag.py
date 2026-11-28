@@ -399,3 +399,30 @@ def test_stage_summary(diag_env, monkeypatch):
     assert diag.clean({"card": "Fix login for ACME users"}) == {"dropped": 1}
     assert diag.stage([]) == {"draws": 0, "by": {}, "draw": {}, "turns": 0, "fast_turns": 0,
                               "first_draw": {"n": 0}, "last_draw": {"n": 0}}
+
+
+def test_doctor_and_summary_readonly_and_worktrunk_bin(diag_env, monkeypatch):
+    cfg = diag_env / "config.json"
+    assert not cfg.exists()
+    custom_wt = diag_env / "bin" / "custom-wt"
+    custom_wt.parent.mkdir(parents=True, exist_ok=True)
+    custom_wt.write_text("#!/bin/sh\nexit 0\n")
+    custom_wt.chmod(0o755)
+    monkeypatch.setenv("WORKTRUNK_BIN", str(custom_wt))
+    monkeypatch.delenv("GREENLIGHT_ADE", raising=False)
+
+    doc = {c["check"]: c for c in diag.doctor(quick=True)["checks"]}
+    assert doc["ade"]["state"] == "native" and doc["worktrunk"]["ok"] is True
+    assert not cfg.exists()  # read-only doctor must not create config.json
+
+    summ = diag.summary(0)
+    assert summ["env"]["ade"] == "native"
+    assert summ["env"]["clis"]["wt"] is True
+    assert str(custom_wt) not in json.dumps(summ)  # privacy: only bool is stored under "wt"
+    assert not cfg.exists()  # read-only summary must not create config.json
+
+    # Legacy config.json must not be rewritten by read-only diagnostics
+    cfg.write_text(json.dumps({"ade": "orca"}))
+    diag.doctor(quick=True)
+    diag.summary(0)
+    assert json.loads(cfg.read_text())["ade"] == "orca"

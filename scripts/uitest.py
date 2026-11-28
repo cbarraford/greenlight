@@ -158,7 +158,54 @@ def _install_stub_harnesses(bindir: Path):
         p.chmod(0o755)
 
 
+def _native_worktrees(root, home, worktrees, rows):
+    """Give the UI fixtures real, isolated Git worktrees for the native backend."""
+    root = Path(root).resolve()
+    mains, goals, ids = {}, {}, {}
+    for i, w in enumerate(worktrees):
+        path = Path(w["path"])
+        if not path.is_dir():
+            continue  # the corrupt fixture intentionally includes a missing checkout
+        path = path.resolve()
+        name = str(w.get("repo") or "widgets")
+        if name not in mains:
+            repos_dir = (root / "repos").resolve()
+            main = (repos_dir / name).resolve()
+            if main == repos_dir or not main.is_relative_to(repos_dir):
+                raise ValueError(f"fixture repo escapes repos dir: {name!r}")
+            main.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["git", "init", "-q", "-b", "main", str(main)], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(main), "remote", "add", "origin", f"https://github.com/acme/{name}.git"],
+                           check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(main), "-c", "user.name=uitest", "-c", "user.email=uitest@localhost",
+                            "commit", "-q", "--allow-empty", "-m", "fixture"], check=True, capture_output=True)
+            mains[name] = main
+        branch = str(w.get("branch") or "").removeprefix("refs/heads/")
+        valid = bool(branch) and branch != "@" and subprocess.run(
+            ["git", "check-ref-format", "--branch", branch], capture_output=True
+        ).returncode == 0
+        branch = branch if valid else f"fixture-{i}"
+        path.rmdir()
+        subprocess.run(["git", "-C", str(mains[name]), "worktree", "add", "-q", "-b", branch, "--", str(path), "main"],
+                       check=True, capture_output=True)
+        path.mkdir(parents=True, exist_ok=True)  # a mocked git in a unit test does not create it
+        real = str(path.resolve())
+        ids[w["worktreeId"]] = real
+        w.update(id=real, worktreeId=real, path=real, repoId=str(mains[name]), branch=branch)
+        if isinstance(w.get("comment"), str) and w["comment"]:
+            goals[real] = w["comment"]
+    for row in rows:
+        if row.get("id") in ids:
+            real = ids[row["id"]]
+            row["id"] = real
+            row["path"] = real
+    (home / "repos.json").write_text(json.dumps([str(p) for p in mains.values()]))
+    (home / "goals.json").write_text(json.dumps(goals))
+    (home / "imported.json").write_text("{}")
+
+
 def _make_fixture(root: Path, fixture: str):
+    root = Path(root).resolve()
     home = root / "home"
     bindir = root / "bin"
     webdir = root / "web"
@@ -178,7 +225,7 @@ def _make_fixture(root: Path, fixture: str):
         worktrees, rows = [], []
     elif fixture == "adversarial":
         xss = '"><img src=x onerror="window.__pwned=1">'
-        ws_path = str(wsdir / "xss-ws")
+        ws_path = str(wsdir / f"xss-{xss}")
         Path(ws_path).mkdir(exist_ok=True)
         worktrees = [{
             "worktreeId": "wt-xss", "displayName": f"xss-{xss}", "path": ws_path,
@@ -225,9 +272,9 @@ def _make_fixture(root: Path, fixture: str):
                          "action": f"Handle {step} for !{100 + i}", "cmd": []},
             })
     elif fixture == "corrupt":
-        ws_ok = str(wsdir / "valid-ws")
-        Path(ws_ok).mkdir(exist_ok=True)
         rtl_name = "rtl-\u202e-test-\U0001f680-" + ("x" * 90)
+        ws_ok = str(wsdir / rtl_name)
+        Path(ws_ok).mkdir(exist_ok=True)
         worktrees = [
             {
                 "worktreeId": "wt-ok", "displayName": rtl_name, "path": ws_ok,
@@ -306,6 +353,7 @@ def _make_fixture(root: Path, fixture: str):
         "llm_harness": "claude",
         "harnesses": stub_harnesses,
     }))
+    _native_worktrees(root, home, worktrees, rows)
     (home / "last.json").write_text(json.dumps({"ts": int(time.time()), "rows": rows}))
 
     # Ensure every worktree entry has id & repoId so both `orca worktree ps` and `orca worktree list` work cleanly.
@@ -371,10 +419,16 @@ def _make_fixture(root: Path, fixture: str):
     for stub in ("glab", "gh"):
         p = bindir / stub
         if fixture == "chaos":
+            cfile = shlex.quote(str(root / "chaos-counter"))
             p.write_text(
                 "#!/bin/sh\n"
-                f"N=$(cat {json.dumps(str(root / 'chaos-counter'))} 2>/dev/null || echo 0)\n"
-                "if [ $((N % 4)) -eq 3 ]; then echo 'rate limit 429' >&2; exit 1; fi\n"
+                f"CFILE={cfile}\n"
+                "N=$(cat \"$CFILE\" 2>/dev/null || echo 0)\n"
+                "N=$((N + 1))\n"
+                "echo \"$N\" > \"$CFILE\"\n"
+                "MOD=$((N % 4))\n"
+                "if [ \"$MOD\" -eq 2 ]; then sleep 0.2; echo '[]'; exit 0; fi\n"
+                "if [ \"$MOD\" -eq 3 ]; then echo 'rate limit 429' >&2; exit 1; fi\n"
                 "echo '[]'\n"
             )
         else:
@@ -466,7 +520,7 @@ class UITestSession:
         self.record_trace = record_trace
         self.trace = []
         self.id = uuid.uuid4().hex[:8]
-        self.root = Path(tempfile.mkdtemp(prefix=f"gl-uitest-{self.id}-"))
+        self.root = Path(tempfile.mkdtemp(prefix=f"gl-uitest-{self.id}-")).resolve()
         self.socket_path = self.root / "ui.sock"
         self.tmux_socket = f"gl-uitest-{self.id}"
         self.proc = None
@@ -475,9 +529,43 @@ class UITestSession:
         self.suite = f"dev.greenlight.uitest.s{self.id}" if keep_defaults else None
 
     def start(self):
-        binary = self.binary = self.binary or build_test_binary()
-        self.home, bindir, webdir = _make_fixture(self.root, self.fixture)
-        return self._launch(binary, bindir, webdir)
+        try:
+            binary = self.binary = self.binary or build_test_binary()
+            self.home, bindir, webdir = _make_fixture(self.root, self.fixture)
+            self._seed_fixture_agents()
+            return self._launch(binary, bindir, webdir)
+        except BaseException:
+            self.stop()
+            raise
+
+    def _seed_pane(self, session: str, ws_path: str, title: str, body: str, wait_for: str | None = None) -> None:
+        cmd = f"printf '\\033]2;{title}\\007{body}'; exec sleep 600"
+        subprocess.run([
+            "tmux", "-f", "/dev/null", "-L", self.tmux_socket, "new-session", "-d", "-s", session, "-c", ws_path,
+            "sh", "-c", cmd,
+        ], check=True, capture_output=True)
+        subprocess.run(["tmux", "-L", self.tmux_socket, "select-pane", "-t", session, "-T", title],
+                       check=True, capture_output=True)
+        if not wait_for:
+            return
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            cap = subprocess.run(["tmux", "-L", self.tmux_socket, "capture-pane", "-p", "-t", session],
+                                 capture_output=True, text=True)
+            if wait_for in cap.stdout:
+                break
+            time.sleep(0.02)
+
+    def _seed_fixture_agents(self):
+        """Start isolated tmux agent panes needed after native rescan (adversarial and scale)."""
+        if self.fixture not in ("adversarial", "scale") or not self.home or not shutil.which("tmux"):
+            return
+        rows = json.loads((self.home / "last.json").read_text()).get("rows") or []
+        if not rows or not Path(rows[0]["path"]).is_dir():
+            return
+        self._seed_pane("uitest-wait", rows[0]["path"], "✳ Claude", "  ❯ 1. Proceed\\n    2. Hold\\n", wait_for="❯ 1.")
+        if self.fixture == "scale" and len(rows) > 1 and Path(rows[1]["path"]).is_dir():
+            self._seed_pane("uitest-work", rows[1]["path"], "⠋ Claude", "Working on changes...\\n")
 
     def relaunch(self):
         """Quit the app (its windows save what they show) and start it again on the same home, fixture and defaults."""
@@ -495,9 +583,8 @@ class UITestSession:
             "GREENLIGHT_CODE": str(ROOT),
             "GREENLIGHT_WEB_DIR": str(webdir),
             "GREENLIGHT_TMUX_SOCKET": self.tmux_socket,
-            "GREENLIGHT_ADE": "orca",
+            "GREENLIGHT_ADE": "native",
             "GREENLIGHT_USAGE": os.environ.get("GREENLIGHT_USAGE", "off"),
-            "ORCA_CLI_COMMAND": str(bindir / "orca"),
             "PATH": f"{bindir}:{os.environ.get('PATH', '')}",
         }
         env.pop("GREENLIGHT_UITEST_SUITE", None)  # never one inherited from the caller's shell: that would share its defaults
@@ -613,7 +700,8 @@ class UITestSession:
 
     def stop(self):
         self._quit()
-        subprocess.run(["tmux", "-L", self.tmux_socket, "kill-server"], capture_output=True, timeout=5)
+        with contextlib.suppress(FileNotFoundError):
+            subprocess.run(["tmux", "-L", self.tmux_socket, "kill-server"], capture_output=True, timeout=5)
         if self.suite:  # the kept defaults: macOS keeps a plist per suite
             subprocess.run(["defaults", "delete", self.suite], capture_output=True, timeout=5)
             (Path.home() / "Library" / "Preferences" / f"{self.suite}.plist").unlink(missing_ok=True)  # `defaults delete` leaves it, empty
