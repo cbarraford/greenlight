@@ -337,6 +337,8 @@ def test_cli_ade_native_finds_wt_off_a_bare_path(home, repo):
     git_bin = shutil.which("git")
     assert git_bin
     (sys_bin / "git").symlink_to(git_bin)
+    if ps_bin := shutil.which("ps"):  # macOS: a removal first asks ps whether an agent runs in the tree outside Greenlight
+        (sys_bin / "ps").symlink_to(ps_bin)
     env = {"GREENLIGHT_HOME": str(home), "GREENLIGHT_ADE": "native", "GREENLIGHT_TMUX_SOCKET": "gl-test-none",
            "GREENLIGHT_ME": "tester", "PATH": str(sys_bin), "HOME": str(home)}  # no WORKTRUNK_BIN, no ~/.local/bin, no host wt
     (home / "imported.json").write_text("{}")

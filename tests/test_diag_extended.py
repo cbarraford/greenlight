@@ -53,8 +53,12 @@ def test_report_preview_blocked_and_execute_modes(tmp_path, monkeypatch):
     assert r_prev["ok"] is True and r_prev["preview"] is True and "data" in r_prev
     assert Path(r_prev["bundle"]).is_file()
 
-    # Execute without `gh` returns GitHub new-issue URL
-    with mock.patch.object(diag.shutil, "which", return_value=None):
+    # Execute without `gh` returns GitHub new-issue URL (bins.find also looks in fixed folders, and a real gh would file a real issue)
+    with (
+        mock.patch.object(diag.shutil, "which", return_value=None),
+        mock.patch.object(diag.bins, "find", return_value=None),
+        mock.patch.object(diag.subprocess, "run", side_effect=AssertionError("would file a real issue")),
+    ):
         r_nogh = diag.report("Crash on startup", "Happens on launch", execute=True)
     assert r_nogh["ok"] is True and r_nogh["filed"] is False and "issues/new?" in r_nogh["url"]
 
