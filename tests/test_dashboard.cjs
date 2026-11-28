@@ -1483,6 +1483,29 @@ test("All output: another session is labelled from the first paint; a new sessio
   assert.deepEqual(tail, ["Claude · another sessionb0", "Claudeb1"], "b is main once m went quiet: its new lines aren't 'another session'");
 });
 
+test("All output, pane log: blank rows and spinner fragments drop out, a status run keeps its last line, one time per minute", async page => {
+  await page.evaluate(() => { ui.agentsFolded = false; render() });
+  await page.click(".acard[data-name='plan-b'] button.aline");
+  const t0 = Date.now() - 600_000;
+  const L = (n, text, dt = 0) => ({id: `p.g0:${n}`, role: "line", text, ts: t0 + dt, kind: "pane"});
+  await page.evaluate(r => mc.transcript(r), {name: "plan-b", before: null, more: null, source: "pane", entries: [
+    L(0, "3 def test_route(env):"), L(1, ""), L(2, "● Bash(pytest -q)", 1000), L(3, "  $ pytest -q", 1000), L(4, ""),
+    L(5, "running PreToolUse hooks… 0/3 · 2m 55s · ↓ 9.2k tokens)", 2000), L(6, ""), L(7, "1", 2000), L(8, "g", 2000), L(9, "* n", 2000),
+    L(10, "ng…", 2000), L(11, "●", 2000), L(12, "· Calculating…", 3000), L(13, ""), L(14, "12 passed", 4000), L(15, ""), L(16, "3", 5000),
+    L(17, "later work", 120_000), L(18, "more", 125_000)]});
+  const shown = () => page.$$eval("#aout-list > .aoe.line:not([hidden]) .aotx", es => es.map(e => e.textContent));
+  assert.deepEqual(await shown(), ["3 def test_route(env):", "● Bash(pytest -q)", "  $ pytest -q", "· Calculating…", "12 passed", "3", "later work", "more"],
+    "no blank rows, the fragments go, the spinner run keeps its latest status, a lone short line is still output");
+  assert.equal(await page.$eval("#aout-list [data-id='p.g0:12']", e => e.classList.contains("noise")), true, "the status line is muted");
+  assert.match(await page.textContent("#aout-filter [data-f='all']"), /All\s*8/, "All counts what can show, not the redraws");
+  assert.match(await page.textContent("#aout-list [data-id='p.g0:2'] .aomt"), /^5 lines$/, "a call's line count skips the redraws");
+  const stamped = await page.$$eval("#aout-list > .aoe.line:not([hidden]):not(.samets)", es => es.map(e => e.dataset.id));
+  assert.deepEqual(stamped, ["p.g0:0", "p.g0:2", "p.g0:17"], "a time on the first row of each minute and on a call's header only");
+  await page.fill("#aout-q", "* n");
+  await page.waitForFunction(() => !document.querySelector("#aout-list [data-id='p.g0:9']").hidden);
+  await page.click("#aout-back");
+});
+
 test("custom lifecycle stages show step_meta requirements and pre-MR signoff button without an MR", async page => {
   const custom = {...puck("pre-rfc", "Write RFC", "idle"), state: "needs", owner: "me", step: "rfc", mr: {},
     steps: ["rfc", "mr_open", "qa", "e2e", "merge"], step_index: 0,

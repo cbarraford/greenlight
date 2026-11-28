@@ -780,6 +780,7 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
 
 ### 10.16 Logs and output
 - **The all-output overlay and the diff use `code`** (mono 12/18) on `bg.sunken`. Entries are separated by 8 of space, not lines.
+- **A pane log is dense:** rows are 18 high with no space between them. Its time gutter shows a time on the first row of each minute of output and on every tool call's and prompt's row; the rows after it leave the gutter empty (hovering one shows its time). The terminal's redraws never take a row: blank lines are dropped, and a spinner's run of status lines and stray letters keeps only its latest status line, in `fg.muted`. A short line on its own is output and stays. Search still finds a hidden row and shows it. The All count and a call's line count leave the redraws out.
 - **Speakers:** "you" entries use `fg.default` with a 2px `accent.ring` leading edge, tool entries `fg.muted`, and spoken entries `body-copy`.
 - **Diff:** added lines are `diff.add` (bg signal.3, text signal.11) and removed lines are `diff.remove` (bg red.3, text red.11). Both stay fixed whatever the accent. The `+`/`−` gutter glyph is always present, so colour is never the only signal. Hunk headers are `label` `fg.muted`.
 
