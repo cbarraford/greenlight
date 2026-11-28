@@ -1665,6 +1665,12 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
 
         check("termBridge: hostKey normalizes local and remote hosts",
               TermBridgePool.hostKey("") == "local" && TermBridgePool.hostKey("local") == "local" && TermBridgePool.hostKey("box") == "box")
+        check("termBridge: isBase64 accepts valid base64 and rejects empty strings and trailing newlines",
+              TermBridgePool.isBase64("YWJjZA==") && !TermBridgePool.isBase64("")
+              && !TermBridgePool.isBase64("YWJjZA==\n") && !TermBridgePool.isBase64("bad'quote"))
+        let sArgs = SshMux.slaveArgs(host: "box", sockPath: s1, devArgs: ["-o", "ProxyCommand=nc -U x"], remoteCmd: "exec sh -c true")
+        check("sshMux: slaveArgs keeps devArgs and ServerAlive keepalives for direct-fallback safety",
+              sArgs.contains("ProxyCommand=nc -U x") && sArgs.contains("ServerAliveInterval=15") && sArgs.contains("ServerAliveCountMax=3"))
         let spec = TermBridgePool.launchSpec(for: "box")
         check("termBridge: remote launchSpec runs term_bridge.py over non-PTY SSH with keepalives",
               spec?.exe == "/usr/bin/ssh" && (spec?.args.contains("-T") ?? false)

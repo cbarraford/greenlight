@@ -7,6 +7,7 @@ import json
 import os
 import re
 import select
+import shlex
 import shutil
 import subprocess
 import sys
@@ -72,10 +73,19 @@ def test_validation_env_and_tmux_cmd_splitting(tmp_path):
     assert term_bridge.clamp_size(True, "bad") == (80, 24)
 
     assert term_bridge.resolve_cwd(str(tmp_path)) == str(tmp_path)
+    assert term_bridge.resolve_cwd(f"{tmp_path}/") == str(tmp_path)
     assert term_bridge.resolve_cwd("/nonexistent/gl/dir") == os.path.expanduser("~")
     assert term_bridge.resolve_cwd(f"{tmp_path}/../etc") == os.path.expanduser("~")
 
-    env = term_bridge.build_env({"PATH": "/usr/bin:/bin"})
+    assert term_bridge.sanitize_text("a\x00b\ud800c") == "ab?c"
+    assert term_bridge.sanitize_text(123) == ""
+    assert term_bridge.default_shell({"SHELL": "/usr/bin/fish"}) == "/usr/bin/fish"
+    assert term_bridge.default_shell({}) in ("/bin/zsh", "/bin/sh")
+    assert term_bridge._run_shell_cmd("/usr/bin/fish", "$1", "echo hi").startswith("exec /bin/sh -c ")
+    assert term_bridge._run_shell_cmd("/bin/zsh", "$1", "echo hi").startswith("exec /bin/zsh -lic ")
+
+    env = term_bridge.build_env({"PATH": "/usr/bin:/bin", "GREENLIGHT_RUN": "leaked-run-id"})
+    assert "GREENLIGHT_RUN" not in env
     assert env["TERM"] == "xterm-256color"
     assert env["COLORTERM"] == "truecolor"
     assert env["TERM_PROGRAM"] == "Greenlight"
@@ -105,10 +115,13 @@ def test_term_bridge_multiplex_standby_claim_run_and_cleanup(tmp_path):
     ws2 = tmp_path / "ws2"
     ws1.mkdir()
     ws2.mkdir()
+    run_tmp = tmp_path / "run-tmp"
+    run_tmp.mkdir()
     env = os.environ.copy()
     env.update(
         GREENLIGHT_HOME=str(tmp_path / "gl-home"),
         GREENLIGHT_TMUX_SOCKET=sock,
+        TMPDIR=str(run_tmp),
         SHELL="/bin/sh",
         PS1="$ ",
         ENV="/dev/null",
@@ -191,6 +204,11 @@ def test_term_bridge_multiplex_standby_claim_run_and_cleanup(tmp_path):
                 if term_bridge.DEFAULT_RUN_MARK.encode() in base64.b64decode(ev["d"]):
                     saw_run_mark = True
         assert saw_run_mark and out_file.read_text() == marker
+        # Verify the temporary greenlight-run.* file was removed after execution
+        deadline = time.monotonic() + 2.0
+        while list(run_tmp.glob("greenlight-run.*")) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not list(run_tmp.glob("greenlight-run.*")), "run temp file leaked"
 
         # 5. Close with kill=True kills session; close with kill=False keeps session alive
         _send_cmd(proc, {"op": "close", "id": "0:3", "session": "mc-tb3", "kill": True})
@@ -218,11 +236,250 @@ def test_term_bridge_multiplex_standby_claim_run_and_cleanup(tmp_path):
         subprocess.run(["tmux", "-L", sock, "kill-server"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def test_stale_select_event_surrogates_backpressure_and_spawn_failure(tmp_path, monkeypatch):
+    r_in, w_in = os.pipe()
+    r_out, w_out = os.pipe()
+    try:
+        bridge = term_bridge.TermBridge(socket=f"gl-adv-{os.getpid()}", in_fd=r_in, out_fd=w_out)
+        bridge.tmux_bin = None
+        bridge.pool.tmux_bin = None
+
+        # 1. Stale select() event for an old PaneProc must NOT drop a newly reopened pane with same id
+        class _DummyProc:
+            pid = 999999
+
+            def poll(self) -> int | None:
+                return 0
+
+            def wait(self, timeout: float = 0.0) -> int:
+                return 0
+
+        old_pane = term_bridge.PaneProc("0:1", "mc-1", -1, _DummyProc())  # type: ignore[arg-type]
+        new_pane = term_bridge.PaneProc("0:1", "mc-1", 999, _DummyProc())  # type: ignore[arg-type]
+        bridge.panes["0:1"] = new_pane
+        fake_key = type("K", (), {"data": old_pane})()
+        bridge._dispatch_event(fake_key, term_bridge.selectors.EVENT_READ | term_bridge.selectors.EVENT_WRITE)  # type: ignore[arg-type]
+        assert bridge.panes.get("0:1") is new_pane, "stale PaneProc event must not kill reopened pane"
+        bridge.panes.pop("0:1", None)
+
+        # 2. Lone surrogate + NUL byte in run/config do not crash bridge or leak temp files
+        bad_tmp = tmp_path / "no-such-dir"
+        bridge.env["TMPDIR"] = str(bad_tmp)
+        path = bridge._write_run_file("ok\x00\ud800text")
+        assert path and os.path.isfile(path)
+        assert Path(path).read_text(encoding="utf-8") == "ok?text"
+        os.unlink(path)
+
+        # 3. _spawn_pty failure unlinks tmp_file and does NOT emit run_mark before spawn
+        bridge.tmux_bin = "/bin/true"
+        bridge.pool.tmux_bin = "/bin/true"
+        created: list[str] = []
+        orig_write = bridge._write_run_file
+
+        def _track_write(run: str) -> str | None:
+            p = orig_write(run)
+            if p:
+                created.append(p)
+            return p
+
+        monkeypatch.setattr(bridge.pool, "has_session", lambda _s: False)
+        monkeypatch.setattr(bridge, "_write_run_file", _track_write)
+        monkeypatch.setattr(bridge, "_spawn_pty", lambda *a, **kw: (_ for _ in ()).throw(OSError("boom")))
+        bridge._handle_open({"op": "open", "id": "0:9", "session": "mc-fail", "cwd": str(tmp_path), "run": "echo hi"})
+        out_raw = os.read(r_out, 8192).decode()
+        assert '"e":"exit","id":"0:9","code":127' in out_raw
+        assert "greenlight-run" not in out_raw, "run_mark must not emit before _spawn_pty succeeds"
+        assert created and not os.path.exists(created[0]), "tmp_file must be unlinked on _spawn_pty failure"
+
+        # 4. Oversized line without newline is dropped cleanly, subsequent message still works
+        bridge._in_buf.extend(b"x" * (term_bridge.MAX_IN_BUF + 16))
+        os.write(w_in, b"tail\n" + json.dumps({"op": "ping"}).encode() + b"\n")
+        bridge._read_stdin()
+        assert '"e":"pong"' in os.read(r_out, 4096).decode()
+
+        # 5. Output backpressure toggles _paused_read cleanly (with and without an active pane)
+        p_r, p_w = os.pipe()
+        try:
+            live_pane = term_bridge.PaneProc("0:2", "mc-2", p_r, _DummyProc())  # type: ignore[arg-type]
+            bridge.panes["0:2"] = live_pane
+            bridge.sel.register(p_r, term_bridge.selectors.EVENT_READ, live_pane)
+            bridge._out_buf.extend(b"a" * term_bridge.OUT_HIGH_WATER)
+            with monkeypatch.context() as mp:
+                mp.setattr(os, "write", lambda _fd, _buf: (_ for _ in ()).throw(BlockingIOError()))
+                bridge._flush_out()
+            assert bridge._paused_read is True and bridge._out_registered is True
+            bridge._out_buf.clear()
+            bridge._flush_out()
+            assert bridge._paused_read is False and bridge._out_registered is False
+            bridge.sel.unregister(p_r)
+            bridge.panes.pop("0:2", None)
+        finally:
+            os.close(p_r)
+            os.close(p_w)
+
+        # 6. _handle_message exception is caught in _read_stdin without crashing bridge; wake dispatch drains
+        monkeypatch.setattr(bridge, "_handle_message", lambda _m: (_ for _ in ()).throw(RuntimeError("boom")))
+        os.write(w_in, json.dumps({"op": "ping"}).encode() + b"\n")
+        bridge._read_stdin()
+        wake_r, wake_w = os.pipe()
+        try:
+            bridge.wake_fd = wake_r
+            os.write(wake_w, b"x")
+            bridge._dispatch_event(type("K", (), {"data": "wake"})(), term_bridge.selectors.EVENT_READ)  # type: ignore[arg-type]
+            bridge._dispatch_event(type("K", (), {"data": "stdout"})(), term_bridge.selectors.EVENT_WRITE)  # type: ignore[arg-type]
+            bridge.wake_fd = None
+        finally:
+            os.close(wake_r)
+            os.close(wake_w)
+
+        # 7. PaneProc.terminate_group / kill_group / stop and _reap_exiting reap children cleanly
+        sleeper = subprocess.Popen(["/bin/sh", "-c", "sleep 30"], preexec_fn=os.setsid)
+        m_fd, s_fd = os.openpty()
+        os.close(s_fd)
+        p_sleep = term_bridge.PaneProc("0:3", "mc-3", m_fd, sleeper)
+        p_sleep.stop()
+        assert sleeper.poll() is not None
+
+        sleeper2 = subprocess.Popen(["/bin/sh", "-c", "trap '' TERM HUP; sleep 30"], preexec_fn=os.setsid)
+        m2, s2 = os.openpty()
+        os.close(s2)
+        p_sleep2 = term_bridge.PaneProc("0:4", "mc-4", m2, sleeper2)
+        p_sleep2.close_master()
+        bridge._reaping.append((p_sleep2, time.monotonic() - 1.0))
+        bridge._reap_exiting()
+        sleeper2.wait(timeout=3)
+        bridge._reap_exiting()
+        assert not bridge._reaping
+
+        # 8. StandbyPool failed warm_proc reap, claim rc != 0 / timeout, and retired proc cleanup
+        fake_pool = term_bridge.StandbyPool("/bin/true", f"gl-fake-{os.getpid()}", bridge.env)
+        killed: list[str] = []
+        monkeypatch.setattr(fake_pool, "has_session", lambda _s: True)
+        monkeypatch.setattr(fake_pool, "kill_session", killed.append)
+
+        class _FailProc:
+            def __init__(self, rc: int | None) -> None:
+                self._rc = rc
+
+            def poll(self) -> int | None:
+                return self._rc
+
+            def wait(self, timeout: float = 0.0) -> int:
+                if self._rc is None:
+                    raise subprocess.TimeoutExpired(["tmux"], timeout)
+                return self._rc
+
+            def terminate(self) -> None:
+                self._rc = 0
+
+            def kill(self) -> None:
+                self._rc = -9
+
+        fake_pool.warm_name = "gl-warm-1-aaaa"
+        fake_pool.warm_cwd = str(tmp_path)
+        fake_pool.warm_proc = _FailProc(1)  # type: ignore[assignment]
+        fake_pool._reap_proc()
+        assert fake_pool.warm_name is None and "gl-warm-1-aaaa" in killed
+
+        fake_pool.warm_name = "gl-warm-1-bbbb"
+        fake_pool.warm_cwd = str(tmp_path)
+        fake_pool.warm_proc = _FailProc(None)  # type: ignore[assignment]
+        assert fake_pool.claim(str(tmp_path), "mc-x") is False
+        fake_pool.warm_proc = _FailProc(1)  # type: ignore[assignment]
+        assert fake_pool.claim(str(tmp_path), "mc-x") is False
+        assert "gl-warm-1-bbbb" in killed
+
+        ret_proc = subprocess.Popen(["/bin/sh", "-c", "sleep 30"])
+        fake_pool._retired.append((ret_proc, "gl-warm-1-cccc"))
+        fake_pool.cleanup()
+        assert ret_proc.poll() is not None and "gl-warm-1-cccc" in killed
+        bridge.shutdown()
+    finally:
+        for fd in (r_in, w_in, r_out, w_out):
+            with contextlib.suppress(OSError):
+                os.close(fd)
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="no tmux")
+def test_standby_sweep_stale_claim_collision_and_pipe_hook(tmp_path):
+    sock = f"gl-tb-pool-{os.getpid()}"
+    env = term_bridge.build_env({"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "SHELL": "/bin/sh"})
+    tmux_bin = shutil.which("tmux", path=env["PATH"])
+    assert tmux_bin
+    pool = term_bridge.StandbyPool(tmux_bin, sock, env)
+    pipe_marker = tmp_path / "pipe_attached.txt"
+    try:
+        # 1. Dead-PID gl-warm-* session is swept on startup while mc-* survives
+        subprocess.run([tmux_bin, "-L", sock, "-f", "/dev/null", "new-session", "-d", "-s", "gl-warm-99999999-dead"], check=True)
+        subprocess.run([tmux_bin, "-L", sock, "new-session", "-d", "-s", "mc-keep1"], check=True)
+        pool.sweep_stale()
+        now = _tmux_sessions(sock)
+        assert "gl-warm-99999999-dead" not in now and "mc-keep1" in now
+
+        # 2. Failed claim (duplicate session name) kills gl-warm-* instead of leaking it
+        pool.set_size(100, 30)
+        pool.warm(str(tmp_path))
+        assert pool.warm_proc is not None
+        pool.warm_proc.wait(timeout=5)
+        pool.tick()
+        assert pool.claim(str(tmp_path), "mc-keep1") is False
+        assert not any(s.startswith("gl-warm-") for s in _tmux_sessions(sock))
+
+        # 3. Rapid warm(ws1) -> warm(ws2) retires first proc cleanly and leaves at most 1 gl-warm-*
+        ws1 = tmp_path / "w1"
+        ws2 = tmp_path / "w2"
+        ws1.mkdir()
+        ws2.mkdir()
+        pool.warm(str(ws1))
+        pool.warm(str(ws2))
+        deadline = time.monotonic() + 4.0
+        while time.monotonic() < deadline:
+            pool.tick()
+            if not pool._retired and pool.warm_proc is None:
+                break
+            time.sleep(0.05)
+        warms = [s for s in _tmux_sessions(sock) if s.startswith("gl-warm-")]
+        assert len(warms) == 1 and not pool._retired
+
+        # 4. Real App.paneRecorderHooks pattern skips gl-warm-* and attaches pipe-pane on client-attached after claim
+        hook_val = f'if -F "#{{||:#{{pane_pipe}},#{{m:gl-warm-*,#{{session_name}}}}}}" "" "pipe-pane -O \'cat >> {pipe_marker}\'"'
+        pool.set_opts(
+            ["set -g status off"],
+            [f"set-hook -g 'after-new-session[1]' {shlex.quote(hook_val)}", f"set-hook -g 'client-attached[1]' {shlex.quote(hook_val)}"],
+        )
+        pool.warm(str(ws1))
+        assert pool.warm_proc is not None
+        pool.warm_proc.wait(timeout=5)
+        pool.tick()
+        assert not pipe_marker.exists(), "pipe-pane must NOT attach to gl-warm-* standby"
+        assert pool.claim(str(ws1), "mc-hooked") is True
+        # Attach briefly via a PTY so client-attached[1] fires on renamed mc-hooked
+        m_fd, s_fd = os.openpty()
+        att = subprocess.Popen([tmux_bin, "-L", sock, "attach-session", "-t", "=mc-hooked"], stdin=s_fd, stdout=s_fd, stderr=s_fd, env=env)
+        os.close(s_fd)
+        try:
+            deadline = time.monotonic() + 3.0
+            while not pipe_marker.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert pipe_marker.exists(), "client-attached[1] must attach pipe-pane after standby rename-session"
+        finally:
+            os.close(m_fd)
+            att.terminate()
+            att.wait(timeout=3)
+    finally:
+        pool.cleanup()
+        subprocess.run(["tmux", "-L", sock, "kill-server"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def test_app_swift_wires_term_bridge_and_skips_warm_in_pane_hooks():
     src = (ROOT / "app/Sources/App.swift").read_text()
     assert "final class TermBridgePool" in src
     assert 'case "focusWs":' in src
-    assert "gl-warm-*" in re.search(r"static func paneRecorderHooks\(\).*?\n    \}\n", src, re.S).group(0)
+    hook_body = re.search(r"static func paneRecorderHooks\([^)]*\) -> \[String\] \{.*?\n    \}\n", src, re.S)
+    assert hook_body and "gl-warm-*" in hook_body.group(0) and "hostPaths(for: targetHost)" in hook_body.group(0)
+    assert "static func isBase64(" in src
+    assert "func retireAll(primaryHost:" in src
+    assert "ptyPendingIn" in src
 
 
 def test_standby_pool_and_bridge_edge_paths(tmp_path):
@@ -252,10 +509,10 @@ def test_standby_pool_and_bridge_edge_paths(tmp_path):
         assert bridge.tmux_mark == "TM" and bridge.run_mark == "RM"
 
         # No-tmux launch argv (plain login shell and `run` path)
-        argv_plain, warm = bridge._build_launch_argv("0:1", "mc-1", str(tmp_path), "")
-        assert warm is False and argv_plain[-1] == "-l"
-        argv_run, warm2 = bridge._build_launch_argv("0:1", "mc-1", str(tmp_path), "echo hi")
-        assert warm2 is False and argv_run[:2] == ["/bin/sh", "-c"]
+        argv_plain, warm, marks_plain, tmp_plain = bridge._build_launch_argv("mc-1", str(tmp_path), "")
+        assert warm is False and argv_plain[-1] == "-l" and marks_plain == [] and tmp_plain is None
+        argv_run, warm2, marks_run, tmp_run = bridge._build_launch_argv("mc-1", str(tmp_path), "echo hi")
+        assert warm2 is False and argv_run[:2] == ["/bin/sh", "-c"] and marks_run == [b"RM"] and tmp_run is None
 
         # Read invalid JSON + ping via _read_stdin
         os.write(w_in, b"\nnot-json\n[]\n" + json.dumps({"op": "ping"}).encode() + b"\n")

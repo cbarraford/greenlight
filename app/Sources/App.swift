@@ -374,8 +374,9 @@ final class SshMux {
          "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2"] + devArgs + ["--", host]
     }
 
-    static func slaveArgs(host: String, sockPath: String, remoteCmd: String) -> [String] {
-        ["-qt", "-S", sockPath, "-o", "ControlMaster=no", "-o", "ControlPersist=no", "--", host, remoteCmd]
+    static func slaveArgs(host: String, sockPath: String, devArgs: [String] = [], remoteCmd: String) -> [String] {
+        ["-qt", "-S", sockPath, "-o", "ControlMaster=no", "-o", "ControlPersist=no",
+         "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"] + devArgs + ["--", host, remoteCmd]
     }
 
     static func directArgs(host: String, devArgs: [String], remoteCmd: String) -> [String] {
@@ -421,13 +422,16 @@ final class SshMux {
     func warm(_ targetHost: String) {
         guard !uitest && !unittest && !isLocalHost(targetHost) else { return }
         let existing = slots[targetHost] ?? []
-        if existing.contains(where: { ($0.state == .ready && $0.activePanes < Self.maxPanesPerMaster) || $0.state == .starting }) { return }
+        if existing.contains(where: { ($0.state == .ready && $0.activePanes < Self.maxPanesPerMaster && Self.socketReady($0.sockPath)) || $0.state == .starting }) { return }
         if let failedAt = lastFail[targetHost], Date().timeIntervalSince(failedAt) < Self.failCooldown { return }
         startSlot(for: targetHost)
     }
 
     func acquire(host targetHost: String) -> Slot? {
         guard !uitest && !unittest && !isLocalHost(targetHost) else { return nil }
+        for s in (slots[targetHost] ?? []) where s.state == .ready && !Self.socketReady(s.sockPath) {
+            if s.activePanes > 0 { s.state = .draining } else { teardown(s) }
+        }
         let ready = (slots[targetHost] ?? []).filter {
             $0.state == .ready && $0.activePanes < Self.maxPanesPerMaster && Self.socketReady($0.sockPath)
         }
@@ -452,7 +456,12 @@ final class SshMux {
 
     func fail(_ slot: Slot) {
         lastFail[slot.host] = Date()
-        teardown(slot)
+        if slot.activePanes > 0 {
+            slot.pollTimer?.cancel(); slot.pollTimer = nil
+            slot.state = .draining
+        } else {
+            teardown(slot)
+        }
     }
 
     /// Retires pre-wake / pre-roam masters for NEW tabs without interrupting healthy live tabs:
@@ -565,6 +574,7 @@ final class TermBridgePool {
         let reader: PipeReader
         let writeQ = DispatchQueue(label: "greenlight.termbridge.write")
         var ready = false, wasReady = false, closed = false
+        private var qClosed = false
         var panes = [String: PaneHooks]()
         init(host: String, proc: Process, inHandle: FileHandle, reader: PipeReader) {
             self.host = host; self.proc = proc; self.inHandle = inHandle; self.reader = reader
@@ -575,7 +585,7 @@ final class TermBridgePool {
             raw.append(10)
             let payload = raw, h = inHandle
             writeQ.async { [weak self] in
-                guard let self, !self.closed else { return }
+                guard let self, !self.qClosed else { return }
                 try? h.write(contentsOf: payload)
             }
         }
@@ -583,7 +593,10 @@ final class TermBridgePool {
             guard !closed else { return }
             closed = true
             let h = inHandle
-            writeQ.async { try? h.close() }
+            writeQ.async { [weak self] in
+                self?.qClosed = true
+                try? h.close()
+            }
             reader.cancel()
             if proc.isRunning { proc.terminate() }
         }
@@ -593,12 +606,19 @@ final class TermBridgePool {
     static let reconnectDelay: TimeInterval = 2
 
     private var bridges = [String: Bridge]()
-    private var paneHost = [String: String]()
+    private var draining = [Bridge]()
+    private var paneBridge = [String: Bridge]()
     private var cooldown = [String: Date]()
     private var lastWarmCwd = [String: String]()
     private var stopping = false
 
     static func hostKey(_ h: String) -> String { isLocalHost(h) ? "local" : h }
+
+    static func isBase64(_ s: String) -> Bool {
+        !s.isEmpty && s.utf8.allSatisfy { b in
+            (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || (b >= 48 && b <= 57) || b == 43 || b == 47 || b == 61
+        }
+    }
 
     static func launchSpec(for targetHost: String) -> (exe: String, args: [String], env: [String: String])? {
         let p = hostPaths(for: targetHost)
@@ -675,9 +695,13 @@ final class TermBridgePool {
         bridges[Self.hostKey(targetHost)]?.ready == true
     }
 
-    func hasPane(_ id: String) -> Bool { paneHost[id] != nil }
+    func hasPane(_ id: String) -> Bool { paneBridge[id] != nil }
 
-    func paneIds(prefix: String) -> [String] { paneHost.keys.filter { $0.hasPrefix(prefix) } }
+    func paneIds(prefix: String) -> [String] { paneBridge.keys.filter { $0.hasPrefix(prefix) } }
+
+    func activePaneCount(on targetHost: String) -> Int {
+        bridges[Self.hostKey(targetHost)]?.panes.count ?? 0
+    }
 
     func warm(host targetHost: String, cwd: String) {
         guard !stopping, !uitest, !unittest else { return }
@@ -698,30 +722,30 @@ final class TermBridgePool {
             return false
         }
         b.panes[id] = hooks
-        paneHost[id] = key
+        paneBridge[id] = b
         b.send(["op": "open", "id": id, "session": session, "cwd": cwd, "cols": cols, "rows": rows, "run": run])
         return true
     }
 
     func write(id: String, text: String) -> Bool {
-        guard let key = paneHost[id], let b = bridges[key], b.ready else { return false }
+        guard let b = paneBridge[id], b.ready, !b.closed else { return false }
         b.send(["op": "in", "id": id, "d": Data(text.utf8).base64EncodedString()])
         return true
     }
 
     func resize(id: String, cols: Int, rows: Int) -> Bool {
-        guard let key = paneHost[id], let b = bridges[key], b.ready else { return false }
+        guard let b = paneBridge[id], b.ready, !b.closed else { return false }
         b.send(["op": "size", "id": id, "cols": cols, "rows": rows])
         return true
     }
 
     func close(id: String, session: String? = nil, kill: Bool = false) {
-        guard let key = paneHost.removeValue(forKey: id) else { return }
-        guard let b = bridges[key] else { return }
+        guard let b = paneBridge.removeValue(forKey: id) else { return }
         b.panes[id] = nil
         var msg: [String: Any] = ["op": "close", "id": id, "kill": kill]
         if let session { msg["session"] = session }
         b.send(msg)
+        pruneIfDrained(b)
     }
 
     func killSession(host targetHost: String, session: String) -> Bool {
@@ -730,39 +754,64 @@ final class TermBridgePool {
         return true
     }
 
-    func fail(host targetHost: String) {
+    func fail(host targetHost: String, exceptPane: String? = nil) {
         let key = Self.hostKey(targetHost)
         guard let b = bridges.removeValue(forKey: key) else { return }
-        for id in b.panes.keys { paneHost[id] = nil }
+        let active = b.panes
         b.panes.removeAll()
+        for id in active.keys where paneBridge[id] === b { paneBridge[id] = nil }
         b.shutdown()
+        for (id, hooks) in active where id != exceptPane {
+            hooks.onExit(255)
+        }
         scheduleReconnect(key)
     }
 
-    func retireIdle() {
-        for (key, b) in Array(bridges) where key != "local" && b.panes.isEmpty {
+    /// Retires pre-wake / pre-roam remote bridges for new tabs without interrupting healthy live tabs:
+    /// idle bridges close immediately; busy ones drain until their panes exit (or ServerAlive disconnects them).
+    func retireAll(primaryHost: String = "") {
+        cooldown = cooldown.filter { $0.key == "local" }
+        var toEnsure = Set<String>()
+        for (key, b) in Array(bridges) where key != "local" {
             bridges[key] = nil
-            b.shutdown()
-            ensure(key)
+            if b.panes.isEmpty {
+                b.shutdown()
+            } else {
+                draining.append(b)
+            }
+            toEnsure.insert(key)
         }
+        if !primaryHost.isEmpty && !isLocalHost(primaryHost) { toEnsure.insert(Self.hostKey(primaryHost)) }
+        for key in toEnsure { ensure(key) }
     }
 
     func stopAll() {
         stopping = true
         for b in bridges.values { b.shutdown() }
+        for b in draining { b.shutdown() }
         bridges.removeAll()
-        paneHost.removeAll()
+        draining.removeAll()
+        paneBridge.removeAll()
+    }
+
+    private func pruneIfDrained(_ b: Bridge) {
+        guard b.panes.isEmpty, let i = draining.firstIndex(where: { $0 === b }) else { return }
+        draining.remove(at: i)
+        b.shutdown()
     }
 
     private func handleLine(_ line: Data, from b: Bridge) {
-        guard bridges[b.host] === b,
+        let isActive = bridges[b.host] === b
+        let isDraining = !isActive && draining.contains { $0 === b }
+        guard isActive || isDraining,
               let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
               let event = obj["e"] as? String else { return }
         switch event {
         case "ready":
+            guard isActive else { return }
             b.ready = true; b.wasReady = true
             cooldown[b.host] = nil
-            b.send(["op": "config", "tmux_opts": App.tmuxOpts, "hooks": App.paneRecorderHooks(),
+            b.send(["op": "config", "tmux_opts": App.tmuxOpts, "hooks": App.paneRecorderHooks(for: b.host),
                     "tmux_mark": "\u{1b}]6973;greenlight-tmux\u{07}", "run_mark": "\u{1b}]6973;greenlight-run\u{07}"])
             if let cwd = lastWarmCwd[b.host] { b.send(["op": "warm", "cwd": cwd]) }
         case "opened":
@@ -770,32 +819,39 @@ final class TermBridgePool {
                 hooks.onOpened(obj["warm"] as? Bool ?? false)
             }
         case "out":
-            if let id = obj["id"] as? String, let d = obj["d"] as? String, !d.isEmpty,
-               d.range(of: #"^[A-Za-z0-9+/=]+$"#, options: .regularExpression) != nil,
+            if let id = obj["id"] as? String, let d = obj["d"] as? String, Self.isBase64(d),
                let hooks = b.panes[id] {
                 hooks.onOutput(d, obj["mark"] as? Bool ?? false)
             }
         case "exit":
             if let id = obj["id"] as? String, let hooks = b.panes.removeValue(forKey: id) {
-                paneHost[id] = nil
+                if paneBridge[id] === b { paneBridge[id] = nil }
                 hooks.onExit(Int32(obj["code"] as? Int ?? 0))
+                pruneIfDrained(b)
             }
         default: break
         }
     }
 
     private func bridgeExited(_ b: Bridge) {
-        guard bridges[b.host] === b else { return }
-        bridges[b.host] = nil
+        let wasActive = bridges[b.host] === b
+        if wasActive {
+            bridges[b.host] = nil
+        } else if let i = draining.firstIndex(where: { $0 === b }) {
+            draining.remove(at: i)
+        } else {
+            return
+        }
         b.shutdown()
         let active = b.panes
         b.panes.removeAll()
-        let code: Int32 = b.host == "local" ? 0 : 255
-        for (id, hooks) in active {
-            paneHost[id] = nil
-            hooks.onExit(code)
+        for id in active.keys where paneBridge[id] === b { paneBridge[id] = nil }
+        // Unexpected bridge death is always connection-lost (255), never normal exit (0):
+        // emitting 0 on a local bridge crash would close all local tabs and tmux kill-session them.
+        for (_, hooks) in active {
+            hooks.onExit(255)
         }
-        guard !stopping else { return }
+        guard wasActive, !stopping else { return }
         if b.wasReady {
             scheduleReconnect(b.host)
         } else {
@@ -993,7 +1049,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         signal(SIGPIPE, SIG_IGN)  // an ssh can die between our write and its read
         if !uitest && !unittest {
-            sshMux.onRetire = { [weak self] in self?.termBridge.retireIdle() }
+            sshMux.onRetire = { [weak self] in guard let self else { return }; self.termBridge.retireAll(primaryHost: self.host) }
             sshMux.startObservers(primaryHost: host)
             sshMux.warm(host)
             termBridge.ensure(host)
@@ -2396,11 +2452,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     var ptySession = [String: String]()  // the tmux session each of those attached ("window:tab" → mc-…)
     var ptyCleanup = [String: () -> Void]()  // cancels mux/bridge watchdog & releases SshMux slot when a pane stops
     var ptySize = [String: (cols: Int, rows: Int)]()  // latest grid size per pane, kept for direct fallback retries
+    var ptyPendingIn = [String: [String]]()  // pre-first-byte "in" payloads replayed if bridge/mux falls back to direct Pty
     let sshMux = SshMux()
     let termBridge = TermBridgePool()
-    func stopPty(_ id: String, killSession: Bool = false) {
+    func stopPty(_ id: String, killSession: Bool = false, keepPendingIn: Bool = false) {
         ptyCleanup.removeValue(forKey: id)?()
         ptySize[id] = nil
+        if !keepPendingIn { ptyPendingIn[id] = nil }
         let session = ptySession[id]
         if termBridge.hasPane(id) { termBridge.close(id: id, session: session, kill: killSession) }
         ptys.removeValue(forKey: id)?.stop()
@@ -2729,9 +2787,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     /// Idempotent tmux hooks (`after-new-session[1]`, `client-attached[1]`) that attach `pane_log.py record`
     /// via `pipe-pane -O` when `#{pane_pipe}` is 0. Safe on remote hosts: no-ops cleanly if `pane_log.py` is absent.
-    static func paneRecorderHooks() -> [String] {
-        let script = tmuxFormatEscape("\(shellPath(greenlightCode))/scripts/pane_log.py")
-        let home = tmuxFormatEscape(shellPath(greenlightHome))
+    static func paneRecorderHooks() -> [String] { paneRecorderHooks(for: host) }
+    static func paneRecorderHooks(for targetHost: String) -> [String] {
+        let p = hostPaths(for: targetHost)
+        let script = tmuxFormatEscape("\(shellPath(p.code))/scripts/pane_log.py")
+        let home = tmuxFormatEscape(shellPath(p.home))
         let sock = tmuxFormatEscape(shellQuote(tmuxSocketName))
         let pipeShell = "[ -f \(script) ] && GREENLIGHT_HOME=\(home) exec python3 \(script) record --pane #{pane_id} --socket \(sock)"
         let innerPipe = "pipe-pane -O " + tmuxQuote(pipeShell)
@@ -2753,7 +2813,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     static let runMark = "\\033]6973;greenlight-run\\007"
     /// Fast PATH prefix so `/bin/sh -c` finds `tmux` and `python3` without spawning an outer login shell (`$SHELL -lc`).
     static let fastPathPrefix = #"PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:/nix/var/nix/profiles/default/bin:$HOME/.nix-profile/bin:$PATH"; export PATH; "#
-    func paneCmd(session: String, cwd: String, on host: String, run: String = "") -> String {
+    func paneCmd(session: String, cwd: String, on host: String, run: String = "", hooksHost: String? = nil) -> String {
         let go = { (arg: String) in "exec $SHELL -lic " + shellQuote("trap : INT; eval \"\(arg)\"; exec $SHELL -l") + " greenlight " }
         let inner = App.fastPathPrefix + (cwd.isEmpty ? "cd; " : "cd \(shellQuote(cwd)) 2>/dev/null || cd; ")
             + (run.isEmpty ? "command -v tmux >/dev/null || exec $SHELL -l; "
@@ -2762,7 +2822,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 + "elif f=$(mktemp \"${TMPDIR:-/tmp}/greenlight-run.XXXXXX\") && printf %s \"$r\" >| \"$f\"; then :; else [ -z \"$f\" ] || rm -f \"$f\"; f=; fi; "
                 + "printf '\(App.runMark)'; [ -n \"$f\" ] || \(go("$1"))\"$r\"; ")
             + "printf '\(App.tmuxMark)'; exec \(App.tmux) start-server \\; "
-            + (App.tmuxOpts + App.paneRecorderHooks()).joined(separator: " \\; ") + " \\; new-session -A -s \(shellQuote(session)) -c \"$PWD\""
+            + (App.tmuxOpts + App.paneRecorderHooks(for: hooksHost ?? host)).joined(separator: " \\; ") + " \\; new-session -A -s \(shellQuote(session)) -c \"$PWD\""
             + (run.isEmpty ? "" : " " + shellQuote(go("$(command cat \"$1\" 2>/dev/null && command rm -f \"$1\")") + "'") + "\"$f\"" + shellQuote("'"))  // -A onto a live session: tmux ignores it
         if host.isEmpty || host == "local" { return inner }
         return "exec ssh -qt -o ControlMaster=no -o ControlPath=none -o ServerAliveInterval=15 \((devSsh(host) + ["--", host]).map(shellQuote).joined(separator: " ")) \(shellQuote("exec sh -c " + shellQuote(inner)))"
@@ -2770,29 +2830,33 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// Direct binary + argv for `Pty.start(exe:args:)`: skips both local and remote outer login shells,
     /// and routes remote panes over `muxSocket` when `SshMux` has a warm ControlMaster ready.
     func paneLaunch(session: String, cwd: String, on host: String, run: String = "", muxSocket: String? = nil) -> (exe: String, args: [String]) {
-        let inner = paneCmd(session: session, cwd: cwd, on: "local", run: run)
+        let inner = paneCmd(session: session, cwd: cwd, on: "local", run: run, hooksHost: host)
         if host.isEmpty || host == "local" { return ("/bin/sh", ["-c", inner]) }
         let remote = "exec sh -c " + shellQuote(inner)
-        if let muxSocket { return ("/usr/bin/ssh", SshMux.slaveArgs(host: host, sockPath: muxSocket, remoteCmd: remote)) }
+        if let muxSocket { return ("/usr/bin/ssh", SshMux.slaveArgs(host: host, sockPath: muxSocket, devArgs: devSsh(host), remoteCmd: remote)) }
         return ("/usr/bin/ssh", SshMux.directArgs(host: host, devArgs: devSsh(host), remoteCmd: remote))
     }
     static let muxFirstByteTimeout: TimeInterval = 1.5
-    func openPane(wid: Int, tid: Int, session: String, ws: String, cols: Int, rows: Int, run: String, web: WKWebView?, allowMux: Bool = true, allowBridge: Bool = true) {
+    func openPane(wid: Int, tid: Int, session: String, ws: String, cols: Int, rows: Int, run: String, web: WKWebView?, allowMux: Bool = true, allowBridge: Bool = true, keepPendingIn: Bool = false) {
         guard let at = paneTarget(ws) else { return }
         let id = "\(wid):\(tid)"
-        stopPty(id)
+        stopPty(id, keepPendingIn: keepPendingIn)
         let isRemote = !isLocalHost(at.host)
         if allowBridge && runsScripts(ws) && termBridge.isReady(on: at.host) {
             let t0 = Date()
-            var gotPrompt = false, fellBack = false, warmHit = false
+            var gotOpened = false, gotPrompt = false, fellBack = false, warmHit = false
             var watchdog: DispatchWorkItem?
             let cancelWd: () -> Void = { watchdog?.cancel(); watchdog = nil }
             let hooks = TermBridgePool.PaneHooks(
-                onOpened: { warm in warmHit = warm },
-                onOutput: { [weak web] b64, isMark in
+                onOpened: { warm in
+                    warmHit = warm; gotOpened = true
+                    cancelWd()  // bridge answered: never kill the shared host bridge for a slow shell startup
+                },
+                onOutput: { [weak self, weak web] b64, isMark in
                     if !isMark && !gotPrompt {
                         gotPrompt = true
                         cancelWd()
+                        self?.ptyPendingIn[id] = nil
                         Diag.event("pane_open", ["secs": (Date().timeIntervalSince(t0) * 1000).rounded() / 1000,
                                                  "name": warmHit ? "bridge_warm" : "bridge",
                                                  "host_kind": isRemote ? "remote" : "local", "fallback": false])
@@ -2802,27 +2866,36 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 onExit: { [weak self, weak web] code in
                     cancelWd()
                     guard let self, !fellBack else { return }
+                    let sz = self.ptySize[id] ?? (cols: cols, rows: rows)
                     self.ptyCleanup[id] = nil; self.ptySize[id] = nil
                     if !gotPrompt && code != 0 {
-                        self.openPane(wid: wid, tid: tid, session: session, ws: ws, cols: cols, rows: rows, run: run, web: web, allowMux: allowMux, allowBridge: false)
+                        self.openPane(wid: wid, tid: tid, session: session, ws: ws, cols: sz.cols, rows: sz.rows, run: run, web: web, allowMux: allowMux, allowBridge: false, keepPendingIn: true)
                         return
                     }
+                    self.ptyPendingIn[id] = nil
                     web?.callJS("window.term && term.exited", [tid, Int(code)])
                 }
             )
             if termBridge.open(id: id, host: at.host, session: session, cwd: at.cwd, cols: cols, rows: rows, run: run, hooks: hooks) {
                 let wd = DispatchWorkItem { [weak self, weak web] in
-                    guard let self, !gotPrompt, self.termBridge.hasPane(id) else { return }
+                    guard let self, !gotOpened, !gotPrompt, self.termBridge.hasPane(id) else { return }
                     fellBack = true
                     cancelWd()
-                    self.termBridge.fail(host: at.host)
                     let sz = self.ptySize[id] ?? (cols: cols, rows: rows)
-                    self.openPane(wid: wid, tid: tid, session: session, ws: ws, cols: sz.cols, rows: sz.rows, run: run, web: web, allowMux: false, allowBridge: false)
+                    if self.termBridge.activePaneCount(on: at.host) > 1 {
+                        // Other healthy tabs share this bridge: only fall back this pane without tearing down the host bridge.
+                        self.termBridge.close(id: id)
+                        self.openPane(wid: wid, tid: tid, session: session, ws: ws, cols: sz.cols, rows: sz.rows, run: run, web: web, allowMux: allowMux, allowBridge: false, keepPendingIn: true)
+                    } else {
+                        self.termBridge.fail(host: at.host, exceptPane: id)
+                        self.openPane(wid: wid, tid: tid, session: session, ws: ws, cols: sz.cols, rows: sz.rows, run: run, web: web, allowMux: false, allowBridge: false, keepPendingIn: true)
+                    }
                 }
                 watchdog = wd
                 DispatchQueue.main.asyncAfter(deadline: .now() + App.muxFirstByteTimeout, execute: wd)
                 ptyCleanup[id] = cancelWd
                 ptySize[id] = (cols, rows)
+                ptyPendingIn[id] = ptyPendingIn[id] ?? []
                 ptySession[id] = session
                 return
             }
@@ -2842,10 +2915,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             watchdog?.cancel(); watchdog = nil
             if let muxSlot { self?.sshMux.release(muxSlot) }
         }
-        p.onOutput = { [weak web] d in
+        p.onOutput = { [weak self, weak web] d in
             if !gotOutput {
                 gotOutput = true
                 watchdog?.cancel(); watchdog = nil
+                self?.ptyPendingIn[id] = nil
                 Diag.event("pane_open", ["secs": (Date().timeIntervalSince(t0) * 1000).rounded() / 1000,
                                          "name": via, "host_kind": isRemote ? "remote" : "local", "fallback": fallback])
             }
@@ -2853,17 +2927,14 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         p.onExit = { [weak self, weak web, weak p] code in
             releaseSlot()
-            guard let self else { return }
-            if fellBack { return }
-            if let muxSlot, !gotOutput, code != 0, let p, self.ptys[id] === p {
+            guard let self, !fellBack, let p, self.ptys[id] === p else { return }
+            if let muxSlot, !gotOutput, code != 0 {
                 self.sshMux.fail(muxSlot)
                 let sz = self.ptySize[id] ?? (cols: cols, rows: rows)
-                self.openPane(wid: wid, tid: tid, session: session, ws: ws, cols: sz.cols, rows: sz.rows, run: run, web: web, allowMux: false, allowBridge: false)
+                self.openPane(wid: wid, tid: tid, session: session, ws: ws, cols: sz.cols, rows: sz.rows, run: run, web: web, allowMux: false, allowBridge: false, keepPendingIn: true)
                 return
             }
-            if let p, self.ptys[id] === p {
-                self.ptys[id] = nil; self.ptyCleanup[id] = nil; self.ptySize[id] = nil
-            }
+            self.ptys[id] = nil; self.ptyCleanup[id] = nil; self.ptySize[id] = nil; self.ptyPendingIn[id] = nil
             web?.callJS("window.term && term.exited", [tid, Int(code)])
         }
         if let muxSlot {
@@ -2873,15 +2944,20 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 releaseSlot()
                 self.sshMux.fail(muxSlot)
                 let sz = self.ptySize[id] ?? (cols: cols, rows: rows)
-                self.openPane(wid: wid, tid: tid, session: session, ws: ws, cols: sz.cols, rows: sz.rows, run: run, web: web, allowMux: false, allowBridge: false)
+                self.openPane(wid: wid, tid: tid, session: session, ws: ws, cols: sz.cols, rows: sz.rows, run: run, web: web, allowMux: false, allowBridge: false, keepPendingIn: true)
             }
             watchdog = wd
             DispatchQueue.main.asyncAfter(deadline: .now() + App.muxFirstByteTimeout, execute: wd)
         }
         ptyCleanup[id] = releaseSlot
         ptySize[id] = (cols, rows)
+        if muxSlot != nil { ptyPendingIn[id] = ptyPendingIn[id] ?? [] }
         ptys[id] = p; ptySession[id] = session
         p.start(cols: cols, rows: rows, exe: launch.exe, args: launch.args)
+        if keepPendingIn, let queued = ptyPendingIn[id], !queued.isEmpty {
+            for chunk in queued { p.write(chunk) }
+        }
+        if muxSlot == nil { ptyPendingIn[id] = nil }
     }
     var termLoaded = false, treesProc: Process?, localTreesProc: Process?, serverTreesObj: [String: Any]?, localTreesObj: [String: Any]?, treesAt = Date.distantPast, termBadges: [Int: Int] = [:], tunnels: [String: Process] = [:]
     /// Open in editor's app: Zed, Cursor or VS Code, whichever is installed first (the page names its buttons after it).
@@ -2978,6 +3054,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             if runsScripts(ws), let at = paneTarget(ws) { termBridge.warm(host: at.host, cwd: at.cwd) }
         case "in":
             let d = b["d"] as? String ?? ""
+            if var q = ptyPendingIn[id] {
+                let used = q.reduce(0) { $0 + $1.utf8.count }
+                if used + d.utf8.count <= 4096 { q.append(d); ptyPendingIn[id] = q }
+            }
             if !termBridge.write(id: id, text: d) { ptys[id]?.write(d) }
             greenlight.active()
         case "size":
