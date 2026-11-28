@@ -1363,6 +1363,11 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
           tmuxOf(["tmuxOk": true], ["tmuxOk": true]) == true && tmuxOf(["tmuxOk": false], ["tmuxOk": true]) == false
           && tmuxOf(["tmuxOk": true], ["tmuxOk": false]) == false && tmuxOf(["trees": [[String: Any]]()], nil) == true
           && tmuxOf(nil, ["tmuxOk": true]) == false)  // the server's trees not in yet: its sessions are unknown
+    var pubSrv: [String: Any]? = ["trees": [[String: Any]](), "tmuxOk": true], pubMac: [String: Any]? = nil
+    let srvOnly = treesToPublish(server: &pubSrv, local: &pubMac, merge: true, primaryHost: "devbox")?["tmuxOk"] as? Bool
+    let localOnly = treesToPublish(server: &pubMac, local: &pubSrv, merge: false, primaryHost: "local")?["tmuxOk"] as? Bool
+    check("trees publish: merging hosts before the Mac's trees came, tmuxOk is unknown (false); one host alone keeps its own",
+          srvOnly == false && localOnly == true)
     let uDup = mergeSnapshots(["usage": srvUsage], ["usage": srvUsage.map { var m = $0; m["state"] = "failed"; return m }],
                               primaryHost: "devbox", secondaryHost: "local")?["usage"] as? [[String: Any]]
     let rescueWin: [[String: Any]] = [["label": "5h", "pct": 20]]

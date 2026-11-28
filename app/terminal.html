@@ -2085,7 +2085,7 @@ function build(tab, n, mounts){
 let firstWait = false, pendingWs = null, onScreen = false;
 // the window shows only once its restored layout has drawn (issue 196): the app keeps it at alpha 0 until "painted" (2 s at most)
 function drawn(){ const go = () => { if (!onScreen) { onScreen = true; post({cmd: "painted"}) } }; setTimeout(() => requestAnimationFrame(go), 100); setTimeout(go, 250) }  // after refit's 80 ms fit, then its frame; 250 ms if frames are held back
-const firstShell = () => { if (firstWait && !tabs.length) newTab(acctHome()); firstWait = false };
+const firstShell = () => { if (waitTrees.length) return; if (firstWait && !tabs.length) newTab(acctHome()); firstWait = false };  // a waiting request opens the first tab
 function restore(st){
   drawn();  // after this task: the frame with the restored tabs
   try {
@@ -2679,7 +2679,7 @@ window.term = {
     panes.forEach(p => { clearTimeout(p.scanT); clearTimeout(p.endT); clearTimeout(p.askT); clearTimeout(p.lnkT); p.t.dispose?.() }); panes.clear(); pinged.clear(); lastPanes = null;
     tabs.forEach(t => { clearTimeout(t.quiet); clearTimeout(t.retry); t.r.remove() }); tabs.length = 0; cur = null; lastScrollTab = lastScrollWs = null; return out },
   workspaces: o => { basementFoot(o?.usage); trees = o?.trees || []; if (Array.isArray(o?.agents) && o.agents[0]) defAgent = normAgent(o.agents[0]); treesIn = true; tmuxOk = o?.tmuxOk !== false; refreshing(false);
-    Object.assign(scanFoot, {at: Date.now(), scanned: +o?.scanned || 0, err: o?.scan_error || null}, +o?.ts ? {skew: Date.now() / 1000 - o.ts} : {}); const was = JSON.stringify(acctCfg); merge(); openWaiting(); firstShell();
+    Object.assign(scanFoot, {at: Date.now(), scanned: +o?.scanned || 0, err: o?.scan_error || null}, +o?.ts ? {skew: Date.now() / 1000 - o.ts} : {}); const was = JSON.stringify(acctCfg); merge(); if (tmuxOk) openWaiting(); firstShell();  // !tmuxOk: a host's trees (or tmux) still out: the 5 s fallback
     if (JSON.stringify(acctCfg) !== was) { paint(); save() }
     for (const ws of made.keys()) if (wsInfo(ws)) { made.delete(ws); reveal(ws); save() }  // its real row: maybe another section than the bare one
     syncPanes(o?.panes);

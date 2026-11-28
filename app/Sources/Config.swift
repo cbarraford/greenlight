@@ -341,7 +341,8 @@ func mergeTreesPayload(_ primary: [String: Any]?, _ secondary: [String: Any]?, p
 /// this the other host's states from the last refresh ride along: a stale "working" after a turn's ping, then the fresh "done",
 /// pinged the turn again (terminal.html syncPanes). Spent states are dropped from `server`/`local`.
 func treesToPublish(server: inout [String: Any]?, local: inout [String: Any]?, merge: Bool, primaryHost: String) -> [String: Any]? {
-    let obj = merge && local != nil ? mergeTreesPayload(server, local, primaryHost: primaryHost, secondaryHost: "local") : server ?? local
+    var obj = merge && local != nil ? mergeTreesPayload(server, local, primaryHost: primaryHost, secondaryHost: "local") : server ?? local
+    if merge && local == nil { obj?["tmuxOk"] = false }  // the Mac's trees not in yet: its sessions are unknown (terminal.html keeps)
     server?["panes"] = nil; local?["panes"] = nil
     return obj
 }
