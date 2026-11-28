@@ -769,7 +769,10 @@ def record_dispatch(r, s, agent=None, verdict=None, expected=None):
             return False
         pending = next((d for d in c["dispatches"] if d.get("sig") == s and d.get("pending") and d.get("assignment") == (expected or assignment)), None)
         if agent is None:
-            c["dispatches"] = [{"ts": int(time.time()), "agent": "launch pending", "step": r["next"]["step"], "sig": s, "assignment": assignment, "pending": True}] + c["dispatches"]
+            mr = r.get("mr") or {}
+            c["dispatches"] = [{"ts": int(time.time()), "agent": "launch pending", "step": r["next"]["step"], "sig": s,
+                                "source": "orchestrate", "sha": mr.get("sha") or "", "mr_iid": mr.get("iid"),
+                                "assignment": assignment, "pending": True}] + c["dispatches"]
         elif pending:
             if expected and assignment != expected:
                 return False
