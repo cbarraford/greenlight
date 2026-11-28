@@ -430,6 +430,16 @@ test("the app's order at ready (trees, a Basement button's worktree, then the la
   assert.equal((await posts(odd, "open")).length, 1, "a first shell, not an empty window");
   assert.deepEqual([fresh._errs, odd._errs], [[], []]); await fresh.close(); await odd.close();
 });
+test("Chief's console opens the live agent session by name or worktree, ahead of a plain tab", async page => {
+  await page.evaluate(t => term.workspaces(t), {trees: TREES.trees.map(w => w.path === "/w/review"
+    ? {...w, resume: {harness: "claude", session: "mc-1a2b3c4d"}} : w)});
+  await page.evaluate(() => term.ws("mc-1a2b3c4d"));
+  let opens = (await posts(page, "open")).filter(o => o.session === "mc-1a2b3c4d");
+  assert.equal(opens.length, 1); assert.equal(opens[0].ws, "/w/review");
+  await page.evaluate(() => { newTab("/w/review"); term.ws("/w/review") });
+  assert.equal(await page.evaluate(() => cur.focus.session), "mc-1a2b3c4d");
+  assert.equal((await posts(page, "open")).filter(o => o.session === "mc-1a2b3c4d").length, 1);
+});
 test("title omits list before term.workspaces arrives so boot never overwrites L1's project list with empty repos/paths", async page => {
   const b = page.context().browser(), fresh = await b.newPage({viewport: {width: 1200, height: 800}, colorScheme: "dark"});
   await fresh.addInitScript(() => { window.__posts = []; window.webkit = {messageHandlers: {term: {postMessage: m => window.__posts.push(JSON.parse(JSON.stringify(m)))}}} });

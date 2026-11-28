@@ -3083,6 +3083,7 @@ def main():
         print(forge(a[1] if len(a) == 2 else None))
     elif a[:1] == ["trees"]:
         ts = trees()
+        add_resume(ts, [(w["path"], {"state": w["agent"]}) for w in ts])
         print(json.dumps({"trees": ts, "panes": basement_panes(), "repoHosts": repo_hosts(ts),
                           "agents": greenlight.CONFIG.get("agents") or ["claude", "codex"], "usage": usage_now(), **scan_facts()}))
     elif a[:1] == ["turn"] and len(a) == 2 and SESSION_RE.match(a[1]):

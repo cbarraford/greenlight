@@ -1505,10 +1505,17 @@ function openWs(ws, r){
   if (resumeWs(ws, r)) return;
   // Chief's [console: …]: a tmux session, a worktree (path or its last part) or a tab's name; else that worktree's latest tab
   const latest = latestTab, explicit = ws === "" || ws.startsWith("/") || ws.startsWith("@"), q = ws.toLowerCase();
-  const t = explicit ? latest(t => t.ws === ws)
-    : latest(t => paneOf(t).some(p => p.session === ws)) || latest(t => t.ws === ws) || latest(t => t.ws && t.ws.endsWith("/" + ws))
+  const t = latest(t => paneOf(t).some(p => p.session === ws));
+  if (t) return show(t);
+  const live = trees.find(w => SESSION_OK(w.resume?.session) && (w.resume.session === ws || w.path === ws || w.path.endsWith("/" + ws)));
+  if (live) {
+    const existing = latest(t => paneOf(t).some(p => p.session === live.resume.session));
+    return existing ? show(existing) : newTab(live.path, undefined, false, live.resume.session) }
+  const other = explicit ? latest(t => t.ws === ws)
+    : latest(t => t.ws === ws) || latest(t => t.ws && t.ws.endsWith("/" + ws))
       || (q && latest(t => (t.name || "").toLowerCase().includes(q)));
-  t ? show(t) : explicit && newTab(ws) }
+  if (other) return show(other);
+  if (explicit) newTab(ws) }
 // status glyphs: brand/icons names (DESIGN.md §9.4)
 const g16 = (name, cls = "", label = "", w = 12) => { const e = dsIcon(name, w, {cls});
   if (label){ e.removeAttribute("aria-hidden"); e.setAttribute("role", "img"); e.setAttribute("aria-label", label) } return e.outerHTML };

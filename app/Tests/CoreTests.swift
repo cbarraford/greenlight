@@ -1455,6 +1455,10 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
           && hooks.allSatisfy { $0.contains("#{pane_pipe}") && $0.contains("pane_log.py") && $0.contains("pipe-pane -O") }
           && App.tmuxQuote(#"a"b\c$HOME"#) == #""a\"b\\c\$HOME""#
           && App.tmuxFormatEscape("dir#1/file#2") == "dir##1/file##2")
+    let attach = delegate.paneCmd(session: "mc-agent", cwd: "/w/agent", on: "local")
+    check("pane: a live agent session attaches read-write outside an inherited tmux client",
+          attach.contains("unset TMUX; ") && attach.contains("has-session -t '=mc-agent'")
+          && attach.contains("attach -t 'mc-agent'") && !attach.contains("attach -r"))
     // paneCmd's long run, for real: a login shell, then tmux where it's on PATH (else that shell), evals it byte for byte past tmux's
     // 16 KB command line, prints runMark and leaves no temp file; onto the live session again it saves nothing. Its own tmux socket,
     // no pane recorder (its hooks name the real socket and home), killed after through a login shell as the pane found tmux.

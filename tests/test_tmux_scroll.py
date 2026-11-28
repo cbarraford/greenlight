@@ -139,7 +139,9 @@ def test_the_page_and_the_app_agree_on_the_tmux_mark():
     page = re.search(r'const TMUX_MARK = "(.*?)";', (ROOT / "app/terminal.html").read_text()).group(1)
     printed = swift.replace("\\\\", "\\").replace("\\033", "\x1b").replace("\\007", "\x07")  # printf's escapes
     assert printed == page.replace("\\x1b", "\x1b").replace("\\x07", "\x07")
-    assert "printf '\\(App.tmuxMark)'; exec \\(App.tmux)" in (ROOT / "app/Sources/App.swift").read_text(), "printed just before tmux"
+    source = (ROOT / "app/Sources/App.swift").read_text()
+    assert "unset TMUX; printf '\\(App.tmuxMark)'; " in source, "printed before attaching or starting tmux"
+    assert "has-session -t" in source and "attach -t" in source, "an existing session attaches read-write"
 
 
 def test_the_page_and_the_app_agree_on_the_run_mark():

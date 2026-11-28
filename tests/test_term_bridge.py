@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -22,6 +23,20 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import ade_basement  # noqa: E402
 import term_bridge  # noqa: E402
+
+
+def test_live_session_attaches_read_write_even_with_a_pending_run(tmp_path):
+    bridge = object.__new__(term_bridge.TermBridge)
+    bridge.tmux_bin = "/usr/bin/tmux"
+    bridge.socket = "greenlight"
+    bridge.env = {"SHELL": "/bin/sh"}
+    bridge.pool = SimpleNamespace(has_session=lambda _session: True)
+    bridge.tmux_mark = term_bridge.DEFAULT_TMUX_MARK
+    bridge.run_mark = term_bridge.DEFAULT_RUN_MARK
+    argv, warm, marks, run_file = bridge._build_launch_argv("mc-agent", str(tmp_path), "echo ignored")
+    assert argv == ["/usr/bin/tmux", "-L", "greenlight", "attach", "-t", "=mc-agent"]
+    assert warm is False and marks == [bridge.run_mark.encode(), bridge.tmux_mark.encode()]
+    assert run_file is None
 
 
 def _read_event(proc: subprocess.Popen[bytes], timeout: float = 5.0) -> dict[str, Any] | None:
@@ -84,8 +99,8 @@ def test_validation_env_and_tmux_cmd_splitting(tmp_path):
     assert term_bridge._run_shell_cmd("/usr/bin/fish", "$1", "echo hi").startswith("exec /bin/sh -c ")
     assert term_bridge._run_shell_cmd("/bin/zsh", "$1", "echo hi").startswith("exec /bin/zsh -lic ")
 
-    env = term_bridge.build_env({"PATH": "/usr/bin:/bin", "GREENLIGHT_RUN": "leaked-run-id"})
-    assert "GREENLIGHT_RUN" not in env
+    env = term_bridge.build_env({"PATH": "/usr/bin:/bin", "GREENLIGHT_RUN": "leaked-run-id", "TMUX": "outer-client"})
+    assert "GREENLIGHT_RUN" not in env and "TMUX" not in env
     assert env["TERM"] == "xterm-256color"
     assert env["COLORTERM"] == "truecolor"
     assert env["TERM_PROGRAM"] == "Greenlight"

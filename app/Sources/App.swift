@@ -2821,7 +2821,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 + "elif \(App.tmux) has-session -t \(shellQuote("=" + session)) 2>/dev/null; then f=/dev/null/live; "
                 + "elif f=$(mktemp \"${TMPDIR:-/tmp}/greenlight-run.XXXXXX\") && printf %s \"$r\" >| \"$f\"; then :; else [ -z \"$f\" ] || rm -f \"$f\"; f=; fi; "
                 + "printf '\(App.runMark)'; [ -n \"$f\" ] || \(go("$1"))\"$r\"; ")
-            + "printf '\(App.tmuxMark)'; exec \(App.tmux) start-server \\; "
+            + "unset TMUX; printf '\(App.tmuxMark)'; "
+            + "if \(App.tmux) has-session -t \(shellQuote("=" + session)) 2>/dev/null; then exec \(App.tmux) attach -t \(shellQuote(session)); fi; "
+            + "exec \(App.tmux) start-server \\; "
             + (App.tmuxOpts + App.paneRecorderHooks(for: hooksHost ?? host)).joined(separator: " \\; ") + " \\; new-session -A -s \(shellQuote(session)) -c \"$PWD\""
             + (run.isEmpty ? "" : " " + shellQuote(go("$(command cat \"$1\" 2>/dev/null && command rm -f \"$1\")") + "'") + "\"$f\"" + shellQuote("'"))  // -A onto a live session: tmux ignores it
         if host.isEmpty || host == "local" { return inner }

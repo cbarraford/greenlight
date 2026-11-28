@@ -112,6 +112,7 @@ def default_shell(env: dict[str, str]) -> str:
 def build_env(base: dict[str, str] | None = None) -> dict[str, str]:
     env = dict(os.environ if base is None else base)
     env.pop("GREENLIGHT_RUN", None)
+    env.pop("TMUX", None)  # the bridge may itself be launched inside tmux; its clients must attach independently
     env["TERM"] = "xterm-256color"
     env["COLORTERM"] = "truecolor"
     env["TERM_PROGRAM"] = "Greenlight"
@@ -581,21 +582,26 @@ class TermBridge:
             return [shell, "-l"], False, marks, None
 
         live = self.pool.has_session(session)
-        if not run and not live and self.pool.claim(cwd, session):
+        if live:
+            marks.append(self.tmux_mark.encode("utf-8", errors="replace"))
+            if run:
+                marks.insert(0, self.run_mark.encode("utf-8", errors="replace"))
+            return [self.tmux_bin, "-L", self.socket, "attach", "-t", f"={session}"], False, marks, None
+        if not run and self.pool.claim(cwd, session):
             marks.append(self.tmux_mark.encode("utf-8", errors="replace"))
             return [self.tmux_bin, "-L", self.socket, "attach-session", "-t", f"={session}"], True, marks, None
 
         run_cmd = ""
         tmp_file: str | None = None
         if run:
-            tmp_file = None if live else self._write_run_file(run)
+            tmp_file = self._write_run_file(run)
             marks.append(self.run_mark.encode("utf-8", errors="replace"))
-            if not live and not tmp_file:
+            if not tmp_file:
                 return ["/bin/sh", "-c", _run_shell_cmd(shell, "$1", run)], False, marks, None
             run_cmd = _run_shell_cmd(
                 shell,
                 '$(command cat "$1" 2>/dev/null && command rm -f "$1")',
-                tmp_file or "/dev/null/live",
+                tmp_file,
             )
 
         marks.append(self.tmux_mark.encode("utf-8", errors="replace"))
