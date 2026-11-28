@@ -58,6 +58,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ade  # noqa: E402
 import ade_common  # noqa: E402
+import bins  # noqa: E402
 import external  # noqa: E402
 import audit  # noqa: E402
 import blocking  # noqa: E402
@@ -399,10 +400,12 @@ def board(only=None, with_ids=False):
     False (`dash.py board --all`): every workspace on this host, whatever window the chat is in.
     A workspace in one of its repos counts even when the window listed its worktrees before that one existed.
     Like the dashboard, the scan is joined with a live `worktree ps`: a workspace created since the scan is on the board at once."""
-    if only is None and os.environ.get("GREENLIGHT_ONLY"):
-        only = json.loads(os.environ["GREENLIGHT_ONLY"])
     if only is False:  # `dash.py board --all`: Chief asked past its window
         only = None
+    elif only is None and os.environ.get("GREENLIGHT_ONLY"):
+        only = json.loads(os.environ["GREENLIGHT_ONLY"])
+        if not isinstance(only, (list, dict)):
+            raise ValueError("GREENLIGHT_ONLY must be a JSON list or object")
     rows, blk = json.loads((greenlight.STATE / "last.json").read_text())["rows"], blocking.cached()
     try:
         live = live_agents()
@@ -873,6 +876,7 @@ def trees():
             ws = call("worktree", "ps", "--limit", "10000")["worktrees"]
         except Exception:
             continue
+        bases = greenlight.base_branches(ws)
         for w in ws:
             if w.get("isArchived") or not w.get("path") or w["path"] in seen:
                 continue
@@ -888,7 +892,7 @@ def trees():
                         **({"nativeHost": False} if w.get("hostId") not in (None, "", "local") else {})})
             if out[-1]["main"] and (c := repo_cfg(w["path"])):
                 out[-1]["cfg"] = c
-            if r := scan.get(w["path"]):
+            if not w.get("isMainWorktree") and not greenlight.on_base(w, bases) and (r := scan.get(w["path"])):
                 _normalize_row(r)
                 out[-1]["puck"] = r.get("name") or out[-1]["name"]  # greenlight's name for it: `suggest` and the dashboard know it by this
                 r["agent"] = {**r["agent"], "state": out[-1]["agent"]}  # the live agent, not the scan's
@@ -1648,7 +1652,8 @@ def ports(path):
     """[(port, command)] listening from processes started in this worktree's Basement terminals (tmux panes whose folder is in it)."""
     run = lambda *a: subprocess.run(a, capture_output=True, text=True, timeout=10).stdout
     sock = os.environ.get("GREENLIGHT_TMUX_SOCKET") or "greenlight"
-    roots = [int(pid) for pid, _, cwd in (l.partition(" ") for l in run("tmux", "-L", sock, "list-panes", "-a", "-F",
+    tmux = bins.find("tmux") or "tmux"
+    roots = [int(pid) for pid, _, cwd in (l.partition(" ") for l in run(tmux, "-L", sock, "list-panes", "-a", "-F",
              "#{pane_pid} #{pane_current_path}").splitlines()) if pid.isdigit() and (cwd == path or cwd.startswith(path + "/"))]
     if not roots:
         return []

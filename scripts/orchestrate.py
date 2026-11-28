@@ -40,6 +40,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import bins  # noqa: E402
 import diag  # noqa: E402
 import greenlight  # noqa: E402
 import ws_state  # noqa: E402
@@ -993,7 +994,7 @@ def guard_merge(r, cmd, snapshot=None, peers=()):
 
 def run_cmd(cmd):
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=180,
+        p = subprocess.run(bins.argv(cmd), capture_output=True, text=True, timeout=180,
                            pass_fds=(TICK_LOCK_FD,) if TICK_LOCK_FD is not None else ())
     except (subprocess.TimeoutExpired, OSError) as e:
         return False, f"{type(e).__name__}: {e}"[-300:]

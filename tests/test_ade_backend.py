@@ -1,6 +1,7 @@
 """ade.py: which backend is in use, its one contract, and the Orca-shaped dispatcher on top of it (#195)."""
 import json
 import os
+import shutil
 import subprocess
 import sys
 import types
@@ -331,8 +332,13 @@ def test_cli_ade_native_finds_wt_off_a_bare_path(home, repo):
     local_bin = home / ".local" / "bin"
     local_bin.mkdir(parents=True)
     _make_fake_wt(home).rename(local_bin / "wt")
+    sys_bin = home / "sysbin"
+    sys_bin.mkdir()
+    git_bin = shutil.which("git")
+    assert git_bin
+    (sys_bin / "git").symlink_to(git_bin)
     env = {"GREENLIGHT_HOME": str(home), "GREENLIGHT_ADE": "native", "GREENLIGHT_TMUX_SOCKET": "gl-test-none",
-           "GREENLIGHT_ME": "tester", "PATH": "/usr/bin:/bin", "HOME": str(home)}  # no WORKTRUNK_BIN, no ~/.local/bin
+           "GREENLIGHT_ME": "tester", "PATH": str(sys_bin), "HOME": str(home)}  # no WORKTRUNK_BIN, no ~/.local/bin, no host wt
     (home / "imported.json").write_text("{}")
     run = lambda *a: subprocess.run([sys.executable, "scripts/greenlight.py", *a], capture_output=True, text=True, env=env, timeout=60)
     assert run("repos", "add", str(repo)).returncode == 0
@@ -342,8 +348,10 @@ def test_cli_ade_native_finds_wt_off_a_bare_path(home, repo):
     assert json.loads(run("ade", "worktree", "rm", "--worktree", f"id:{path}").stdout) == {"removed": path}
 
     (local_bin / "wt").rename(home / "elsewhere-wt")  # off every searched folder: config.json's bins.wt names it
+    # bins.wt wins over the searched folders, so a host's own /usr/local/bin/wt or Homebrew wt can't answer here
+    (home / "config.json").write_text(json.dumps({"bins": {"wt": str(home / "no-such-wt")}}))
     failed = run("ade", "worktree", "create", "--repo", str(repo), "--name", "feat-q", "--change", "test")
-    assert failed.returncode != 0 and "Worktrunk (`wt`) is required" in failed.stderr + failed.stdout
+    assert failed.returncode != 0 and "Worktrunk not found at" in failed.stderr + failed.stdout
     (home / "config.json").write_text(json.dumps({"bins": {"wt": str(home / "elsewhere-wt")}}))
     made = run("ade", "worktree", "create", "--repo", str(repo), "--name", "feat-q", "--change", "test")
     assert made.returncode == 0, made.stderr

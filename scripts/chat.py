@@ -256,7 +256,8 @@ PROMPT = (
     "then the user's moves closest to merge, then anything whose agent is idle; say why and the one next action for each. "
     "Refresh the workspaces whenever you see fit (the board looks stale, or you just dispatched, merged, created or cleaned one up): "
     "`" + RESCAN + "` rescans every workspace, "
-    "updates the user's dashboard and prints the fresh board. "
+    "updates the user's dashboard and prints the fresh board (in a window, `dash.py board` is scoped to that window; "
+    "`dash.py board --all` prints every workspace on this host). "
     "To see the user's GitHub and GitLab work beyond the workspaces (asked what to pick up, what's waiting on them, about an issue "
     "or MR, or when the board is thin): `python3 " + SCRIPTS + "/dash.py forge` lists the open MRs/PRs they're asked to review, "
     "their own, and the issues assigned to them, each with its status (draft, conflicts, CI, approvals, threads), how stale it is, "
@@ -455,7 +456,7 @@ def board_note(query="", key="", seen=None, snapshot=None):
     seen["scope"] = scope_key
     focused = focus(b, query, hits) if b else b
     digest = ws_state.digest(full)
-    scope = ", only the workspaces in the window the user is in" if os.environ.get("GREENLIGHT_ONLY") else ""
+    scope = ", only the workspaces in the window the user is in (`dash.py board --all` prints every one)" if os.environ.get("GREENLIGHT_ONLY") else ""
     note = ""
     heads = {name: identity[3] for name, identity in (allow or {}).items() if isinstance(identity, tuple) and len(identity) > 3 and identity[3]}
     changed_heads = [name for name, sha in heads.items() if (seen.get("heads") or {}).get(name) not in (None, sha)]

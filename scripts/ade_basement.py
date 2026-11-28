@@ -22,6 +22,7 @@ import harness
 import last_agent
 import ade
 import ade_common
+import bins
 import worktrunk
 from ade_common import MENU_ITEM_RE, draft, prompt_ask, git, git_info, goals, plain, repo_list, screen_state
 
@@ -39,13 +40,24 @@ TMUX_SOCKET = os.environ.get("GREENLIGHT_TMUX_SOCKET") or "greenlight"
 READS = ("list-panes", "capture-pane", "display-message")
 
 
+def tmux_bin():
+    return bins.find("tmux") or "tmux"  # config.json's bins.tmux, PATH, then ~/.local/bin and the like
+
+
 def tmux(*args):
+    exe = tmux_bin()
+    override = bins.configured("tmux")
     try:
-        p = subprocess.run(["tmux", "-L", TMUX_SOCKET, *args], capture_output=True, text=True, timeout=20)
+        p = subprocess.run([exe, "-L", TMUX_SOCKET, *args], capture_output=True, text=True, timeout=20)
     except FileNotFoundError:  # no tmux: nothing of ours runs (a listing goes on); starting an agent can't
+        if override:
+            raise RuntimeError(f"tmux not found at {exe} (bins.tmux in config.json)") from None
         if args and args[0] in READS:
             return ""
         raise RuntimeError("tmux isn't installed: the native engine runs agents in `tmux -L greenlight`") from None
+    except OSError as e:
+        detail = f": {e.strerror}" if e.strerror else ""
+        raise RuntimeError(f"tmux at {exe} can't run ({type(e).__name__}){detail}: check bins.tmux in config.json") from None
     if p.returncode and "no server running" not in p.stderr and "error connecting" not in p.stderr:
         raise RuntimeError(f"tmux {args[0]}: {p.stderr.strip()[:300]}")
     return p.stdout
@@ -257,12 +269,22 @@ def read(handle, limit):
 
 def send(handle, text, enter):
     if enter:  # a bracketed paste keeps a multi-line brief one message; then Enter submits it
-        buf = f"gl-{secrets.token_hex(4)}"
+        buf, exe, override = f"gl-{secrets.token_hex(4)}", tmux_bin(), bins.configured("tmux")
         try:
-            subprocess.run(["tmux", "-L", TMUX_SOCKET, "load-buffer", "-b", buf, "-"], input=text, text=True, timeout=20, check=True)
+            try:
+                subprocess.run([exe, "-L", TMUX_SOCKET, "load-buffer", "-b", buf, "-"],
+                               input=text, capture_output=True, text=True, timeout=20, check=True)
+            except FileNotFoundError:
+                msg = (f"tmux not found at {exe} (bins.tmux in config.json)" if override
+                       else "tmux isn't installed: the native engine runs agents in `tmux -L greenlight`")
+                raise RuntimeError(msg) from None
+            except OSError as e:
+                detail = f": {e.strerror}" if e.strerror else ""
+                raise RuntimeError(f"tmux at {exe} can't run ({type(e).__name__}){detail}: check bins.tmux in config.json") from None
             tmux("paste-buffer", "-p", "-d", "-b", buf, "-t", handle)
         finally:
-            subprocess.run(["tmux", "-L", TMUX_SOCKET, "delete-buffer", "-b", buf], capture_output=True, timeout=10)
+            with contextlib.suppress(OSError, subprocess.SubprocessError):
+                subprocess.run([exe, "-L", TMUX_SOCKET, "delete-buffer", "-b", buf], capture_output=True, timeout=10)
         time.sleep(0.2)
         tmux("send-keys", "-t", handle, "Enter")
     else:  # a menu pick

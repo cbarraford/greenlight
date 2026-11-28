@@ -50,10 +50,15 @@ def run(repo, *args, timeout=120):
     try:
         p = subprocess.run([binary, "-C", repo, *args], capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError:
+        if binary != "wt":  # WORKTRUNK_BIN or bins.wt names a binary that isn't there
+            raise RuntimeError(f"Worktrunk not found at {binary} (WORKTRUNK_BIN or bins.wt in config.json)") from None
         raise RuntimeError(f"Worktrunk (`wt`) is required to create and remove workspaces: not found on PATH or in "
                            f"{bins.searched()} (set WORKTRUNK_BIN, or bins.wt in config.json, to its path)") from None
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"{label} timed out") from None
+    except OSError as e:  # an override that isn't executable, or is a folder
+        detail = f": {e.strerror}" if e.strerror else ""
+        raise RuntimeError(f"Worktrunk at {binary} can't run ({type(e).__name__}){detail}: check WORKTRUNK_BIN or bins.wt in config.json") from None
     if p.returncode:
         raise RuntimeError(f"{label}: {(p.stderr or p.stdout).strip()[:300]}")
     return p.stdout

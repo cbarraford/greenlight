@@ -654,3 +654,52 @@ def test_resume_cmd_harnesses_and_validation(harness_env):
             harness.resume_cmd("claude", bad)
     with pytest.raises(ValueError):
         harness.resume_cmd("unknown", sid)
+
+
+def test_binary_precedence_and_installed_directory_rejection(gl_home, tmp_path, monkeypatch):
+    import bins
+    import chat
+    home = tmp_path / "u"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.setattr(bins, "DIRS", ("~/.local/bin",))
+
+    # directory is never considered installed
+    d = tmp_path / "a-dir"
+    d.mkdir()
+    harness.CONFIG["harnesses"] = {"claude": {"bin": str(d)}}
+    assert harness.binary("claude") == str(d)
+    assert harness.installed("claude") is False
+
+    # ~/.<name>/bin/<name> fallback (must be executable file)
+    harness.CONFIG["harnesses"] = {}
+    alt = home / ".opencode" / "bin" / "opencode"
+    alt.parent.mkdir(parents=True)
+    alt.write_text("#!/bin/sh\nexit 0\n")
+    assert harness.binary("opencode") == "opencode"  # not executable yet
+    alt.chmod(0o755)
+    assert harness.binary("opencode") == str(alt)
+    assert harness.installed("opencode") is True
+
+    # bins.<name> wins over ~/.<name>/bin, harnesses.<name>.bin (with ~) wins over bins.<name>
+    bin_oc = home / "opt" / "oc"
+    bin_oc.parent.mkdir(parents=True)
+    bin_oc.write_text("#!/bin/sh\nexit 0\n")
+    bin_oc.chmod(0o755)
+    (gl_home / "config.json").write_text(json.dumps({"bins": {"opencode": str(bin_oc)}}))
+    assert harness.binary("opencode") == str(bin_oc)
+    h_oc = home / "custom" / "oc"
+    h_oc.parent.mkdir(parents=True)
+    h_oc.write_text("#!/bin/sh\nexit 0\n")
+    h_oc.chmod(0o755)
+    harness.CONFIG["harnesses"] = {"opencode": {"bin": " ~/custom/oc "}}
+    assert harness.binary("opencode") == str(h_oc)
+    assert harness.installed("opencode") is True
+
+    # chat.focus() with GREENLIGHT_ONLY mentions --all on overflow
+    rows = "\n".join(f"- ws-{i} (no MR, o/g): freeform · on agent" for i in range(15))
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    assert "--all" not in chat.focus(rows, "status")
+    monkeypatch.setenv("GREENLIGHT_ONLY", '["/w/ws-0"]')
+    assert "--all" in chat.focus(rows, "status")

@@ -58,16 +58,19 @@ def test_report_preview_blocked_and_execute_modes(tmp_path, monkeypatch):
         r_nogh = diag.report("Crash on startup", "Happens on launch", execute=True)
     assert r_nogh["ok"] is True and r_nogh["filed"] is False and "issues/new?" in r_nogh["url"]
 
-    # Execute with `gh` succeeding and failing
+    # Execute with `gh` succeeding and failing: a stub gh, so the test doesn't need one on the host
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text("#!/bin/sh\n")
+    fake_gh.chmod(0o755)
     with (
-        mock.patch.object(diag.shutil, "which", return_value="/usr/bin/gh"),
+        mock.patch.object(diag.shutil, "which", return_value=str(fake_gh)),
         mock.patch.object(diag.subprocess, "run", return_value=subprocess.CompletedProcess(["gh"], 0, stdout="https://github.com/cbarraford/greenlight/issues/99\n", stderr="")),
     ):
         r_ok = diag.report("Crash on startup", "Happens on launch", execute=True, shown=r_prev["body"])
     assert r_ok["ok"] is True and r_ok["filed"] is True and r_ok["url"].endswith("/99")
 
     with (
-        mock.patch.object(diag.shutil, "which", return_value="/usr/bin/gh"),
+        mock.patch.object(diag.shutil, "which", return_value=str(fake_gh)),
         mock.patch.object(diag.subprocess, "run", return_value=subprocess.CompletedProcess(["gh"], 1, stdout="", stderr="auth required")),
     ):
         r_fail = diag.report("Crash on startup", "Happens on launch", execute=True)

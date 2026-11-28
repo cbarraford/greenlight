@@ -58,7 +58,7 @@ KEYS = {"kind", "comp", "v", "run", "tool", "sub", "err", "msg_class", "op", "na
 CLASSES = (  # first match wins: classify()
     ("rate_limit", r"rate.?limit|\b429\b|too many requests|usage limit|limit reached|out of (?:extra )?usage"),
     ("auth", r"\b401\b|\b403\b|unauthori[sz]ed|forbidden|authenticat|not logged in|log ?in|credential|token|publickey|invalid_grant|\boauth"),
-    ("permission", r"permission denied|EACCES|operation not permitted|read-only file system"),
+    ("permission", r"permission denied|PermissionError|EACCES|operation not permitted|read-only file system"),
     ("timeout", r"timed? ?out|timeout|deadline"),
     ("network", r"could not resolve|name or service not known|connection (?:reset|refused|closed)|network|unreachable|"
                 r"TLS|SSL|unexpected EOF|broken pipe"),
@@ -412,10 +412,34 @@ def crashes(after, n=5):
     return out
 
 
+_AGENT_CLIS = frozenset({"claude", "codex", "opencode", "pi", "gemini", "agy"})
+
+
+def _harness_bin_override(name):
+    try:
+        h = json.loads((home() / "config.json").read_text()).get("harnesses")
+    except (OSError, ValueError, AttributeError):
+        return None
+    entry = h.get(name) if isinstance(h, dict) else None
+    return entry.get("bin") if isinstance(entry, dict) else None
+
+
+def _is_exec(p):
+    return bins.is_executable(p) if bins else bool(p) and os.path.isfile(p) and os.access(p, os.X_OK)
+
+
 def _cli(name):
-    """Whether the CLI runs here as greenlight would find it (bins.find: overrides, PATH, ~/.local/bin and the like)."""
-    p = bins.find(name, env="WORKTRUNK_BIN" if name == "wt" else None) if bins else shutil.which(name)
-    return bool(p) and (os.access(p, os.X_OK) if os.sep in p else bool(shutil.which(p)))
+    """Whether the CLI runs here as greenlight would find it (harnesses.<h>.bin, overrides, PATH, ~/.local/bin, …)."""
+    ov = _harness_bin_override(name) if name in _AGENT_CLIS else None
+    if bins:
+        p = bins.find(name, env="WORKTRUNK_BIN" if name == "wt" else None, override=ov)
+    else:
+        p = (os.path.expanduser(ov.strip()) if isinstance(ov, str) and ov.strip() else None) or shutil.which(name)
+    if not p and name in _AGENT_CLIS:
+        alt = os.path.expanduser(f"~/.{name}/bin/{name}")
+        if _is_exec(alt):
+            return True
+    return bool(p) and (_is_exec(p) if os.sep in p else bool(shutil.which(p)))
 
 
 def _doctor_ade(add):
@@ -662,12 +686,13 @@ def report(title, text, app_events=(), execute=False, inline=False, shown=None):
         out["data"] = b
     if not execute:
         return {**out, "preview": True}
-    if not shutil.which("gh"):
+    gh = bins.find("gh") if bins else shutil.which("gh")
+    if not (gh and (_is_exec(gh) if os.sep in gh else bool(shutil.which(gh)))):
         import urllib.parse
         q = urllib.parse.urlencode({"title": out["title"], "body": (text or "").strip()[:4000] + "\n\n(Attach the diagnostics bundle from `diag.py bundle`.)"})
         return {**out, "filed": False, "url": f"https://github.com/{REPO}/issues/new?{q}"}
     with span("report", tool="gh") as d:
-        p = subprocess.run(["gh", "issue", "create", "--repo", REPO, "--title", out["title"], "--body-file", "-"],
+        p = subprocess.run([gh, "issue", "create", "--repo", REPO, "--title", out["title"], "--body-file", "-"],
                            input=out["body"], capture_output=True, text=True, timeout=60)
         d.update(rc=p.returncode, msg_class=classify(p.stderr) if p.returncode else None)
     if p.returncode:

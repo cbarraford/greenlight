@@ -27,6 +27,10 @@ import time
 from pathlib import Path
 from typing import Any
 
+try:
+    import bins
+except ImportError:  # pane_log.py can be copied standalone alongside diag.py
+    bins = None  # type: ignore[assignment]
 import diag
 
 SESSION_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
@@ -168,12 +172,16 @@ def _file_has_data(path: Path) -> bool:
         return False
 
 
+def _tmux_bin() -> str:
+    return (bins.find("tmux") if bins else None) or "tmux"
+
+
 def _resolve_pane(pane_id: str, socket: str) -> tuple[str, str]:
     if not PANE_ID_RE.fullmatch(pane_id):
         raise ValueError(f"invalid pane id: {pane_id!r}")
     sock = valid_socket(socket or os.environ.get("GREENLIGHT_TMUX_SOCKET") or "greenlight")
     p = subprocess.run(
-        ["tmux", "-L", sock, "display-message", "-p", "-t", pane_id, "#{session_name}\t#{pane_current_path}"],
+        [_tmux_bin(), "-L", sock, "display-message", "-p", "-t", pane_id, "#{session_name}\t#{pane_current_path}"],
         capture_output=True,
         text=True,
         timeout=10,
@@ -188,7 +196,7 @@ def _live_tmux_sessions(socket: str) -> set[str]:
     try:
         sock = valid_socket(socket or os.environ.get("GREENLIGHT_TMUX_SOCKET") or "greenlight")
         p = subprocess.run(
-            ["tmux", "-L", sock, "list-sessions", "-F", "#{session_name}"],
+            [_tmux_bin(), "-L", sock, "list-sessions", "-F", "#{session_name}"],
             capture_output=True,
             text=True,
             timeout=3,
@@ -853,7 +861,7 @@ def attach(session: str, cwd: str = "", socket: str | None = None, code_dir: Pat
     except ValueError:
         return False
     check = subprocess.run(
-        ["tmux", "-L", sock, "display-message", "-p", "-t", f"={session}:", "#{pane_pipe}"],
+        [_tmux_bin(), "-L", sock, "display-message", "-p", "-t", f"={session}:", "#{pane_pipe}"],
         capture_output=True,
         text=True,
         timeout=10,
@@ -866,7 +874,7 @@ def attach(session: str, cwd: str = "", socket: str | None = None, code_dir: Pat
     home = os.environ.get("GREENLIGHT_HOME") or str(Path.home() / ".greenlight")
     cmd = pipe_command(str(root), home, sock, session=session, cwd=cwd, agent=agent, python=sys.executable)
     res = subprocess.run(
-        ["tmux", "-L", sock, "pipe-pane", "-O", "-t", f"={session}:", cmd],
+        [_tmux_bin(), "-L", sock, "pipe-pane", "-O", "-t", f"={session}:", cmd],
         capture_output=True,
         text=True,
         timeout=10,
