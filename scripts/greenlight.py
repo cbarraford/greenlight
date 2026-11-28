@@ -2177,7 +2177,7 @@ def grouped_moot(names, asked, by_key):
         return False
     for t in asked:  # each by its id (two may share a name), then by name: one recreated under its name is not gone
         r = by_key.get(t.get("worktree_id")) or by_key.get(t["workspace"])
-        if t.get("owner") in (None, "done", "greenlight") or (r["next"]["owner"] != "done" if r else os.path.isdir(str(t.get("worktree_id")))):
+        if t.get("owner") in (None, "done", "greenlight") or (r["next"]["owner"] != "done" if r else os.path.isdir(str(t.get("worktree_id")).split("::")[-1])):  # an Orca id is repo::path
             return False
     return True
 

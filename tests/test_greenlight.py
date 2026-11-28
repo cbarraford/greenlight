@@ -368,7 +368,7 @@ assert "@stuck:snapshot:one" not in greenlight.pinged()
 last_json = greenlight.STATE / "last.json"; kept_scan = last_json.read_text()
 twin = lambda i, owner: row("grp-twin", owner) | {"id": f"twin-{i}"}  # two workspaces under one name (the same branch in two repos)
 last_json.write_text(json.dumps({"rows": [row("grp-a", "me"), row("grp-b", "agent"), row("grp-old", "done"), twin(1, "me"), twin(2, "me"),
-                                             row("grp-auto", "greenlight"), row("grp-skip", "me") | {"id": str(greenlight.STATE)}]}))
+                                             row("grp-auto", "greenlight"), row("grp-skip", "me") | {"id": f"repo::{greenlight.STATE}"}]}))
 greenlight.ping("Trust the agent in these?\nOptions: yes | no", "@grp-open", ws=["grp-a", "grp-b"])
 greenlight.ping("Deploy these?\nOptions: yes | no", "@grp-done", ws=["grp-a", "grp-old"])
 greenlight.ping("Merge this one?\nOptions: yes | no", "@grp-one", ws=["grp-a"])
