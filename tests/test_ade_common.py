@@ -134,6 +134,24 @@ def test_answered_or_unrelated_screens_are_not_prompts():
     assert ade_common.prompt_ask(["Would you like to run the following command?"] + ["output"] * 20 + ["1. a", "2. b"]) is None
 
 
+def test_review_findings():
+    # a narrow pane: codex wraps its question and footer
+    narrow = ["Would you like to run the", "following command?", "$ make lint", "› 1. Yes, proceed", "2. Yes, and don't ask",
+              "again for commands", "3. No, and tell Codex", "Press enter to confirm or", "esc to cancel"]
+    assert ade_common.prompt_ask(narrow) == {"agent": "codex", "kind": "command", "text": "Would you like to run the following command?",
+                                             "cmd": "make lint"}
+    # answered, then output that is a numbered list: not the old prompt
+    assert ade_common.prompt_ask(CODEX_RUN + ["• Ran make lint", "  └ 1. lint", "    2. typecheck"]) is None
+    # a prompt with no command never borrows one from older output
+    edit = CODEX_RUN + ["• Ran make lint", "  └ ok", "Would you like to make the following edits?", "  foo.py +2 -1",
+                        "› 1. Yes", "  2. No", "  Press enter to confirm or esc to cancel"]
+    assert ade_common.prompt_ask(edit) == {"agent": "codex", "kind": "edit", "text": "Would you like to make the following edits?", "cmd": ""}
+    claude_edit = ["⏺ I ran:", "  $ npm test", "Edit file", " foo.py", "Do you want to make this edit to foo.py?", "❯ 1. Yes", "  2. No"]
+    assert ade_common.prompt_ask(claude_edit)["cmd"] == ""
+    # opencode's bare ┃ composer under a numbered list ending in a question: an idle reply, not a prompt
+    assert ade_common.prompt_ask(["Do you want to proceed with the refactor?", "1. Yes", "2. No", "┃"]) is None
+
+
 def test_basement_state_never_done_on_a_prompt():
     for title, cmd, lines in (("[ ! ] Action Required | Add a button", "codex", CODEX_RUN), ("widgets", "agy", AGY_RUN),
                               ("widgets", "agy", AGY_TRUST), ("✳ Tests", "claude", CLAUDE_BASH), ("x", "codex", CODEX_UPDATE)):
@@ -200,3 +218,8 @@ def test_cleanup_keeps_a_workspace_whose_agent_waits_on_a_prompt():
         verdict, reason = cleanup.evaluate(wt, rp, set())
         assert verdict == "skip" and "prompt" in reason, reason
         assert cleanup.evaluate({**wt, "agents": [{"state": "done", "agentType": "codex"}]}, rp, set())[0] == "candidate"
+        # a bare "waiting" (Orca's stale alert, a question at the end of a reply) is no proof of a prompt
+        assert cleanup.evaluate({**wt, "agents": [{"state": "waiting", "agentType": "codex"}]}, rp, set())[0] == "candidate"
+    # twin entries for one path: the prompted agent on either one counts
+    twins = cleanup.dedupe([{**wt, "id": "a", "agents": []}, {**wt, "id": "b"}])
+    assert len(twins) == 1 and twins[0]["agents"][0]["asking"]["cmd"] == "make lint"

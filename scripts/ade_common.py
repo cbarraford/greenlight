@@ -146,9 +146,11 @@ PROMPT_P = 0.9  # a known harness prompt with its options on the bottom rows: th
 # Every harness's known blocking prompt, in one place: (harness, kind, a line of the prompt). A prompt is live when one of
 # these lines sits at most PROMPT_SPAN rows above the screen's last numbered option, and at most PROMPT_TAIL passive rows
 # (key hints, a status bar) follow that option: no composer, no newer output.
-PROMPTS = (
+PROMPTS = (  # a narrow pane wraps the question: its second half is listed too
     ("codex", "command", r"Would you like to run the following command\?"),
+    ("codex", "command", r"following command\?"),
     ("codex", "edit", r"Would you like to (?:make|apply) the following edits\?"),
+    ("codex", "edit", r"following edits\?"),
     ("codex", "approval", r"Press enter to confirm or esc to cancel"),
     ("codex", "update", r"Update available!?"),
     ("agy", "trust", r"Do you trust the contents of this (?:project|folder|workspace|directory)\?"),
@@ -160,16 +162,52 @@ PROMPTS = (
 PROMPT_RES = [(h, k, re.compile(r"^\s*[^\w\s]{0,3}\s*" + rx, re.I)) for h, k, rx in PROMPTS]
 PROMPT_SPAN, PROMPT_TAIL = 15, 3
 OPTION_RE = re.compile(r"^\s*(?:[❯›●▸>]\s*)?\d+\.\s+\S")
+OUTPUT_RE = re.compile(r"^\s*[•●⏺└⎿]\s")  # an agent's output bullet: newer than a prompt above it, so that one was answered
 CMD_RE = re.compile(r"^\s*\$\s+(\S.*)$|^\s*(?:Bash|Shell|Run)\((.+)\)\s*$")
 RULE_RE = re.compile(r"[\s╌┄┈─━═\-]+")
 CMD_HEAD_RE = re.compile(r"^\s*(?:Requesting permission for:?|Bash command|Command)\s*$", re.I)
 
 
+def _prompt_rows(lines):
+    """Screen rows as prompt_ask reads them: plain, box sides stripped, blank and ─ rules gone; opencode's bare ┃ is its composer."""
+    out = []
+    for x in lines:
+        t = plain(str(x)).strip()
+        if t == "┃":
+            out.append("›")
+            continue
+        t = BOX_RE.sub("", t).rstrip() if BOX_RE.search(t) else t
+        if t.strip() and not re.fullmatch(r"[\s─━═\-–—╭╮╰╯]+", t):
+            out.append(t)
+    return out[-60:]
+
+
+def _prompt_cmd(rows, top, i, last, agent):
+    """The command the prompt at rows[i] (its dialog from rows[top]) asks to run: in the dialog (codex `$ …`, the row after
+    agy's header), or for Claude the row after the `Bash command` header above it (past its description and ╌ rule),
+    stopping at older options."""
+    for j in range(top, last):
+        if OPTION_RE.match(rows[j]):
+            continue
+        if m := CMD_RE.match(rows[j]):
+            return (m[1] or m[2]).strip()
+        if CMD_HEAD_RE.match(rows[j]) and j + 1 < last and not OPTION_RE.match(rows[j + 1]) and not any(rx.search(rows[j + 1]) for _, _, rx in PROMPT_RES):
+            return rows[j + 1].strip()
+    if agent != "claude":
+        return ""
+    for j in range(i - 1, max(-1, i - 25), -1):
+        if OPTION_RE.match(rows[j]):
+            return ""  # an older dialog's options: its command isn't this one's
+        if re.fullmatch(r"\s*Bash command\s*", rows[j], re.I):
+            k = next((k + 1 for k in range(j + 1, min(j + 4, i)) if RULE_RE.fullmatch(rows[k])), j + 1)
+            return rows[k].strip() if k < i else ""
+    return ""
+
+
 def prompt_ask(lines):
     """The known prompt (PROMPTS) the agent is stopped on at the bottom of its screen, else None:
     {agent, kind, text (its question), cmd (the command it asks to run, when it shows one)}."""
-    rows = [BOX_RE.sub("", t).rstrip() if BOX_RE.search(t := plain(str(x)).strip()) else t for x in lines]
-    rows = [x for x in rows if x.strip() and not re.fullmatch(r"[\s─━═\-–—╭╮╰╯]+", x)][-60:]
+    rows = _prompt_rows(lines)
     last = max((i for i, x in enumerate(rows) if OPTION_RE.match(x)), default=-1)
     if last < 0 or len(rows) - 1 - last > PROMPT_TAIL:
         return None
@@ -181,20 +219,13 @@ def prompt_ask(lines):
         return None
     # the question nearest the options (an older, answered one may still be in view), not codex's key-hint footer
     i, agent, kind = ([x for x in hits if x[2] != "approval" and x[0] < last] or hits)[-1]
-    cmd = ""
-    for j in [*range(i, last), *range(i - 1, max(-1, i - 25), -1)]:  # below the question (codex, agy), else above (claude)
-        if OPTION_RE.match(rows[j]):
-            continue
-        if m := CMD_RE.match(rows[j]):
-            cmd = (m[1] or m[2]).strip()
-            break
-        if CMD_HEAD_RE.match(rows[j]):
-            # Claude: its header, a description, a ╌ rule, then the command; else the command is the next row
-            k = next((k + 1 for k in range(j + 1, min(j + 4, last)) if RULE_RE.fullmatch(rows[k])), j + 1)
-            if k < last and not OPTION_RE.match(rows[k]) and not any(rx.search(rows[k]) for _, _, rx in PROMPT_RES):
-                cmd = rows[k].strip()
-                break
-    return {"agent": agent, "kind": kind, "text": rows[i].strip()[:200], "cmd": cmd[:300]}
+    if i < last and any(OUTPUT_RE.match(x) for x in rows[i + 1:last]):
+        return None  # output after the question: it was answered, and these numbered rows are newer output
+    top = min(x[0] for x in hits if x[0] > max((j for j in range(lo, i) if OUTPUT_RE.match(rows[j])), default=-1))
+    text = rows[i].strip()
+    if i > 0 and text[:1].islower() and not rows[i - 1].rstrip().endswith(("?", ":", ".")):
+        text = f"{rows[i - 1].strip()} {text}"  # a wrapped question: its first half is the row above
+    return {"agent": agent, "kind": kind, "text": text[:200], "cmd": _prompt_cmd(rows, top, i, last, agent)[:300]}
 
 
 def screen_state(lines):

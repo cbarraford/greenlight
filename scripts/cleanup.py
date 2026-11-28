@@ -256,7 +256,8 @@ def evaluate(wt, repo, busy):
 
     if git(path, "status", "--porcelain", "--untracked-files=normal"):
         return "skip", f"{reason}, but has uncommitted/untracked changes"
-    if any(a.get("state") == "waiting" and not a.get("external") for a in wt.get("agents") or []):
+    # proof of a prompt (`asking`, from the screen): a bare "waiting" may be stale, or a question at the end of a reply
+    if any(a.get("state") == "waiting" and a.get("asking") for a in wt.get("agents") or []):
         return "skip", f"{reason}, but its agent is stopped on a prompt waiting for you"  # quiet, so the busy check misses it
     if any(i in busy for i in wt.get("ids") or [wt["id"]]):
         return "skip", f"{reason}, but a terminal was active in the last {ACTIVE_MINUTES}m"
@@ -302,6 +303,7 @@ def dedupe(wts):
             w[k] = any(g.get(k) for g in group)
         w["lastActivityAt"] = max((g.get("lastActivityAt") or 0) for g in group) or None
         w["ids"] = [g["id"] for g in group]
+        w["agents"] = [a for g in group for a in g.get("agents") or []]
         out.append(w)
     return out
 
