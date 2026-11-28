@@ -867,17 +867,21 @@ with mock.patch.object(orchestrate, "live_worktree", return_value={"worktreeId":
         mock.patch.object(greenlight, "orca") as set_worktree:
     assert "backfilled" in orchestrate.act_one(stale, stale["name"], {"do": "goal", "goal": "Merge !1: stale"}, {})[0]
     set_worktree.assert_not_called()  # native backfill records the goal without adding an Orca link
-live_link = {"worktreeId": stale["id"], "branch": stale["branch"], "comment": "", "linkedGitLabMR": None}
-def link_during_lookup(*a, **kw):
+live_native = {"worktreeId": stale["id"], "branch": stale["branch"], "comment": ""}
+def native_during_backfill(*a, **kw):
     if a[:2] == ("worktree", "ps"):
-        return {"worktrees": [live_link]}
-    if a[:2] == ("worktree", "show"):
-        return {"worktree": live_link}
-    raise AssertionError("operator's new link must not be overwritten")
-live_link["linkedGitLabMR"] = 2
-with mock.patch.object(greenlight, "orca", side_effect=link_during_lookup), mock.patch.object(greenlight, "gl") as lookup:
+        return {"worktrees": [live_native]}
+    if a[:2] == ("worktree", "set"):
+        raise AssertionError("operator's updated goal must not be overwritten")
+    raise RuntimeError(f"orca {a[0]} {a[1]} has no native equivalent")
+live_native["comment"] = "operator goal set after scan"
+with mock.patch.object(greenlight, "orca", side_effect=native_during_backfill), mock.patch.object(greenlight, "gl") as lookup:
     assert "changed since scan" in orchestrate.act_one(stale, stale["name"], {"do": "goal", "goal": "Merge !1: stale"}, {})[0]
-    lookup.assert_not_called()  # native backfill checks the live link without an Orca lookup
+    lookup.assert_not_called()  # native backfill checks live native metadata without a forge lookup
+live_native["comment"], live_native["branch"] = "", "other-branch"
+with mock.patch.object(greenlight, "orca", side_effect=native_during_backfill), mock.patch.object(greenlight, "gl") as lookup:
+    assert "changed since scan" in orchestrate.act_one(stale, stale["name"], {"do": "goal", "goal": "Merge !1: stale"}, {})[0]
+    lookup.assert_not_called()
 greenlight.orca = fake_orca
 print("act ok")
 

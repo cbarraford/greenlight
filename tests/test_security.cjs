@@ -12,7 +12,7 @@ const XSS_URL = 'javascript:window.__pwned=6';
 
 (async () => {
   const browser = await launchBrowser();
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-sec-"));
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "gl-sec-")));
   fs.copyFileSync(path.join(ROOT, "app/terminal.html"), path.join(dir, "terminal.html"));
   fs.copyFileSync(path.join(ROOT, "app/vendor/ghostty-web.js"), path.join(dir, "ghostty-web.js"));
 
@@ -53,9 +53,17 @@ const XSS_URL = 'javascript:window.__pwned=6';
         }],
       }));
       const rawSnap = execFileSync("python3", [path.join(ROOT, "scripts/dash.py"), "snapshot"], {
-        env: {...process.env, GREENLIGHT_HOME: home, GREENLIGHT_ADE: "native", GREENLIGHT_USAGE: "off"}, encoding: "utf8",
+        env: {
+          ...process.env,
+          GREENLIGHT_HOME: home,
+          GREENLIGHT_ADE: "native",
+          GREENLIGHT_USAGE: "off",
+          GREENLIGHT_TMUX_SOCKET: "gl-sec-" + process.pid,
+        },
+        encoding: "utf8",
       });
       const snap = JSON.parse(rawSnap);
+      assert.ok(snap.pucks.length >= 1, "expected adversarial puck in dash.py snapshot");
       await page.evaluate(s => window.mc.update(s), snap);
       await page.evaluate((x) => {
         window.mc.pickProjects([{id: x, name: x, repos: ["a"], busy: 1, color: 'red;background:url(https://evil.invalid/x)'}], null, true);

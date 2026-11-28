@@ -472,6 +472,7 @@ def test_tree_new_starts_default_harness_in_basement_preserving_goal_newlines(mo
     goal = "Fix login\nKeep the existing API"
     out = dash.tree_new("/w/repo", {"name": "login", "goal": goal, "agent": True})
     assert out["ok"] and out["path"] == "/w/new" and out["session"] == "mc-new"
+    assert ("worktree", "create", "--repo", "id:/w/repo", "--name", "login", "--comment", goal) in create_calls
     assert not any(args[:2] == ("agent", "launch") for args in create_calls)
     assert len(launches) == 1
     assert launches[0][0] == "/w/new" and launches[0][1] == "codex"

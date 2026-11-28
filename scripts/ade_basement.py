@@ -121,13 +121,12 @@ _TITLE_PREFIX = {"codex": "⌬ ", "agy": "◈ "}
 def pane_states():
     """Map Basement tmux session -> {state, title} for every agent pane on TMUX_SOCKET."""
     out: dict[str, dict[str, str]] = {}
+    recs, now_ms = _load_recs(), int(time.time() * 1000)
+    rec_paths = _path_map(recs) if recs else None
     for p in panes():
-        kind = agent_type(p["title"], p.get("cmd", ""))
-        if not kind:
-            continue
-        needs_tail = kind != "claude" or not ("⠀" <= p["title"][:1] <= "⣿")
-        s = state(p["title"], screen(p["handle"]) if needs_tail else None, p.get("cmd", ""))
-        if not s:
+        owner = _owner_of(p["cwd"], rec_paths) if rec_paths else None
+        kind, s = _pane_agent(p, owner, recs, now_ms)
+        if not kind or not s:
             continue
         pref = _TITLE_PREFIX.get(kind, "")
         title = p["title"] if not pref or p["title"].startswith(pref) else pref + p["title"]
@@ -186,6 +185,31 @@ def agent_worktree(path):
     return "/.claude/worktrees/" in path + "/"
 
 
+def _path_map(paths):
+    """Precomputed (norm_pairs, real_pairs) ordered longest-first for _owner_of()."""
+    norm = sorted(((os.path.normpath(w), w) for w in dict.fromkeys(paths) if w), key=lambda x: -len(x[0]))
+    real = sorted(((os.path.realpath(nw), w) for nw, w in norm), key=lambda x: -len(x[0]))
+    return norm, real
+
+
+def _match_prefix(path, pairs):
+    for prefix, orig in pairs:
+        if path == prefix or path.startswith(prefix.rstrip("/") + "/"):
+            return orig
+    return None
+
+
+def _owner_of(cwd, paths):
+    """Return the longest worktree path in paths containing cwd, matching normpath first and realpath for symlinks."""
+    if not cwd:
+        return None
+    norm, real = paths if isinstance(paths, tuple) and len(paths) == 2 and isinstance(paths[0], list) else _path_map(paths)
+    ncwd = os.path.normpath(cwd)
+    if (hit := _match_prefix(ncwd, norm)) is not None:
+        return hit
+    return _match_prefix(os.path.realpath(ncwd), real)
+
+
 def worktrees():
     import importers  # here: importers imports this module
     importers.first_run()  # the first listing on this install brings the other ADEs' repos and goals in (and retries a
@@ -195,11 +219,10 @@ def worktrees():
     paths = [l[9:] for repo in filter(None, repos)
              for l in git(repo, "worktree", "list", "--porcelain").splitlines()
              if l.startswith("worktree ") and not agent_worktree(l[9:])]
-    by_len = sorted(set(paths), key=len, reverse=True)
+    pm = _path_map(paths)
     owned: dict[str, list] = {}
     for p in ps:
-        owner = next((w for w in by_len if p["cwd"] == w or p["cwd"].startswith(w + "/")), None)
-        if owner is not None:
+        if (owner := _owner_of(p["cwd"], pm)) is not None:
             owned.setdefault(owner, []).append(p)
     out, ext = [], external.by_worktree_safe(paths)  # agents another ADE or a plain terminal runs in these worktrees
     recs, now_ms = _load_recs(), int(time.time() * 1000)
@@ -255,20 +278,42 @@ def _load_recs():
     return out
 
 
+def _pane_rec(p, owner=None, recs=None):
+    if not owner or not recs:
+        return None
+    norm = os.path.normpath(owner)
+    raw = recs.get(norm) or recs.get(os.path.realpath(norm))
+    return raw if isinstance(raw, dict) and raw.get("session") == p.get("session") else None
+
+
+def _is_fresh_rec(rec, now_ms):
+    return bool(rec and now_ms is not None and rec.get("used") and 0 <= now_ms - rec["used"] < 15_000)
+
+
+def _pane_kind(p, owner=None, recs=None, now_ms=None):
+    """Identify a Basement pane's harness without capturing its screen (handles wrapped and freshly launched panes)."""
+    kind = agent_type(p["title"], p.get("cmd", ""))
+    if kind:
+        return kind
+    rec = _pane_rec(p, owner, recs)
+    if rec is None:
+        return None
+    if last_agent.cmd(p) in last_agent.CMDS.get(rec["harness"], ()) or _is_fresh_rec(rec, now_ms):
+        return rec["harness"]
+    return None
+
+
 def _pane_agent(p, owner=None, recs=None, now_ms=None):
     """Identify (kind, state) for a Basement tmux pane, falling back to last_agent for starting or wrapped harnesses."""
     title, cmd = p["title"], p.get("cmd", "")
-    kind = agent_type(title, cmd)
-    raw_rec = (recs or {}).get(owner) if owner else None
-    rec = raw_rec if isinstance(raw_rec, dict) and raw_rec.get("session") == p.get("session") else None
-    fresh_rec = bool(rec and now_ms is not None and rec.get("used") and 0 <= now_ms - rec["used"] < 15_000)
-    if not kind and rec is not None:
-        if last_agent.cmd(p) in last_agent.CMDS.get(rec["harness"], ()):
-            kind = rec["harness"]
-        elif fresh_rec:
-            return rec["harness"], "working"
+    direct = agent_type(title, cmd)
+    rec = _pane_rec(p, owner, recs)
+    fresh_rec = _is_fresh_rec(rec, now_ms)
+    kind = direct or _pane_kind(p, owner, recs, now_ms)
     if not kind:
         return None, None
+    if not direct and rec is not None and last_agent.cmd(p) not in last_agent.CMDS.get(rec["harness"], ()):
+        return kind, "working"
     needs_tail = kind != "claude" or not ("⠀" <= title[:1] <= "⣿")
     s = state(title, screen(p["handle"]) if needs_tail else None, kind)
     if s == "done" and fresh_rec and rec is not None and last_agent.cmd(p) in last_agent.CMDS.get(rec["harness"], ()):
@@ -316,11 +361,16 @@ def launch(path, agent, prompt):
 
 
 def terminals():
-    trees = sorted(worktrees(), key=lambda w: -len(w["path"]))
-    return [{"handle": p["handle"], "title": p["title"], "lastOutputAt": int(p["at"] or 0) * 1000,
-             "agentIdentity": agent_type(p["title"], p.get("cmd", "")),
-             "worktreeId": next((w["path"] for w in trees if p["cwd"] == w["path"] or p["cwd"].startswith(w["path"] + "/")), None)}
-            for p in panes()]
+    pm = _path_map([w["path"] for w in worktrees()])
+    recs, now_ms = _load_recs(), int(time.time() * 1000)
+    out = []
+    for p in panes():
+        owner = _owner_of(p["cwd"], pm)
+        kind = _pane_kind(p, owner, recs, now_ms)
+        out.append({"handle": p["handle"], "title": p["title"], "lastOutputAt": int(p["at"] or 0) * 1000,
+                    "agentIdentity": kind, "worktreeId": owner, "tabId": "basement",
+                    "leafId": p["handle"], "session": p.get("session")})
+    return out
 
 
 def set_goal(worktree_id, goal):
@@ -352,8 +402,8 @@ def create(repo, name, base=None, comment="", agent=None, prompt=""):
         repo = named[0]
     if not (main := main_checkout(repo)):
         raise RuntimeError(f"not a git checkout: {repo}")
-    remember(main)
     path = worktrunk.create(main, name, base)
+    remember(main)
     if comment:
         ade_common.set_goal(path, comment)
     out: dict = {"worktree": {"id": path, "path": path}}

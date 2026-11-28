@@ -88,6 +88,8 @@ def rows(worktrees, ms, expect, every=False):
 
 def setups():
     """Orca's project setups by repoId: which project each checkout is, so a recreate picks the same repo."""
+    if not ade.is_orca():
+        return {}
     return {x.get("repoId"): x for x in greenlight.project_setups() or []}
 
 

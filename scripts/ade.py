@@ -56,7 +56,7 @@ def canonical(n):
     return n if n in MODULES else None
 
 
-def name():
+def name(migrate=True):
     """The native backend. Older ADE selections are migrated; importers still read those sources."""
     env = os.environ.get("GREENLIGHT_ADE")
     if env:
@@ -65,11 +65,12 @@ def name():
         if n != DEFAULT:
             raise RuntimeError(f"GREENLIGHT_ADE={env!r}: live ADE backends are retired; use greenlight.py import")
         return DEFAULT
-    raw = _config_raw_ade()
-    if canonical(raw if isinstance(raw, str) else None) in LEGACY:
-        _migrate_config()
-    elif raw in (None, ""):
-        settle()
+    if migrate:
+        raw = _config_raw_ade()
+        if canonical(raw if isinstance(raw, str) else None) in LEGACY:
+            _migrate_config()
+        elif raw in (None, ""):
+            settle()
     return DEFAULT
 
 
@@ -177,6 +178,10 @@ def dispatch(b, *args):
 
 def call(*args, n=None):
     """Dispatch live workspace operations only through the native backend."""
-    if n is not None and canonical(n) != DEFAULT:
-        raise RuntimeError(f"{n} is an import source, not a live workspace backend")
+    if n is not None:
+        c = canonical(n)
+        if not c:
+            raise KeyError(f"no ADE backend {n!r}")
+        if c != DEFAULT:
+            raise RuntimeError(f"{n} is an import source, not a live workspace backend")
     return get(n).call(*args)

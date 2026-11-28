@@ -292,6 +292,7 @@ def test_basement_full_lifecycle(tmp_path):
 
         terms = ade_basement.call("terminal", "list")["terminals"]
         assert len(terms) == 2 and terms[0]["worktreeId"] == "/w/feat-1"
+        assert terms[0]["tabId"] == "basement" and terms[0]["leafId"] == "%1" and terms[0]["session"] == "mc-a"
 
         rd = ade_basement.call("terminal", "read", "--terminal", "%1", "--limit", "30")
         assert rd["terminal"]["handle"] == "%1" and rd["terminal"]["draft"] == ""
@@ -536,58 +537,144 @@ def test_basement_worktrees_detects_wrapped_and_fresh_harnesses(gl_home):
     assert by_id["/w/node-cx"]["agents"][0]["agentType"] == "codex" and by_id["/w/node-cx"]["agents"][0]["state"] == "working"
     assert by_id["/w/gem"]["agents"][0]["agentType"] == "gemini" and by_id["/w/gem"]["agents"][0]["state"] == "waiting"
     assert by_id["/w/oc"]["agents"][0]["agentType"] == "opencode" and by_id["/w/pi"]["agents"][0]["agentType"] == "pi"
+    with (
+        mock.patch.object(ade_basement, "panes", return_value=pane_rows),
+        mock.patch.object(ade_basement, "screen", side_effect=lambda h: screens.get(h, [])),
+    ):
+        ps = ade_basement.pane_states()
+    assert ps["mc-fresh"] == {"state": "working", "title": "⌬ zsh"}
+    assert ps["mc-node"] == {"state": "working", "title": "⌬ codex"}
+    assert ps["mc-gem"] == {"state": "waiting", "title": "gemini"}
+
+
+def test_basement_symlinked_cwd_and_failed_create_does_not_mutate_repos(tmp_path, gl_home):
+    import last_agent
+
+    real_root = tmp_path / "real"
+    real_wt = real_root / "feat-1"
+    (real_wt / "sub").mkdir(parents=True)
+    link_root = tmp_path / "link"
+    link_root.symlink_to(real_root)
+    now_ms = int(ade_basement.time.time() * 1000)
+    last_agent.note({str(real_wt): ("codex", "mc-sym", now_ms - 60_000)})
+
+    pane = {"handle": "%4", "session": "mc-sym", "cwd": str(link_root / "feat-1" / "sub"),
+            "title": "codex", "at": "1700001", "cmd": "node"}
+    with (
+        mock.patch.object(ade_basement, "saved", return_value=[str(real_root)]),
+        mock.patch.object(ade_basement, "git", return_value=f"worktree {real_wt}\n"),
+        mock.patch.object(ade_basement, "git_info", side_effect=lambda p: {
+            "repoId": str(real_root), "repo": "widgets", "path": p, "branch": "feat-1", "isMainWorktree": False,
+        }),
+        mock.patch.object(ade_basement, "panes", return_value=[pane]),
+        mock.patch.object(ade_basement, "screen", return_value=["Working (3s · esc to interrupt)"]),
+        mock.patch.object(ade_basement.external, "by_worktree_safe", return_value={}),
+    ):
+        wts = ade_basement.worktrees()
+        terms = ade_basement.terminals()
+    assert wts[0]["agents"][0]["agentType"] == "codex" and wts[0]["agents"][0]["paneKey"] == "basement:%4"
+    assert terms == [{
+        "handle": "%4", "title": "codex", "lastOutputAt": 1700001000,
+        "agentIdentity": "codex", "worktreeId": str(real_wt),
+        "tabId": "basement", "leafId": "%4", "session": "mc-sym",
+    }]
+
+    # Reverse direction: worktree registered via symlink path while pane cwd is realpath
+    assert ade_basement._owner_of(str(real_wt / "sub"), [str(link_root / "feat-1")]) == str(link_root / "feat-1")
+
+    # Failed worktrunk.create must not pollute repos.json
+    repos_file = gl_home / "repos.json"
+    with (
+        mock.patch.object(ade_basement, "REPOS", repos_file),
+        mock.patch.object(ade_basement, "main_checkout", return_value="/r/new-repo"),
+        mock.patch.object(ade_basement.worktrunk, "create", side_effect=RuntimeError("branch exists")),
+        pytest.raises(RuntimeError, match="branch exists"),
+    ):
+        ade_basement.create("/r/new-repo", "feat-dup")
+    assert not repos_file.exists() and ade_basement.saved() == []
 
 
 def test_greenlight_scan_and_orchestrate_recognize_basement_agent(gl_home):
+    import dash
+    import decide
     import greenlight
+    import last_agent
     import orchestrate
     import ws_state
 
-    pane = {"handle": "%7", "session": "mc-login", "cwd": "/w/login-fix", "title": "⌬ codex", "at": "1700001", "cmd": "codex"}
-    wt = {
-        "worktreeId": "/w/login-fix", "id": "/w/login-fix", "repoId": "/w", "displayName": "login-fix",
-        "path": "/w/login-fix", "branch": "login-fix", "comment": "Fix login",
-        "projectId": "github:acme/widgets", "isMainWorktree": False,
-        "agents": [{"state": "working", "agentType": "codex", "updatedAt": 1700001000,
-                    "stateStartedAt": 1700001000, "handle": "%7", "session": "mc-login", "paneKey": "basement:%7"}],
-        "lastOutputAt": 1700001000,
+    now_ms = int(ade_basement.time.time() * 1000)
+    last_agent.note({"/w/login-fix": ("codex", "mc-login", now_ms - 60_000)})
+    ade_basement.ade_common.set_goal("/w/login-fix", "Fix login")
+    ade_basement.ade_common.set_goal("/w/claude-wt", "Fix auth")
+
+    pane_rows = [
+        {"handle": "%7", "session": "mc-login", "cwd": "/w/login-fix", "title": "codex", "at": "1700001", "cmd": "node"},
+        {"handle": "%8", "session": "mc-claude", "cwd": "/w/claude-wt", "title": "✳ Claude", "at": "1700002", "cmd": "claude"},
+    ]
+    screens = {
+        "%7": "Working (4s · esc to interrupt)\n",
+        "%8": "Pick one\n❯ 1. Yes\n  2. No\n",
     }
-    term = {"handle": "%7", "title": "⌬ codex", "lastOutputAt": 1700001000,
-            "agentIdentity": "codex", "worktreeId": "/w/login-fix"}
+
+    def fake_tmux(*args):
+        if args[0] == "capture-pane":
+            handle = args[args.index("-t") + 1]
+            return screens[handle]
+        return ""
+
     calls = []
 
-    def fake_orca(*args, **kw):
+    def real_basement_orca(*args, **kw):
         calls.append(args)
-        if args[:2] in (("worktree", "ps"), ("worktree", "list")):
-            return {"worktrees": [dict(wt)]}
-        if args[:2] == ("terminal", "list"):
-            return {"terminals": [dict(term)]}
-        if args[:2] == ("terminal", "read"):
-            return {"terminal": {"handle": "%7", "tail": ["Working (4s · esc to interrupt)"], "draft": ""}}
         if args[:2] == ("agent", "launch"):
             raise AssertionError("must not dispatch a duplicate agent while Basement agent is running")
-        return {}
+        return ade_basement.call(*args)
+
+    def fake_git_info(path):
+        return {
+            "path": path, "repo": "widgets", "repoId": "/w", "projectId": "github:acme/widgets",
+            "branch": Path(path).name, "isMainWorktree": False,
+        }
 
     with (
-        mock.patch.object(greenlight, "orca", side_effect=fake_orca),
+        mock.patch.object(greenlight, "orca", side_effect=real_basement_orca),
         mock.patch.object(greenlight, "gh_open_prs", return_value=[]),
         mock.patch.object(greenlight, "gh", return_value=[]),
         mock.patch.object(greenlight, "upstream_gone", return_value=False),
-        mock.patch.object(ade_basement, "panes", return_value=[pane]),
+        mock.patch.object(ade_basement, "saved", return_value=["/w"]),
+        mock.patch.object(ade_basement, "git", return_value="worktree /w/login-fix\nworktree /w/claude-wt\n"),
+        mock.patch.object(ade_basement, "git_info", side_effect=fake_git_info),
+        mock.patch.object(ade_basement, "panes", return_value=pane_rows),
+        mock.patch.object(ade_basement, "tmux", side_effect=fake_tmux),
+        mock.patch.object(ade_basement.external, "by_worktree_safe", return_value={}),
     ):
         res = greenlight.scan(save=False)
-        assert len(res["rows"]) == 1
-        row = res["rows"][0]
+        rows_by_name = {r["name"]: r for r in res["rows"]}
+        row = rows_by_name["login-fix"]
         assert row["agent"]["state"] == "working" and row["agent"]["type"] == "codex"
         assert row["agent"]["pane_key"] == "basement:%7"
         assert row["next"]["owner"] == "working"
 
-        # orchestrate.plan does not schedule a dispatch for a working Basement agent
+        # Positive screen-reading path: greenlight.screen matches paneKey via real ade_basement.terminals() and reads terminal
+        calls.clear()
+        terms = ade_basement.terminals()
+        seen = greenlight.screen(row, {row["id"]: terms})
+        assert seen is not None and seen["state"] == "working"
+        assert any(c[:2] == ("terminal", "read") and "%7" in c for c in calls)
+
+        # dash.waiting_term finds the terminal for both Claude and node-wrapped Codex waiting panes
+        wt_claude = dash.waiting_term("claude-wt")
+        assert not isinstance(wt_claude, str) and wt_claude[2] == "%8"
+        screens["%7"] = "Pick one\n▸ 1. Apply\n  2. Skip\n"
+        wt_codex = dash.waiting_term("login-fix")
+        assert not isinstance(wt_codex, str) and wt_codex[2] == "%7"
+
+        # Restore working screen for blocking checks
+        screens["%7"] = "Working (4s · esc to interrupt)\n"
         card = ws_state.load(row["card"])
         assert orchestrate.plan([row], {row["card"]: card}, judge=False) == []
 
-        # TOCTOU race: even if an older scan row thought owner == "agent" and agent was none or done,
-        # orchestrate.act_one re-reads live_worktree and blocks dispatch.
+        # TOCTOU race: stale scan rows still block dispatch via live_worktree
         stale_none = {**row, "next": {"step": "freeform", "owner": "agent", "action": "work toward goal: Fix login"},
                       "agent": {"state": "none", "type": None, "pane_key": None, "last": ""}}
         out = orchestrate.act_one(stale_none, stale_none["name"], {"do": "dispatch", "sig": orchestrate.sig(stale_none)}, {row["card"]: card})
@@ -598,6 +685,13 @@ def test_greenlight_scan_and_orchestrate_recognize_basement_agent(gl_home):
         assert any("agent started or is waiting" in line for line in out2), out2
         assert not any(c[:2] == ("agent", "launch") for c in calls)
 
-        # merge_agent_blocks also respects the active Basement agent
+        # merge_agent_blocks: blocks when working, unblocks when screen shows idle finished prompt
         live = orchestrate.live_worktree(row)
         assert orchestrate.merge_agent_blocks(live, row) is True
+        screens["%7"] = "Done.\n› \n"
+        with mock.patch.object(decide, "choice", return_value={"choice": "finished", "confidence": 0.92, "probs": {"finished": 0.92}, "provider": "test"}):
+            assert orchestrate.merge_agent_blocks(live, row) is False
+
+        # active_agent_blocks(rate_limit_handoff=True): unblocks when screen shows rate limit
+        screens["%7"] = "You've hit your usage limit. Try again later.\n"
+        assert orchestrate.active_agent_blocks(live, row, rate_limit_handoff=True) is False

@@ -154,6 +154,9 @@ def test_setups_by_repo(monkeypatch):
     assert placement.setups() == {"r1": {"repoId": "r1", "projectId": "p1"}}
     monkeypatch.setattr(greenlight, "orca_cli", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("old orca")))
     assert placement.setups() == {}
+    monkeypatch.setenv("GREENLIGHT_ADE", "native")
+    monkeypatch.setattr(greenlight, "orca_cli", lambda *a, **k: pytest.fail("orca_cli called under native"))
+    assert placement.setups() == {}
 
 
 def test_on_origin_wants_the_exact_branch(monkeypatch):

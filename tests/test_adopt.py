@@ -301,7 +301,10 @@ def test_create_args_and_git_fetch_calls(gl_home):
         "worktree", "create", "--name", "mr-6", "--repo", "r-tn", "--base-branch", "mr-6",
         "--comment", "Review !6: Add y", "--setup", "skip",
     ]
-    assert adopt.create_args(theirs, "abc")[-4:] == ["--comment", "Review !6: Add y", "--setup", "skip"]
+    assert adopt.create_args(theirs, "abc") == [
+        "worktree", "create", "--name", "mr-6", "--repo", "r-tn", "--base-branch", "abc",
+        "--comment", "Review !6: Add y", "--setup", "skip",
+    ]
 
     def calls(c):
         with mock.patch.object(adopt, "git") as g, mock.patch.object(greenlight, "orca", return_value={"worktree": {}}) as o:
@@ -338,6 +341,58 @@ def test_ensure_branch_on_real_git_repo(gl_home, tmp_path):
     sh("git", "worktree", "add", "-q", "-b", "mr-6-2", str(g / "wt6"), "mr-6", cwd=g / "main")
     assert adopt.ensure_branch(str(g / "wt6"), "mr-6") == "mr-6"
     assert sh("git", "branch", "--show-current", cwd=g / "wt6") == "mr-6"
+
+
+def test_readopt_with_preserved_local_branch(gl_home, tmp_path):
+    """Re-adopting an MR whose local branch was kept by `--no-delete-branch` succeeds without losing commits."""
+    def sh(*a, cwd=None):
+        return subprocess.run(a, cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+    g = tmp_path / "git"
+    sh("git", "init", "-q", "--bare", str(g / "origin.git"))
+    sh("git", "clone", "-q", str(g / "origin.git"), str(g / "main"))
+    sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "c1", cwd=g / "main")
+    c1 = sh("git", "rev-parse", "HEAD", cwd=g / "main")
+    sh("git", "branch", "mr-6", c1, cwd=g / "main")  # preserved stale branch (no worktree)
+    sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "c2", cwd=g / "main")
+    c2 = sh("git", "rev-parse", "HEAD", cwd=g / "main")
+    sh("git", "push", "-q", "origin", "HEAD:refs/merge-requests/6/head", cwd=g / "main")
+    sh("git", "reset", "-q", "--hard", c1, cwd=g / "main")
+
+    # Simulate native/Worktrunk create: fails if the target branch name already exists locally.
+    def fake_orca(*args):
+        name = args[args.index("--name") + 1]
+        base = args[args.index("--base-branch") + 1]
+        dest = g / f"wt-{name}"
+        sh("git", "worktree", "add", "-q", "-b", name, str(dest), base, cwd=g / "main")
+        return {"worktree": {"path": str(dest)}}
+
+    cand6 = {"role": "review", "iid": 6, "title": "Add y", "source_branch": "al/y",
+             "repo": {"id": str(g / "main"), "path": str(g / "main")}, "sha": c2, "forge": "gitlab"}
+
+    # Rollback guard: if creation fails after clearing the stale ancestor ref, the ref is restored.
+    with mock.patch.object(greenlight, "orca", side_effect=RuntimeError("boom")), pytest.raises(RuntimeError, match="boom"):
+        adopt.create(cand6)
+    assert sh("git", "rev-parse", "refs/heads/mr-6", cwd=g / "main") == c1
+
+    # Ancestor preserved branch: cleanly replaced on `mr-6` at the updated MR head `c2`.
+    with mock.patch.object(greenlight, "orca", side_effect=fake_orca):
+        out = adopt.create(cand6)
+    assert out["branch"] == "mr-6"
+    assert sh("git", "rev-parse", "HEAD", cwd=out["path"]) == c2
+
+    # Diverged preserved branch: local commits are never lost; adopt uses a free suffixed name (`mr-7-2`).
+    sh("git", "checkout", "-q", "-b", "mr-7", c1, cwd=g / "main")
+    sh("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "local-wip", cwd=g / "main")
+    local_wip = sh("git", "rev-parse", "HEAD", cwd=g / "main")
+    sh("git", "checkout", "-q", "--detach", c1, cwd=g / "main")  # un-check-out mr-7 (preserved without worktree)
+    sh("git", "push", "-q", "origin", f"{c2}:refs/merge-requests/7/head", cwd=g / "main")
+    cand7 = cand6 | {"iid": 7}
+    with mock.patch.object(greenlight, "orca", side_effect=fake_orca):
+        out7 = adopt.create(cand7)
+    assert out7["branch"] == "mr-7-2"
+    assert sh("git", "rev-parse", "HEAD", cwd=out7["path"]) == c2
+    assert sh("git", "rev-parse", "refs/heads/mr-7", cwd=g / "main") == local_wip
 
 
 def test_apply_saves_state_dedupes_pings_and_records_history(gl_home):

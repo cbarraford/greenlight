@@ -245,6 +245,8 @@ def test_default_fixture_survives_native_rescan_with_visible_pucks(tmp_path):
 
 def test_adversarial_fixture_seeds_waiting_agent_and_keeps_xss_name_across_rescan(tmp_path):
     """Adversarial fixture must keep its XSS workspace name and waiting agent state after native rescan."""
+    if not uitest.shutil.which("tmux"):
+        pytest.skip("tmux not installed")
     sess = uitest.UITestSession(fixture="adversarial", binary=tmp_path / "fake")
     try:
         sess.home, bindir, _ = uitest._make_fixture(sess.root, "adversarial")
@@ -268,8 +270,7 @@ def test_adversarial_fixture_seeds_waiting_agent_and_keeps_xss_name_across_resca
         assert len(pucks) == 1, pucks
         assert 'onerror="window.__pwned=1"' in pucks[0]["name"], pucks[0]
         assert pucks[0]["state"] not in ("quiet", "done"), pucks[0]
-        if uitest.shutil.which("tmux"):
-            assert pucks[0]["agent"]["state"] == "waiting", pucks[0]
+        assert pucks[0]["agent"]["state"] == "waiting", pucks[0]
     finally:
         sess.stop()
 
@@ -285,3 +286,93 @@ def test_seed_fixture_agents_handles_missing_rows(tmp_path):
         m_run.assert_not_called()
     finally:
         sess.stop()
+
+
+def test_seed_fixture_agents_mocked_adversarial_scale_and_start_cleanup(tmp_path):
+    """Deterministic unit test: -f /dev/null passed to tmux, adversarial & scale seeded, and start() cleans up on failure."""
+    for fx, expected_sessions in (("adversarial", ["uitest-wait"]), ("scale", ["uitest-wait", "uitest-work"])):
+        sess = uitest.UITestSession(fixture=fx, binary=tmp_path / "fake")
+        try:
+            sess.home = sess.root / "home"
+            sess.home.mkdir(parents=True, exist_ok=True)
+            ws0, ws1 = sess.root / "ws0", sess.root / "ws1"
+            ws0.mkdir()
+            ws1.mkdir()
+            rows = [{"path": str(ws0)}, {"path": str(ws1)}] if fx == "scale" else [{"path": str(ws0)}]
+            (sess.home / "last.json").write_text(json.dumps({"rows": rows}))
+            calls: list[list[str]] = []
+
+            def fake_run(cmd, **_kw):
+                calls.append(list(cmd))
+                out = "  ❯ 1. Proceed\n" if "capture-pane" in cmd else ""
+                return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+            with (
+                mock.patch.object(uitest.shutil, "which", return_value="/usr/bin/tmux"),
+                mock.patch.object(uitest.subprocess, "run", side_effect=fake_run),
+            ):
+                sess._seed_fixture_agents()
+
+            new_sessions = [c for c in calls if "new-session" in c]
+            assert len(new_sessions) == len(expected_sessions), (fx, new_sessions)
+            for cmd, sname in zip(new_sessions, expected_sessions):
+                assert cmd[:5] == ["tmux", "-f", "/dev/null", "-L", sess.tmux_socket], cmd
+                assert "-s" in cmd and cmd[cmd.index("-s") + 1] == sname, cmd
+            select_panes = [c for c in calls if "select-pane" in c]
+            assert [c[c.index("-T") + 1] for c in select_panes] == (
+                ["✳ Claude"] if fx == "adversarial" else ["✳ Claude", "⠋ Claude"]
+            )
+        finally:
+            with mock.patch.object(uitest.subprocess, "run", return_value=subprocess.CompletedProcess(["tmux"], 0, "", "")):
+                sess.stop()
+
+    # UITestSession.start() must invoke stop() if _launch raises so seeded tmux / tempdirs never leak
+    sess = uitest.UITestSession(fixture="scale", binary=tmp_path / "fake")
+    with (
+        mock.patch.object(uitest, "_make_fixture", return_value=(sess.root / "home", sess.root / "bin", sess.root / "web")),
+        mock.patch.object(sess, "_seed_fixture_agents") as m_seed,
+        mock.patch.object(sess, "_launch", side_effect=RuntimeError("launch boom")),
+        mock.patch.object(sess, "stop") as m_stop,
+        pytest.raises(RuntimeError, match="launch boom"),
+    ):
+        sess.start()
+    m_seed.assert_called_once()
+    m_stop.assert_called_once()
+    uitest.shutil.rmtree(sess.root, ignore_errors=True)
+
+
+def test_chaos_forge_stubs_self_increment_and_rate_limit(tmp_path):
+    """Under native mode (without bin/orca), chaos glab/gh stubs self-increment chaos-counter and emit 429 failures."""
+    _, bindir, _ = uitest._make_fixture(tmp_path, "chaos")
+    glab, gh = str(bindir / "glab"), str(bindir / "gh")
+    counter = tmp_path / "chaos-counter"
+    r1 = subprocess.run([glab, "mr", "list"], capture_output=True, text=True)
+    r2 = subprocess.run([gh, "pr", "list"], capture_output=True, text=True)
+    r3 = subprocess.run([glab, "mr", "list"], capture_output=True, text=True)
+    r4 = subprocess.run([gh, "pr", "list"], capture_output=True, text=True)
+    assert counter.read_text().strip() == "4"
+    assert r1.returncode == 0 and r1.stdout.strip() == "[]"
+    assert r2.returncode == 0 and r2.stdout.strip() == "[]"
+    assert r3.returncode == 1 and "429" in r3.stderr
+    assert r4.returncode == 0 and r4.stdout.strip() == "[]"
+
+
+def test_native_worktrees_hardening_and_corrupt_rtl_name(tmp_path):
+    """_native_worktrees rejects '@' branch and repo traversal; corrupt fixture keeps RTL dir name."""
+    ws = tmp_path / "worktrees" / "at-ws"
+    ws.mkdir(parents=True)
+    home = tmp_path / "home"
+    home.mkdir()
+    wts = [{"worktreeId": "w1", "path": str(ws), "repo": "widgets", "branch": "@", "comment": ""}]
+    uitest._native_worktrees(tmp_path, home, wts, [])
+    assert wts[0]["branch"] == "fixture-0"
+
+    bad_ws = tmp_path / "worktrees" / "esc-ws"
+    bad_ws.mkdir(parents=True)
+    with pytest.raises(ValueError, match="escapes repos dir"):
+        uitest._native_worktrees(tmp_path, home, [{"worktreeId": "w2", "path": str(bad_ws), "repo": "../escape", "branch": "ok"}], [])
+
+    corrupt_root = tmp_path / "corrupt-root"
+    c_home, _, _ = uitest._make_fixture(corrupt_root, "corrupt")
+    rows = json.loads((c_home / "last.json").read_text())["rows"]
+    assert Path(rows[0]["path"]).name == rows[0]["name"] and "\u202e" in rows[0]["name"]

@@ -109,6 +109,8 @@ def _prepare_cov_env(cov_dir: Path) -> dict[str, str]:
     )
     cfg = ROOT / "pyproject.toml"
     env = dict(os.environ)
+    env.pop("GREENLIGHT_ADE", None)
+    env.pop("GREENLIGHT_TMUX_SOCKET", None)
     env["COVERAGE_FILE"] = str(cov_dir / ".coverage")
     if cfg.is_file():
         env["COVERAGE_PROCESS_START"] = str(cfg)
@@ -125,8 +127,14 @@ def _run_grouped(label, cmd, gh, env=None):
     if gh:
         print(f"::group::{label}", flush=True)
     # as conftest.py does for pytest: without a username, `import greenlight` asks the host's glab/gh (network, 20 s each);
-    # and every test uses the native backend unless it explicitly sets another environment.
-    p = subprocess.run(cmd, cwd=ROOT, env={"GREENLIGHT_ME": "octo", "GREENLIGHT_ADE": "native", **(env or os.environ)})
+    # and every test uses the native backend and an isolated tmux socket unless explicitly overridden via `env`.
+    child_env = dict(os.environ) if env is None else dict(env)
+    child_env.setdefault("GREENLIGHT_ME", "octo")
+    if env is None or "GREENLIGHT_ADE" not in env:
+        child_env["GREENLIGHT_ADE"] = "native"
+    if env is None or "GREENLIGHT_TMUX_SOCKET" not in env:
+        child_env["GREENLIGHT_TMUX_SOCKET"] = f"gl-pytests-{os.getpid()}"
+    p = subprocess.run(cmd, cwd=ROOT, env=child_env)
     if p.returncode != 0:
         if gh:
             print(f"::error::{label} failed", flush=True)

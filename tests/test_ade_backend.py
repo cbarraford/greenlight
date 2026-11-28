@@ -136,6 +136,25 @@ def test_greenlight_orca_routes_through_the_backend(home, monkeypatch):
     for source in ade.LEGACY:
         with pytest.raises(RuntimeError, match="import source"):
             ade.call("worktree", "create", n=source)
+    with pytest.raises(KeyError, match="no ADE backend"):
+        ade.call("worktree", "ps", n="bogus")
+
+
+def test_name_no_migrate_and_stale_env_tolerance(home, monkeypatch):
+    import dash
+    import importers
+
+    # migrate=False never creates or rewrites config.json
+    assert ade.name(migrate=False) == "native"
+    assert not (home / "config.json").exists()
+    (home / "config.json").write_text(json.dumps({"ade": "orca"}))
+    assert ade.name(migrate=False) == "native"
+    assert json.loads((home / "config.json").read_text())["ade"] == "orca"
+
+    # Stale GREENLIGHT_ADE=orca is tolerated cleanly by importers.first_run() and dash.outside_agent()
+    monkeypatch.setenv("GREENLIGHT_ADE", "orca")
+    assert importers.first_run() is None
+    assert dash.outside_agent(str(home)) is None
 
 
 def test_orca_adapter_is_import_only(home):
@@ -324,6 +343,8 @@ def test_dash_backend_order(home, monkeypatch):
     assert dash.ades() == ("orca",)
     assert dash.ade_call("orca") is greenlight.orca_cli  # tree_new knows an Orca create by it (placement as the user's pick)
     assert dash.ade_call("native") == ade_basement.call
+    with pytest.raises(RuntimeError, match="import source"):
+        dash.ade_call("cmux")
 
 
 def test_native_without_tmux(home, monkeypatch):

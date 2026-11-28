@@ -75,6 +75,8 @@ def _setup_stub_home(base: Path) -> dict[str, str]:
         "GREENLIGHT_HOST": "local",
         "GREENLIGHT_CODE": str(ROOT),
         "GREENLIGHT_HOME": str(home),
+        "GREENLIGHT_ADE": "native",
+        "GREENLIGHT_TMUX_SOCKET": f"gl-swiftcov-{os.getpid()}",
     }
 
 

@@ -613,11 +613,13 @@ _SPINNER_STUCK_JS = """(() => {
 
 
 def _is_expected_chaos_orca_error(ev: dict[str, Any], fixture: str) -> bool:
-    """Under the chaos fixture, stub orca intentionally returns malformed JSON / exits 1."""
+    """Under the chaos fixture, stub orca/forge CLIs intentionally return malformed JSON / rate-limit 429 / exit 1."""
     if fixture != "chaos" or ev.get("comp") not in ("dash", "greenlight"):
         return False
     if ev.get("err") not in ("JSONDecodeError", "RuntimeError"):
         return False
+    if ev.get("msg_class") == "rate_limit":
+        return True
     where = ev.get("where")
     frames = where if isinstance(where, list) else ([str(where)] if where else [])
     return any("greenlight.py:" in str(fr) and ("orca_cli" in str(fr) or ":_run" in str(fr)) for fr in frames)
