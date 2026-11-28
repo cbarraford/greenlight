@@ -262,7 +262,7 @@ def evaluate(wt, repo, busy):
         return "skip", f"{reason}, but its agent is stopped on a prompt waiting for you"  # quiet, so the busy check misses it
     if any(i in busy for i in wt.get("ids") or [wt["id"]]):
         return "skip", f"{reason}, but a terminal was active in the last {ACTIVE_MINUTES}m"
-    if (ext := outside_agent(path)):
+    if (ext := outside_agent(path, quiet=ACTIVE_MINUTES * 60)):
         return "skip", f"{reason}, but {ext} runs in it outside Greenlight"
     return "candidate", reason
 
@@ -270,16 +270,19 @@ def evaluate(wt, repo, busy):
 ALL_PATHS: list = []  # every worktree this run listed (scan() fills it)
 
 
-def outside_agent(path, fresh=False, paths=None):
+def outside_agent(path, fresh=False, paths=None, quiet=None):
     """The agent another ADE or a plain terminal runs in path, under the native engine (#195 passive coexistence),
-    else None. Orca's own agents are in its terminal list (the busy check)."""
+    else None. Orca's own agents are in its terminal list (the busy check). quiet (seconds; a removal passes
+    ACTIVE_MINUTES, as for our own terminals): one whose terminal printed nothing for that long sits idle at its
+    prompt and doesn't count, or a finished workspace would stay for as long as its session is left open."""
     if not ade.is_native():
         return None
     try:  # against every worktree: whether one of our agents is in its own pane's worktree depends on the nested ones
         every, p = [*(ALL_PATHS if paths is None else paths), path], external.real(path).rstrip("/")
         owned = external.by_worktree(every, external.agents(fresh=fresh, strict=True))
         # at or under it (resolved: one may be listed through a symlink): removing it removes those nested inside it too
-        found = [a for w, v in owned.items() if (r := external.real(w).rstrip("/")) == p or r.startswith(p + "/") for a in v]
+        found = [a for w, v in owned.items() if (r := external.real(w).rstrip("/")) == p or r.startswith(p + "/") for a in v
+                 if not (quiet and external.quiet(a, quiet))]
     except external.Unknown:
         return "an agent (the process check failed, so it can't be ruled out)"
     return found[0]["agent"] if found else None
@@ -377,7 +380,7 @@ def main():
                                  if (t.get("lastOutputAt") or 0) > cutoff}
                     if any(i in live_busy for i in r.get("ids") or [r["id"]]):
                         raise RuntimeError("terminal became active since scan")
-                    if outside_agent(r["path"], fresh=True):
+                    if outside_agent(r["path"], fresh=True, quiet=ACTIVE_MINUTES * 60):
                         raise RuntimeError("an agent outside Greenlight started in it since scan")
                 orca("worktree", "rm", "--worktree", f"id:{r['id']}")
                 r["removed"] = True
