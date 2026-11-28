@@ -565,8 +565,9 @@ const sid = () => "mc-" + Date.now().toString(36) + Math.random().toString(36).s
 const store = (k, v) => { try { return v === undefined ? localStorage.getItem(k) : localStorage.setItem(k, v) } catch { } };
 let px = +(store("termSize") || size || 15);
 function zoom(n){
-  px = Math.max(8, Math.min(32, n)); store("termSize", px);
+  px = Math.max(8, Math.min(32, n)); store("termSize", px); dropWarm();
   panes.forEach(p => { p.t.options.fontSize = px; p.fit.fit() });
+  scheduleWarm();
 }
 
 // Block elements (U+2580–259F: █ ▌ ▄ ░▒▓ …) are drawn here, as Orca and Ghostty draw them: ghostty-web leaves them to the font,
@@ -607,19 +608,35 @@ function ownBlocks(t){
   };
 }
 
-// a pane: one terminal on one pty, with a header that shows once its tab is split
-function newPane(tab, cmd, session = sid()){
-  const id = ++seq, box = el("div", "pane"), head = el("div", "ph"), host = el("div", "t");
+// pre-constructed GhosttyWeb.Terminal + FitAddon pool: avoids synchronous WASM terminal init when opening a new tab
+let warmPool = null, warmT = 0;
+function dropWarm(){ clearTimeout(warmT); warmT = 0; if (warmPool) { warmPool.t.dispose?.(); warmPool = null } }
+function mkTerm(){
+  const box = el("div", "pane"), head = el("div", "ph"), host = el("div", "t");
   box.append(head, host);
   const t = new GhosttyWeb.Terminal({fontSize: px,
     // non-Mono Nerd Fonts: their icons are full-size like Orca's; the Mono variants squeeze each icon into one cell
     fontFamily: `"${font || "SF Mono"}", "Symbols Nerd Font", "Hack Nerd Font", "MesloLGS Nerd Font", "MesloLGS NF", Menlo, monospace`,
     cursorBlink: true, scrollback: 10000, theme: {cursor: fg, ...colors, background: bg, foreground: fg}});
-  const fit = new GhosttyWeb.FitAddon(), p = {id, session, t, fit, box, head, tab, title: "", bell: false, dec: new TextDecoder()};
+  const fit = new GhosttyWeb.FitAddon();
+  t.loadAddon(fit);
+  return {box, head, host, t, fit, px, bg, fg};
+}
+function scheduleWarm(){
+  if (!ready || warmPool || warmT) return;
+  warmT = setTimeout(() => { warmT = 0; if (ready && !warmPool) warmPool = mkTerm() }, 50);
+}
+// a pane: one terminal on one pty, with a header that shows once its tab is split
+function newPane(tab, cmd, session = sid()){
+  let slot = warmPool;
+  if (slot && slot.px === px && slot.bg === bg && slot.fg === fg) warmPool = null;
+  else { dropWarm(); slot = mkTerm() }
+  const id = ++seq, {box, head, host, t, fit} = slot;
+  const p = {id, session, t, fit, box, head, tab, title: "", bell: false, dec: new TextDecoder()};
   panes.set(id, p); box._p = p;
   box.addEventListener("mousedown", () => { if (p.tab.focus !== p) focusPane(p) });
   return {p, mount(){
-    t.loadAddon(fit); t.open(host); ownBlocks(t); fit.fit(); fit.observeResize();
+    t.open(host); ownBlocks(t); fit.fit(); fit.observeResize();
     t.attachCustomKeyEventHandler(e => { const s = e.metaKey || e.isComposing ? null : ghostKey(t, e); if (s) t.input(s, true); return typeof s === "string" });
     t.attachCustomWheelEventHandler(e => wheel(p, e, host));
     host.addEventListener("mousemove", e => { clearTimeout(p.lnkT); p.lnkT = setTimeout(() => linkHover(p, e), 40) });  // after ghostty-web's own 16ms-throttled hover
@@ -634,6 +651,7 @@ function newPane(tab, cmd, session = sid()){
     if (cmd && new TextEncoder().encode(cmd).length > 1000) p.run = cmd;
     post(openMsg(p));
     if (cmd && !p.run) post({cmd: "in", id, d: cmd + "\r"});
+    scheduleWarm();
   }};
 }
 // The wheel: ghostty-web only ever scrolls its own scrollback (arrow keys on the alternate screen) and never reports the
@@ -726,7 +744,9 @@ function newTab(ws = curWs || acct()?.dir || "", cmd, fresh, session){  // sessi
   if (HOMES.includes(ws)) uses[ws] = (uses[ws] || 0) + 1;
   const tab = mkTab(ws, {set: fresh ? undefined : cur?.ws === ws ? cur.set : wsTabs(ws).sort((a, b) => b.used - a.used)[0]?.set});
   const {p, mount} = newPane(tab, cmd, session);
-  tab.r.append(p.box); tab.focus = p; mount(); show(tab);
+  tab.r.append(p.box); tab.focus = p;
+  tabs.forEach(x => x.r.hidden = x !== tab);  // lay out at final geometry before mount() so fit() runs once
+  mount(); show(tab, true);
 }
 function mkTab(ws, o = {}){
   const r = el("div", "root"), tab = {key: ++tabSeq, r, ws, set: o.set ?? ++setSeq, focus: null, name: o.name || "", manual: !!o.manual, sig: o.sig || "", naming: false, used: 0, auto: o.auto, job: o.job};
@@ -779,12 +799,14 @@ function focusPane(p){
   if (p.tab !== cur) return show(p.tab);
   render(); p.t.focus();
 }
-function show(tab){
+let lastFocusWs = null;
+function show(tab, fitted = false){
   if (tab !== cur) $("find").hidden = true;
   cur = tab; curWs = tab.ws; tab.used = Date.now();
   tabs.forEach(x => x.r.hidden = x !== tab);
-  paneOf(tab).forEach(p => { p.bell = false; p.fit.fit() });
-  render(); tab.focus.t.focus();
+  paneOf(tab).forEach(p => { p.bell = false; if (!fitted) p.fit.fit() });
+  render({foot: false}); tab.focus.t.focus();
+  if (restored && curWs !== lastFocusWs) { lastFocusWs = curWs; post({cmd: "focusWs", ws: curWs}) }
 }
 
 // names: one you typed (or AI picked) wins; else the focused pane's terminal title. Claude Code titles its terminal "✳ name" (a spinner while busy); tmux marks codex "⌬ " and agy "◈ ".
@@ -1026,21 +1048,28 @@ function buildTab(x, i, prev){
   } else if (!showBell && b._tail.title !== `Close ${name}`) b._tail.title = `Close ${name}`;
   return b;
 }
-function render(){
+function render(opts = {}){
   if (editing && document.activeElement?.matches("#tabs input, #tree input")) return;  // a refresh mid-rename would wipe what you typed; the commit renders
-  panes.forEach(p => {
+  const curPanes = cur ? paneOf(cur) : [];
+  if (cur) cur.r.classList.toggle("multi", curPanes.length > 1);
+  curPanes.forEach(p => {
     p.box.classList.toggle("on", p === p.tab.focus);
-    const hSig = `${agentOf(p)}|${shown(paneTitle(p))}|${p.bell ? 1 : 0}`;
-    if (p._headSig === hSig) return;
-    p._headSig = hSig;
-    p.head.replaceChildren();
-    p.head.insertAdjacentHTML("beforeend", paneIcon(p, 12));
-    const pn = el("span", "pn"); pn.textContent = shown(paneTitle(p)); p.head.append(pn);
-    if (p.bell) p.head.insertAdjacentHTML("beforeend", I.bell(12));
-    p.head.append(iconBtn("ib", I.splitR(16), "Split right  ⌘D", () => split(p, false), "Split right"), iconBtn("ib", I.splitD(16), "Split down  ⌘⇧D", () => split(p, true), "Split down"), iconBtn("ib", I.x(16), "Close pane", () => closePane(p)));
+    if (curPanes.length > 1) {
+      const hSig = `${agentOf(p)}|${shown(paneTitle(p))}|${p.bell ? 1 : 0}`;
+      if (p._headSig === hSig) return;
+      p._headSig = hSig;
+      p.head.replaceChildren();
+      p.head.insertAdjacentHTML("beforeend", paneIcon(p, 12));
+      const pn = el("span", "pn"); pn.textContent = shown(paneTitle(p)); p.head.append(pn);
+      if (p.bell) p.head.insertAdjacentHTML("beforeend", I.bell(12));
+      p.head.append(iconBtn("ib", I.splitR(16), "Split right  ⌘D", () => split(p, false), "Split right"), iconBtn("ib", I.splitD(16), "Split down  ⌘⇧D", () => split(p, true), "Split down"), iconBtn("ib", I.x(16), "Close pane", () => closePane(p)));
+    }
   });
   tabs.forEach(x => x.r.classList.toggle("multi", paneOf(x).length > 1));
-  renderSide(); foot(); save(); badgeSync();
+  const sideOpen = !document.body.classList.contains("noside");
+  if (sideOpen && opts.side !== false) renderSide();
+  if (sideOpen && opts.foot !== false) foot();
+  save(); badgeSync();
   const bar = $("tabs"), prevTabs = new Map();
   for (const c of bar.children) if (c.dataset?.k) prevTabs.set(c.dataset.k, c);
   const addBtn = $("newtab") || Object.assign(iconBtn("", I.plus(16), "New tab  ⌘T", () => newTab(), "New tab"), {id: "newtab"});
@@ -2639,7 +2668,7 @@ window.term = {
   projects: o => { projects = Array.isArray(o) ? o.filter(p => p && typeof p.id === "string" && p.id && Array.isArray(p.repos) && Array.isArray(p.dirs)) : [];
     merge(); setTitle(); render(); if (!$("pal").hidden) palRender() },
   // the window is closing for good: every pane's tmux session, for the app to end; nothing is saved after
-  closeAll: () => { restored = false; clearTimeout(saveT); const out = [...panes.values()].map(p => ({session: p.session, ws: p.tab.ws}));
+  closeAll: () => { restored = false; clearTimeout(saveT); dropWarm(); const out = [...panes.values()].map(p => ({session: p.session, ws: p.tab.ws}));
     panes.forEach(p => { clearTimeout(p.scanT); clearTimeout(p.endT); clearTimeout(p.askT); clearTimeout(p.lnkT); p.t.dispose?.() }); panes.clear(); pinged.clear(); lastPanes = null;
     tabs.forEach(t => { clearTimeout(t.quiet); clearTimeout(t.retry); t.r.remove() }); tabs.length = 0; cur = null; lastScrollTab = lastScrollWs = null; return out },
   workspaces: o => { basementFoot(o?.usage); trees = o?.trees || []; if (Array.isArray(o?.agents) && o.agents[0]) defAgent = normAgent(o.agents[0]); treesIn = true; refreshing(false);
@@ -2685,5 +2714,5 @@ function autoRun(){
   }
 }
 // ready → the app answers with term.restore(saved layout or null)
-addEventListener("DOMContentLoaded", async () => { await GhosttyWeb.init(); ready = true; post({cmd: "ready"}) });  // ghostty-web.js is deferred: it runs just before this
+addEventListener("DOMContentLoaded", async () => { await GhosttyWeb.init(); ready = true; scheduleWarm(); post({cmd: "ready"}) });  // ghostty-web.js is deferred: it runs just before this
 </script></body></html>

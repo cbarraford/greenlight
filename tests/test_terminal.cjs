@@ -1701,6 +1701,43 @@ test("term.ws with sessionId opens in the workspace and types the session connec
   } finally { await prePage.close() }
 });
 
+test("newTab fits the pane once at its final geometry before posting open", async page => {
+  const res = await page.evaluate(() => {
+    const orig = GhosttyWeb.FitAddon.prototype.fit;
+    let fits = 0;
+    GhosttyWeb.FitAddon.prototype.fit = function(...a){ fits++; return orig.apply(this, a) };
+    try {
+      const before = window.__posts.filter(m => m.cmd === "open").length;
+      newTab("/w/fix-login");
+      const open = window.__posts.filter(m => m.cmd === "open").slice(before);
+      return {fits, open, activeHidden: cur.r.hidden, othersHidden: tabs.filter(t => t !== cur).every(t => t.r.hidden)};
+    } finally { GhosttyWeb.FitAddon.prototype.fit = orig }
+  });
+  assert.equal(res.fits, 1, "mount fits once without a redundant second fit in show()");
+  assert.equal(res.open.length, 1);
+  assert.ok(res.open[0].cols > 20 && res.open[0].rows > 5, "fitted at real viewport dimensions");
+  assert.equal(res.activeHidden, false);
+  assert.equal(res.othersHidden, true);
+});
+
+test("warm GhosttyWeb pool is pre-built, claimed by newTab, replenished, and show() reports focusWs", async page => {
+  await page.waitForTimeout(80);
+  const hadWarm = await page.evaluate(() => !!warmPool);
+  assert.equal(hadWarm, true, "a warm GhosttyWeb terminal is pre-built during idle time");
+  const res = await page.evaluate(() => {
+    const expectedT = warmPool.t;
+    newTab("/w/sidebar");
+    const claimed = cur.focus.t === expectedT;
+    const focusMsgs = window.__posts.filter(m => m.cmd === "focusWs");
+    return {claimed, poolCleared: warmPool === null, lastFocusWs: focusMsgs.pop()?.ws};
+  });
+  assert.equal(res.claimed, true, "newTab reuses the pre-constructed warm GhosttyWeb terminal");
+  assert.equal(res.poolCleared, true);
+  assert.equal(res.lastFocusWs, "/w/sidebar", "show() hints active workspace for standby shell pre-warming");
+  await page.waitForTimeout(80);
+  assert.equal(await page.evaluate(() => !!warmPool), true, "pool replenishes after claim");
+});
+
 (async () => {
   const browser = await launchBrowser();
   let failed = 0;

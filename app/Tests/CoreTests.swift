@@ -1613,5 +1613,64 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
               heldQueue && watchBlocked && ignoredPlain && deniedPersisted && approvedVoice
               && harnessExpired && blockedNonClaude && replacedExpired && ttlNotPending && ttlExpired && watchUnblocked)
     }
+
+    // 14. Fast terminal tab launch: direct Pty exec, SshMux socket/args, and paneLaunch (no outer login shells)
+    do {
+        let env = Pty.ptyEnv()
+        check("pty: ptyEnv sets terminal defaults and standard PATH dirs without duplicates",
+              env["TERM"] == "xterm-256color" && env["COLORTERM"] == "truecolor" && env["TERM_PROGRAM"] == "Greenlight"
+              && (env["PATH"] ?? "").contains("/opt/homebrew/bin") && (env["PATH"] ?? "").contains("/usr/local/bin")
+              && (env["LANG"] != nil || env["LC_ALL"] != nil || env["LC_CTYPE"] != nil))
+
+        let p = Pty(); var out = Data()
+        p.onOutput = { out.append($0) }
+        p.start(cols: 80, rows: 24, exe: "/bin/echo", args: ["direct-pty-ok"])
+        let until = Date() + 5
+        while !String(decoding: out, as: UTF8.self).contains("direct-pty-ok") && Date() < until { RunLoop.main.run(until: Date() + 0.02) }
+        p.stop()
+        check("pty: start(exe:args:) runs binary directly on a PTY without a login shell",
+              String(decoding: out, as: UTF8.self).contains("direct-pty-ok"))
+
+        let longHost = String(repeating: "h", count: 60) + ".example.internal"
+        let s1 = SshMux.socketPath(dir: "/tmp/gl-mux-501", host: longHost, devArgs: [], slotId: 1, pid: 99999)
+        let s2 = SshMux.socketPath(dir: "/tmp/gl-mux-501", host: longHost, devArgs: [], slotId: 2, pid: 99999)
+        let sDev = SshMux.socketPath(dir: "/tmp/gl-mux-501", host: longHost, devArgs: ["-o", "ProxyCommand=nc -U x"], slotId: 1, pid: 99999)
+        check("sshMux: socketPath stays well under macOS 104-byte sun_path limit and isolates slots/devArgs",
+              s1.utf8.count < 80 && s1 != s2 && s1 != sDev && s1.hasSuffix(".sock"))
+
+        let mArgs = SshMux.masterArgs(host: "box", sockPath: s1, devArgs: ["-o", "ProxyCommand=nc -U x"])
+        check("sshMux: masterArgs sets ControlPersist=no, BatchMode=yes, ClearAllForwardings=yes, keepalives",
+              mArgs.contains("-M") && mArgs.contains("-N") && mArgs.contains(s1)
+              && mArgs.contains("ControlPersist=no") && mArgs.contains("BatchMode=yes")
+              && mArgs.contains("ClearAllForwardings=yes") && mArgs.contains("ServerAliveInterval=5")
+              && mArgs.contains("ServerAliveCountMax=2") && Array(mArgs.suffix(2)) == ["--", "box"])
+
+        let loc = delegate.paneLaunch(session: "mc-fast1", cwd: "/tmp", on: "local")
+        check("paneLaunch: local pane runs /bin/sh -c with fastPathPrefix (no outer login shell)",
+              loc.exe == "/bin/sh" && loc.args.first == "-c" && (loc.args.last ?? "").contains(App.fastPathPrefix))
+
+        let mux = delegate.paneLaunch(session: "mc-fast2", cwd: "/w/a", on: "box", muxSocket: s1)
+        check("paneLaunch: remote muxed pane runs /usr/bin/ssh directly over muxSocket with sh -c (no $SHELL -lc)",
+              mux.exe == "/usr/bin/ssh" && mux.args.contains("-S") && mux.args.contains(s1)
+              && mux.args.contains("ControlMaster=no") && mux.args.contains("ControlPersist=no")
+              && (mux.args.last ?? "").hasPrefix("exec sh -c ") && !(mux.args.last ?? "").contains("$SHELL -lc"))
+
+        let dirLaunch = delegate.paneLaunch(session: "mc-fast3", cwd: "/w/a", on: "box", muxSocket: nil)
+        check("paneLaunch: remote direct fallback uses ControlPath=none and exec sh -c",
+              dirLaunch.exe == "/usr/bin/ssh" && dirLaunch.args.contains("ControlPath=none")
+              && dirLaunch.args.contains("ControlMaster=no") && (dirLaunch.args.last ?? "").hasPrefix("exec sh -c "))
+
+        check("paneRecorderHooks: skips pipe-pane on gl-warm-* standby sessions until claimed",
+              hooks.allSatisfy { $0.contains("gl-warm-*") })
+
+        check("termBridge: hostKey normalizes local and remote hosts",
+              TermBridgePool.hostKey("") == "local" && TermBridgePool.hostKey("local") == "local" && TermBridgePool.hostKey("box") == "box")
+        let spec = TermBridgePool.launchSpec(for: "box")
+        check("termBridge: remote launchSpec runs term_bridge.py over non-PTY SSH with keepalives",
+              spec?.exe == "/usr/bin/ssh" && (spec?.args.contains("-T") ?? false)
+              && (spec?.args.contains("BatchMode=yes") ?? false) && (spec?.args.contains("ClearAllForwardings=yes") ?? false)
+              && (spec?.args.contains("ServerAliveInterval=5") ?? false)
+              && (spec?.args.last ?? "").contains("term_bridge.py"))
+    }
     mainC.clear()
 }

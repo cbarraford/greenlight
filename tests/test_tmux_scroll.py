@@ -152,3 +152,14 @@ def test_the_page_and_the_app_agree_on_the_run_mark():
     assert body.count("printf '\\(App.runMark)'") == 1
     pinned = re.search(r'fi; "\s*\+\s*"printf \'\\\(App\.runMark\)\'; \[ -n \\"\$f\\" \] \|\|', body)
     assert pinned and 0 <= body.find('>| \\"$f\\"') < pinned.start(), "the mark after the brief is saved, on every path, before this shell would run it"
+
+
+def test_pane_cmd_and_launch_skip_outer_login_shells_and_support_ssh_mux():
+    src = (ROOT / "app/Sources/App.swift").read_text()
+    body = re.search(r"func paneCmd\(.*?\n    \}\n", src, re.S).group(0)
+    assert "App.fastPathPrefix" in body, "paneCmd prepends standard tool dirs so sh finds tmux without a login shell"
+    assert '"exec sh -c "' in body and '"exec $SHELL -lc "' not in body, "remote paneCmd uses sh -c, not a redundant login shell"
+    launch = re.search(r"func paneLaunch\(.*?\n    \}\n", src, re.S).group(0)
+    assert '"/bin/sh"' in launch and '"/usr/bin/ssh"' in launch
+    assert "SshMux.slaveArgs" in launch and "SshMux.directArgs" in launch
+    assert "final class SshMux" in src and "NSWorkspace.didWakeNotification" in src and "NWPathMonitor" in src
