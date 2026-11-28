@@ -246,3 +246,14 @@ def test_add_resume_with_an_unwritable_home(home):
             mock.patch.object(last_agent, "note", side_effect=OSError("full")):
         dash.add_resume(pucks, [("/w/a", {"agentType": "claude"})])
     assert pucks[0]["resume"] == {}
+
+
+def test_add_resume_says_whether_tmux_answered(home):
+    """The console keeps an agent's tab only while trees list its session; when tmux didn't answer, none is listed, and
+    the page must know that means unknown, not quit."""
+    pucks = [{"path": "/w/a", "agent": {}}]
+    with mock.patch.object(ade_basement.subprocess, "run", return_value=_tmux_rows()):
+        assert dash.add_resume(pucks, [("/w/a", {})]) is True
+    with mock.patch.object(ade_basement.subprocess, "run", side_effect=subprocess.TimeoutExpired("tmux", 20)):
+        assert dash.add_resume(pucks, [("/w/a", {})]) is False
+    assert "session" not in pucks[0]["resume"]

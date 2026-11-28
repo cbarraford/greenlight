@@ -466,10 +466,24 @@ test("Chief's console that comes before the first trees waits for them, then att
   const b = page.context().browser(), fresh = await b.newPage({viewport: {width: 1200, height: 800}, colorScheme: "dark"});
   await fresh.addInitScript(() => { window.__posts = []; window.webkit = {messageHandlers: {term: {postMessage: m => window.__posts.push(JSON.parse(JSON.stringify(m)))}}} });
   await fresh.goto(page.url()); await fresh.waitForFunction(() => window.term);
-  await fresh.evaluate(() => { term.restore({tabs: []}); term.ws("review") });
+  await fresh.evaluate(() => { term.ws("review"); term.restore({tabs: []}) });  // the app sends it before the layout
   assert.equal((await posts(fresh, "open")).filter(o => o.session === "mc-1a2b3c4d").length, 0, "no trees yet: nothing to attach");
   await fresh.evaluate(t => term.workspaces(t), {trees: TREES.trees.map(w => w.path === "/w/review" ? {...w, resume: {harness: "claude", session: "mc-1a2b3c4d"}} : w)});
   assert.equal((await posts(fresh, "open")).filter(o => o.session === "mc-1a2b3c4d").length, 1, "the first trees: the agent's session");
+  assert.equal(await fresh.evaluate(() => tabs.length), 1, "no stray first shell beside it");
+  // tmux didn't answer (no session listed): a kept pane is kept, not killed
+  await fresh.evaluate(t => term.workspaces({...t, tmuxOk: false}), TREES);
+  await fresh.evaluate(() => closeTab(cur));
+  assert.equal((await posts(fresh, "close")).pop().keep, true, "tmux unknown: keep the agent");
+  await fresh.close();
+});
+test("a restored kept pane closed before the first trees keeps its agent", async page => {
+  const b = page.context().browser(), fresh = await b.newPage({viewport: {width: 1200, height: 800}, colorScheme: "dark"});
+  await fresh.addInitScript(() => { window.__posts = []; window.webkit = {messageHandlers: {term: {postMessage: m => window.__posts.push(JSON.parse(JSON.stringify(m)))}}} });
+  await fresh.goto(page.url()); await fresh.waitForFunction(() => window.term);
+  await fresh.evaluate(() => term.restore({cur: 0, tabs: [{ws: "/w/review", tree: {s: "mc-1a2b3c4d", keep: true}}]}));
+  await fresh.evaluate(() => closeTab(cur));
+  assert.equal((await posts(fresh, "close")).pop().keep, true);
   await fresh.close();
 });
 test("Chief's console by a worktree's last part attaches only when one live agent's worktree ends that way", async page => {

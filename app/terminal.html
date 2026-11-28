@@ -757,7 +757,8 @@ function drag(e, dv, down){
 }
 // Chief's console attached this pane to an agent's own session (p.keep): closing it detaches while that agent still runs there
 // (trees' resume.session); once it has quit, or the workspace is deleted (end), the session goes as any tab's does
-const keeps = (p, end) => !end && !!p.keep && trees.some(w => w.resume?.session === p.session);
+// or while that can't be told (no trees yet, tmux didn't answer): a leftover shell beats a killed agent
+const keeps = (p, end) => !end && !!p.keep && (!treesIn || !tmuxOk || trees.some(w => w.resume?.session === p.session));
 function kill(p, end){ clearTimeout(p.scanT); clearTimeout(p.endT); clearTimeout(p.askT); clearTimeout(p.lnkT); pinged.delete(p.id); post({cmd: "close", id: p.id, session: p.session, ws: p.tab.ws, ...keeps(p, end) ? {keep: true} : {}}); panes.delete(p.id); p.t.dispose && p.t.dispose() }
 function closePane(p){
   kill(p);
@@ -1443,7 +1444,8 @@ const acctHome = () => acct()?.dir || (typeof acctCfg.host === "string" && HOMES
 // (its main checkout, read by dash.py trees) can name its project too, so a teammate's clone lands in the same one. A window shows all,
 // or ONLY these ids ("" is No Man's Land: in no project). A window of one project is that project's account: its file's look, host and hosts.
 const NML = "No Man's Land";
-let projects = [], allP = [], treesIn = false, waitTrees = null;  // waitTrees: Chief's console that came before the first trees [ws, r, timer]  // yours; yours merged with the repos' files (what everything else reads)
+let waitTrees = [], waitT = 0, tmuxOk = true;  // the app's [ws, r] that came before the first trees; tmuxOk: trees' tmux answered
+let projects = [], allP = [], treesIn = false;  // yours; yours merged with the repos' files (what everything else reads)
 const pid = n => "p" + n.toLowerCase().replace(/\W+/g, "_").slice(0, 40);
 const acct = () => activeOnly()?.length === 1 ? allP.find(p => p.id === activeOnly()[0]) : null;
 function merge(){
@@ -1504,7 +1506,7 @@ function resumeWs(ws, r){
   newTab(ws, BIN_OK(r.bin) ? RESUME[r.harness].replace(/^\S+/, r.bin) : RESUME[r.harness]);
   return cur.resumed = {h: r.harness, at: Date.now()}, true;
 }
-function openWs(ws, r, noWait){
+function openWs(ws, r, wait){  // wait: the app's (Chief's console, a Basement button) before the first trees waits for them
   if (resumeWs(ws, r)) return;
   // Chief's [console: …]: a tmux session, a worktree (path or its last part) or a tab's name; else that worktree's latest tab
   const latest = latestTab, explicit = ws === "" || ws.startsWith("/") || ws.startsWith("@"), q = ws.toLowerCase();
@@ -1517,12 +1519,13 @@ function openWs(ws, r, noWait){
     const existing = latest(t => paneOf(t).some(p => p.session === live.resume.session));
     if (existing) return show(existing);
     newTab(live.path, undefined, false, live.resume.session); cur.focus.keep = true; return }
-  if (!treesIn && !noWait) { clearTimeout(waitTrees?.[2]); waitTrees = [ws, r, setTimeout(() => { waitTrees = null; openWs(ws, r, true) }, 5000)]; return }  // a cold start: the live sessions come with the first trees (5 s at most)
+  if (wait && !treesIn) { waitTrees.push([ws, r]); waitT ||= setTimeout(openWaiting, 5000); return }  // a cold start: the live sessions come with the first trees (5 s at most)
   const other = explicit ? latest(t => t.ws === ws)
     : latest(t => t.ws === ws) || latest(t => t.ws && t.ws.endsWith("/" + ws))
       || (q && latest(t => (t.name || "").toLowerCase().includes(q)));
   if (other) return show(other);
   if (explicit) newTab(ws) }
+function openWaiting(){ clearTimeout(waitT); waitT = 0; const w = waitTrees.splice(0); w.forEach(([ws, r]) => openWs(ws, r)); if (w.length) firstShell() }
 // status glyphs: brand/icons names (DESIGN.md §9.4)
 const g16 = (name, cls = "", label = "", w = 12) => { const e = dsIcon(name, w, {cls});
   if (label){ e.removeAttribute("aria-hidden"); e.setAttribute("role", "img"); e.setAttribute("aria-label", label) } return e.outerHTML };
@@ -2104,7 +2107,7 @@ function restore(st){
   restored = true;
   // a Basement button's worktree (the app sends it before the layout): the restored layout is what's saved, so its tab saves;
   // a name that matches nothing (Chief's [console: …]) falls through to the usual first tab
-  if (pendingWs) { const [w, r] = pendingWs; pendingWs = null; lastSaved = snap(); openWs(w, r); if (cur) { if (lastPanes) { syncPanes(lastPanes); render() } return } }
+  if (pendingWs) { const [w, r] = pendingWs; pendingWs = null; lastSaved = snap(); openWs(w, r, true); if (waitTrees.length && !tabs.length) { firstWait = true; return } if (cur) { if (lastPanes) { syncPanes(lastPanes); render() } return } }
   if (!tabs.length) { firstWait = true; return treesIn || ONLY?.length !== 1 || Object.keys(acctCfg).length || acct()?.dir ? firstShell() : setTimeout(firstShell, 5000) }  // a new project window waits (a bit) for its host
   show(tabs[st.cur] || tabs[0]); tabs.forEach(refit);
   lastSaved = snap();  // what was just restored is what's saved
@@ -2640,7 +2643,7 @@ window.term = {
     scanFoot.rescanErr = code === 255 ? {msg: "host unreachable", fix: "check SSH connection, then ↻", ts: Math.floor(Date.now() / 1000 - scanFoot.skew)} : null; foot() },
   localName: v => { LOCALNAME = v || "Local"; render() },
   opens: (v, cut) => { if ((v === "basement") === document.body.classList.contains("noside")) toggleSide(cut === true || !onScreen) },  // Settings → Terminal → App opens to; a cut before the window shows (cut: the app has it out of sight)
-  ws: (path, r) => { if (typeof path !== "string") return; if (restored) openWs(path, r); else pendingWs = [path, r] },  // Greenlight's Basement button: its last agent (resumeWs), else that worktree's latest tab, or a new shell in it
+  ws: (path, r) => { if (typeof path !== "string") return; if (restored) openWs(path, r, true); else pendingWs = [path, r] },  // Greenlight's Basement button: its last agent (resumeWs), else that worktree's latest tab, or a new shell in it
   suggest: o => { sugg.set(o.name, {...o, at: Date.now()}); drawNext(); drawRec() },
   feed: (id, b64) => { const p = panes.get(id); if (!p) return; const b = Uint8Array.from(atob(b64), ch => ch.charCodeAt(0)); p.t.write(b); p.out = Date.now(); sniff(p, p.dec.decode(b, {stream: true})); if (!p.tab.manual) settle(p.tab) },
   exited: (id, code) => {
@@ -2675,12 +2678,11 @@ window.term = {
   closeAll: () => { restored = false; clearTimeout(saveT); clearTimeout(focusWsT); focusWsT = 0; lastFocusWs = null; const out = [...panes.values()].map(p => ({session: p.session, ws: p.tab.ws, ...keeps(p) ? {keep: true} : {}}));
     panes.forEach(p => { clearTimeout(p.scanT); clearTimeout(p.endT); clearTimeout(p.askT); clearTimeout(p.lnkT); p.t.dispose?.() }); panes.clear(); pinged.clear(); lastPanes = null;
     tabs.forEach(t => { clearTimeout(t.quiet); clearTimeout(t.retry); t.r.remove() }); tabs.length = 0; cur = null; lastScrollTab = lastScrollWs = null; return out },
-  workspaces: o => { basementFoot(o?.usage); trees = o?.trees || []; if (Array.isArray(o?.agents) && o.agents[0]) defAgent = normAgent(o.agents[0]); treesIn = true; refreshing(false);
-    Object.assign(scanFoot, {at: Date.now(), scanned: +o?.scanned || 0, err: o?.scan_error || null}, +o?.ts ? {skew: Date.now() / 1000 - o.ts} : {}); const was = JSON.stringify(acctCfg); merge(); firstShell();
+  workspaces: o => { basementFoot(o?.usage); trees = o?.trees || []; if (Array.isArray(o?.agents) && o.agents[0]) defAgent = normAgent(o.agents[0]); treesIn = true; tmuxOk = o?.tmuxOk !== false; refreshing(false);
+    Object.assign(scanFoot, {at: Date.now(), scanned: +o?.scanned || 0, err: o?.scan_error || null}, +o?.ts ? {skew: Date.now() / 1000 - o.ts} : {}); const was = JSON.stringify(acctCfg); merge(); openWaiting(); firstShell();
     if (JSON.stringify(acctCfg) !== was) { paint(); save() }
     for (const ws of made.keys()) if (wsInfo(ws)) { made.delete(ws); reveal(ws); save() }  // its real row: maybe another section than the bare one
     syncPanes(o?.panes);
-    if (waitTrees) { const [w, r, t] = waitTrees; waitTrees = null; clearTimeout(t); openWs(w, r) }
     setTitle(); render(); if (!$("pal").hidden) palRender(); autoRun() },
   palette: open => restored && palette(open),
 };
