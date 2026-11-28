@@ -8,7 +8,7 @@ final class ModelSelectorState: ObservableObject {
     var lastByMfg = [ModelManufacturer: String]()
 }
 
-/// Reusable 3-step Settings model selector: Manufacturer buttons (with icons) -> Model buttons (with icons) -> Effort slider.
+/// Reusable Settings model selector: Favorites -> Provider buttons -> Model buttons -> Effort slider (with optional Fallbacks).
 /// Follows Greenlight's design tokens (brand/DESIGN.md §§2–6, §10.20) with zero literal colours, sizes, or radii.
 struct ModelSelector: View {
     @ObservedObject var c: Core

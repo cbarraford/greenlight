@@ -58,7 +58,9 @@ def tmux(*args):
     except OSError as e:
         detail = f": {e.strerror}" if e.strerror else ""
         raise RuntimeError(f"tmux at {exe} can't run ({type(e).__name__}){detail}: check bins.tmux in config.json") from None
-    if p.returncode and "no server running" not in p.stderr and "error connecting" not in p.stderr:
+    if p.returncode:
+        if args and args[0] in READS and ("no server running" in p.stderr or "error connecting" in p.stderr):
+            return ""
         raise RuntimeError(f"tmux {args[0]}: {p.stderr.strip()[:300]}")
     return p.stdout
 

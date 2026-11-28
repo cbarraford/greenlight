@@ -630,7 +630,7 @@ func kbd(_ k: String) -> some View {
 struct InboxLine: View {
     @ObservedObject var c: Core
     let q: Question
-    @StateObject private var hover = Flag()  // not @State: see the top of the file
+    @StateObject private var hover = Flag()  // not @State: see Config.swift
     var body: some View {
         Button { c.inboxPick = q.id } label: {
             HStack(spacing: DS.Space.s8) {
@@ -752,7 +752,7 @@ struct AnswerChip: View {
     var key: String?  // its number key, shown as a badge
     var likely = false
     let action: () -> Void
-    @StateObject private var hover = Flag()  // not @State: see the top of the file
+    @StateObject private var hover = Flag()  // not @State: see Config.swift
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {

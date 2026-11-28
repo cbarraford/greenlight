@@ -608,3 +608,130 @@ def test_term_bridge_kill_op_live_reattach_and_sigterm(tmp_path):
             proc.wait(timeout=3)
         subprocess.run(["tmux", "-L", sock, "kill-server"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+
+def test_update_pane_events_during_backpressure_and_cleanup_sigkill_fallback(tmp_path, monkeypatch):
+    # BUG-INFRA-1: _update_pane_events registers EVENT_WRITE even when pane was unregistered by read backpressure
+    r_in, w_in = os.pipe()
+    r_out, w_out = os.pipe()
+    p_r, p_w = os.pipe()
+    try:
+        bridge = term_bridge.TermBridge(socket=f"gl-bp-{os.getpid()}", in_fd=r_in, out_fd=w_out)
+        bridge.tmux_bin = None
+        bridge.pool.tmux_bin = None
+
+        class _Proc:
+            pid = 999999
+
+            def poll(self) -> int | None:
+                return 0
+
+            def wait(self, timeout: float = 0.0) -> int:
+                return 0
+
+        pane = term_bridge.PaneProc("0:1", "mc-1", p_w, _Proc())  # type: ignore[arg-type]
+        bridge.panes["0:1"] = pane
+        bridge.sel.register(p_w, term_bridge.selectors.EVENT_READ, pane)
+
+        # Backpressure pauses reads and unregisters pane (write_buf is empty)
+        bridge._set_read_pause(True)
+        with pytest.raises(KeyError):
+            bridge.sel.get_key(p_w)
+
+        # Incoming stdin hits BlockingIOError -> write_buf stays buffered and EVENT_WRITE MUST be registered
+        with monkeypatch.context() as mp:
+            mp.setattr(os, "write", lambda _fd, _buf: (_ for _ in ()).throw(BlockingIOError()))
+            bridge._handle_in({"op": "in", "id": "0:1", "d": base64.b64encode(b"hello").decode()})
+        assert bytes(pane.write_buf) == b"hello"
+        key = bridge.sel.get_key(p_w)
+        assert key.events == term_bridge.selectors.EVENT_WRITE
+
+        # Partial write followed by BlockingIOError keeps remainder + EVENT_WRITE; draining completely unregisters while still read-paused
+        writes = iter([2])
+        def _partial_then_block(_fd: int, _buf: Any) -> int:
+            try:
+                return next(writes)
+            except StopIteration:
+                raise BlockingIOError() from None
+        with monkeypatch.context() as mp:
+            mp.setattr(os, "write", _partial_then_block)
+            bridge._flush_pane_write(pane)
+        assert bytes(pane.write_buf) == b"llo"
+        assert bridge.sel.get_key(p_w).events == term_bridge.selectors.EVENT_WRITE
+
+        bridge._flush_pane_write(pane)
+        assert bytes(pane.write_buf) == b""
+        assert os.read(p_r, 16) == b"llo"
+        with pytest.raises(KeyError):
+            bridge.sel.get_key(p_w)
+
+        # OSError during _flush_pane_write drops the pane and emits exit
+        pane.write_buf.extend(b"boom")
+        real_write = os.write
+        def _fail_pane_write(fd: int, buf: Any) -> int:
+            if fd == p_w:
+                raise OSError("EIO")
+            return real_write(fd, buf)
+        with monkeypatch.context() as mp:
+            mp.setattr(os, "write", _fail_pane_write)
+            bridge._flush_pane_write(pane)
+        assert "0:1" not in bridge.panes
+        assert '"e":"exit","id":"0:1"' in os.read(r_out, 4096).decode()
+
+        # _read_stdin EOF and OSError set _stop; _flush_out OSError sets _stop
+        bridge._stop = False
+        with monkeypatch.context() as mp:
+            mp.setattr(os, "read", lambda _fd, _n: (_ for _ in ()).throw(BlockingIOError()))
+            bridge._read_stdin()
+        assert bridge._stop is False
+        with monkeypatch.context() as mp:
+            mp.setattr(os, "read", lambda _fd, _n: b"")
+            bridge._read_stdin()
+        assert bridge._stop is True
+
+        bridge._stop = False
+        with monkeypatch.context() as mp:
+            mp.setattr(os, "read", lambda _fd, _n: (_ for _ in ()).throw(OSError("EBADF")))
+            bridge._read_stdin()
+        assert bridge._stop is True
+
+        bridge._stop = False
+        bridge._out_buf.extend(b"payload")
+        with monkeypatch.context() as mp:
+            mp.setattr(os, "write", lambda _fd, _buf: (_ for _ in ()).throw(OSError("EPIPE")))
+            bridge._flush_out()
+        assert bridge._stop is True
+
+        # BUG-INFRA-16: StandbyPool.cleanup() falls back to kill() when warm_proc.wait() times out
+        killed_flag = {"term": 0, "kill": 0, "waits": 0}
+
+        class _StubbornProc:
+            def poll(self) -> int | None:
+                return None
+
+            def terminate(self) -> None:
+                killed_flag["term"] += 1
+
+            def kill(self) -> None:
+                killed_flag["kill"] += 1
+
+            def wait(self, timeout: float = 0.0) -> int:
+                killed_flag["waits"] += 1
+                if killed_flag["waits"] == 1:
+                    raise subprocess.TimeoutExpired(["tmux"], timeout)
+                return -9
+
+        pool = term_bridge.StandbyPool("/bin/true", f"gl-clean-{os.getpid()}", bridge.env)
+        monkeypatch.setattr(pool, "kill_session", lambda _s: None)
+        pool.warm_name = "gl-warm-1-stubborn"
+        pool.warm_proc = _StubbornProc()  # type: ignore[assignment]
+        pool.cleanup()
+        assert killed_flag == {"term": 1, "kill": 1, "waits": 2}
+        assert pool.warm_proc is None and pool.warm_name is None
+
+        bridge.shutdown()
+    finally:
+        for fd in (r_in, w_in, r_out, w_out, p_r, p_w):
+            with contextlib.suppress(OSError):
+                os.close(fd)
+
+

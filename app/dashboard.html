@@ -39,7 +39,7 @@
   --green-ink:var(--ds-status-done-fg); --gray-ink:var(--ds-status-queued-fg); --purple-ink:var(--ds-status-waiting-fg); --teal-ink:var(--ds-status-waiting-fg);
   --orange-tint:var(--ds-status-needs-bg); --yellow-tint:var(--ds-status-your-move-bg); --blue-tint:var(--ds-status-working-bg); --red-tint:var(--ds-status-crashed-bg);
   --green-tint:var(--ds-status-done-bg); --gray-tint:var(--ds-status-queued-bg); --purple-tint:var(--ds-status-waiting-bg); --teal-tint:var(--ds-status-waiting-bg);
-  --orange-edge:var(--ds-status-needs-border); --red-edge:var(--ds-status-crashed-border); --blue-edge:var(--ds-status-working-border); --yellow-edge:var(--ds-status-your-move-border);
+  --red-edge:var(--ds-status-crashed-border); --blue-edge:var(--ds-status-working-border); --yellow-edge:var(--ds-status-your-move-border);
   --on-orange:var(--ds-status-needs-on-solid); --on-red:var(--ds-status-crashed-on-solid);
   /* the accent: the one primary action per view, links, focus, selection; under 3% of the screen, never a state */
   --accent:var(--mc-accent,var(--ds-accent-solid)); --accent-solid:var(--mc-accent,var(--ds-accent-solid)); --accent-hover:var(--mc-accent,var(--ds-accent-hover));
@@ -48,7 +48,7 @@
   /* agents: the marks keep their own colour on a neutral tile */
   --claude:var(--ds-clay-9); --codex:var(--ds-fg-default); --agy:var(--ds-blue-9);
   /* depth */
-  --shadow-sm:var(--ds-elevation-1); --elev:var(--ds-elevation-2); --elev-up:var(--ds-elevation-2); --elev-3:var(--ds-elevation-3); --scrim:var(--ds-elevation-scrim);
+  --shadow-sm:var(--ds-elevation-1); --elev:var(--ds-elevation-2); --elev-3:var(--ds-elevation-3); --scrim:var(--ds-elevation-scrim);
   /* type: the roles' sizes and line heights */
   --font:var(--ds-type-family-ui); --mono:var(--ds-type-family-mono);
   --fs-1:var(--ds-type-caption-size); --fs-2:var(--ds-type-label-size); --fs-3:var(--ds-type-body-size); --fs-4:var(--ds-type-title-sm-size); --fs-5:var(--ds-type-title-size); --fs-6:var(--ds-type-title-lg-size);
@@ -57,7 +57,7 @@
   --r-0:var(--ds-radius-xs); --r-1:var(--ds-radius-sm); --r-2:var(--ds-radius-md); --r-3:var(--ds-radius-lg); --r-4:var(--ds-radius-lg); --r-full:var(--ds-radius-full);
   --sp-0:var(--ds-space-2); --sp-1:var(--ds-space-4); --sp-2:var(--ds-space-8); --sp-3:var(--ds-space-12); --sp-4:var(--ds-space-16); --sp-5:var(--ds-space-24); --sp-6:var(--ds-space-32);
   /* motion */
-  --t-press:var(--ds-duration-press); --t-fast:var(--ds-duration-fast); --t-base:var(--ds-duration-base); --t-slow:var(--ds-duration-slow); --ease:var(--ds-easing-out); --ease-move:var(--ds-easing-in-out);
+  --t-press:var(--ds-duration-press); --t-fast:var(--ds-duration-fast); --t-base:var(--ds-duration-base); --t-slow:var(--ds-duration-slow); --ease:var(--ds-easing-out);
   /* layout */
   --bar-h:var(--ds-layout-bar-height); --foot-h:var(--ds-layout-footer-height); --dock-w:76px; --park-w:60px;
   --ring:var(--ds-ring);
@@ -71,7 +71,6 @@ body{background:var(--bg);color:var(--text);font:var(--fs-3)/var(--lh-2) var(--f
 button{font:inherit;color:inherit;cursor:default}
 a{color:var(--accent-fg);text-decoration:none} a:hover{text-decoration:underline;text-underline-offset:2px}
 button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible,[tabindex]:focus-visible,a:focus-visible{outline:none;box-shadow:var(--ring)}
-.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .ic{display:inline-block;vertical-align:-3px;flex-shrink:0}
 .mono{font-family:var(--mono);font-size:var(--fs-2)}
 .muted{color:var(--text3)}
@@ -395,7 +394,6 @@ button.aline:hover .aexp,button.aline:focus-visible .aexp{opacity:1}
 .agents.detached .acard .open{height:var(--ds-layout-control-height-md)}
 .acard .open:hover{background:var(--ds-element-hover)} .acard .open:active{background:var(--ds-element-active);transform:scale(.97)}
 .acards>.acard.wait:first-child .open.ans{background:var(--accent-solid);color:var(--on-accent);font-weight:600} .acards>.acard.wait:first-child .open.ans:hover{background:var(--accent-hover)}  /* one primary per view: the first question */
-@keyframes breathe{50%{opacity:.45}}
 .whead{display:flex;flex-wrap:wrap;align-items:center;gap:6px var(--sp-4);padding:var(--sp-4) var(--sp-4) 0;font-size:var(--fs-2);color:var(--text3)}
 .whead h2.sect{margin:0}
 .whead h2{margin:0;font-size:var(--fs-3);font-weight:600;color:var(--text)}
@@ -416,7 +414,6 @@ button.aline:hover .aexp,button.aline:focus-visible .aexp{opacity:1}
 .cell.picked .halo,.hub.picked .halo,.fp.picked .halo{opacity:1;stroke:var(--accent);stroke-width:2}
 #bar .mdot{display:inline-block;width:6px;height:6px;border-radius:var(--r-full);margin-right:6px}
 .cell.indock .halo,.hub.indock .halo,.fp.indock .halo{opacity:1;stroke:var(--accent);stroke-width:2} .lrow.indock{border-color:var(--accent)}
-.cell .hcap{position:absolute;top:100%;left:50%;transform:translateX(-50%);margin-top:1px;font-size:var(--fs-1);line-height:var(--lh-1);color:var(--text2);text-align:center;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere} .cell.sel .hcap{color:var(--text);font-weight:600}
 .hx{position:relative;--hfill:var(--hexbody);--hedge:var(--line);--hink:var(--text2);--htrack:transparent;--hprog:var(--text3)}
 .hx.st-needs{--hfill:var(--orange);--hedge:transparent;--hink:var(--on-orange);--htrack:color-mix(in srgb,var(--on-orange) 30%,transparent);--hprog:var(--on-orange)}
 .hx.st-crashed{--hfill:var(--red);--hedge:transparent;--hink:var(--on-red);--htrack:color-mix(in srgb,var(--on-red) 30%,transparent);--hprog:var(--on-red)}
@@ -429,8 +426,8 @@ button.aline:hover .aexp,button.aline:focus-visible .aexp{opacity:1}
 .hx .prog{fill:none;stroke:var(--hprog);stroke-linejoin:round}
 .hx .halo{fill:none;stroke:var(--accent);stroke-width:2;stroke-linejoin:round;opacity:0;transition:opacity var(--t-fast) ease}
 .cell:focus-visible{box-shadow:none}  /* the hex's halo is its focus ring */
-.cell:hover .halo,.cell:focus-visible .halo,.cell.hl .halo,.cell.sel .halo,.fan:not(.open) .hub.hl .halo,.fp:hover .halo,.fp.hl .halo{opacity:1}
-.cell:hover .halo{stroke:var(--line-hover)} .cell:focus-visible .halo,.cell.hl .halo,.cell.sel .halo,.fan:not(.open) .hub.hl .halo,.fp.hl .halo{stroke:var(--accent)}
+.cell:hover .halo,.cell:focus-visible .halo,.cell.hl .halo,.fan:not(.open) .hub.hl .halo,.fp:hover .halo,.fp.hl .halo{opacity:1}
+.cell:hover .halo{stroke:var(--line-hover)} .cell:focus-visible .halo,.cell.hl .halo,.fan:not(.open) .hub.hl .halo,.fp.hl .halo{stroke:var(--accent)}
 /* needs you or crashed: three pulses when it arrives, then it rests (DESIGN.md §7) */
 .hx .pulse{fill:none;stroke-width:2;transform-box:fill-box;transform-origin:center;animation:hpulse 2.4s var(--ease) 3 both}
 @keyframes hpulse{from{transform:scale(1);opacity:.7}to{transform:scale(1.06);opacity:0}}
@@ -532,8 +529,6 @@ body.parkhot #park .dslot.target .sock polygon{fill:var(--fill-hover)}
 #hcard .hk{font-size:var(--fs-1);color:var(--text3)}
 #hcard .v{font-size:var(--fs-3);line-height:var(--lh-2);font-weight:500;color:var(--text);display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0;overflow-wrap:anywhere}
 #hcard .ht .hm{display:none}
-#hcard .kv{display:grid;grid-template-columns:72px minmax(0,1fr);column-gap:var(--sp-2);font-size:var(--fs-2);line-height:var(--lh-2)}
-#hcard .labs{display:flex;flex-wrap:wrap;gap:var(--sp-1)}#hcard .labs span{padding:2px var(--sp-2);border-radius:var(--r-0);background:var(--fill);color:var(--text2);font-size:var(--fs-1)}
 #hcard .he{border:1px dashed var(--line);border-radius:var(--r-2);padding:var(--sp-2) var(--sp-3);display:flex;flex-direction:column;gap:2px}
 #hcard .hf{border-top:1px solid var(--hair);padding-top:var(--sp-2);display:flex;align-items:center;gap:var(--sp-2);font-size:var(--fs-2);color:var(--text2)}#hcard .hf svg{flex:none}
 #hcard .hf .gl.working{color:var(--blue);animation:spin .9s linear infinite} #hcard .hf .gl.idle{color:var(--text3)} #hcard .hf .gl.waiting{color:var(--orange)} #hcard .hf .gl.crashed{color:var(--red)}
@@ -638,7 +633,6 @@ body.hasdock:not(.nohex) .empty{right:var(--dock-w)}
 .pips{display:inline-flex;gap:2px}.pips i{width:8px;height:8px;border-radius:var(--r-full);border:1.5px solid var(--text3)}.pips i.on{background:var(--text2);border-color:var(--text2)}
 .lag{display:flex;align-items:center;gap:var(--sp-2);min-width:0;font-size:var(--fs-2)}
 .lag .av.sm{width:20px;height:20px}
-.lag .lst{min-width:0;display:flex;flex-direction:column;gap:1px}.lag .lst .mono{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lag small{font-size:var(--fs-1);color:var(--text3)}
 .lbtn{flex-shrink:0;height:24px;padding:0 var(--ds-space-8);border:0;border-radius:var(--ds-radius-sm);background:var(--ds-element-rest);color:var(--text);font:var(--ds-type-label);transition:transform var(--t-press) var(--ease)}  /* secondary: a row's action is never the view's primary */
 .lbtn:hover{background:var(--ds-element-hover)}
@@ -653,12 +647,6 @@ body.hasdock:not(.nohex) .empty{right:var(--dock-w)}
 .list.narrow .lsig{grid-area:sig;display:flex;gap:var(--sp-1) var(--sp-3);flex-wrap:wrap}
 .list.narrow .lag{grid-area:ag;align-self:center}
 
-/* overview grid and cards */
-.grid{padding:var(--sp-4);display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:var(--sp-3);align-content:start}
-.card{border-radius:var(--r-2);background:var(--card);border:1px solid var(--card-line);padding:var(--sp-4);display:flex;flex-direction:column;gap:var(--sp-2);min-width:0}
-.card h3{margin:0;font-size:var(--fs-3);font-weight:600;display:flex;gap:var(--sp-2);align-items:baseline}
-.card h3 small{font-size:var(--fs-1);font-weight:400;color:var(--text3)}
-@media (max-width:700px){.card{grid-column:span 12!important}}
 .sub{color:var(--text2);font-size:var(--fs-2);line-height:var(--lh-2);margin:0;-webkit-user-select:text;user-select:text}
 
 /* widgets: one frame, every state (DESIGN.md §10.10) */
@@ -698,7 +686,6 @@ body.hasdock:not(.nohex) .empty{right:var(--dock-w)}
 .w-table td{padding:var(--sp-1) var(--sp-2) var(--sp-1) 0;border-top:1px solid var(--hair);overflow-wrap:anywhere}
 .w-heat{display:grid;gap:var(--sp-1);align-items:center;font-size:var(--fs-1)}
 .w-heat span.c{height:14px;border-radius:2px}
-.w-none{font-size:var(--fs-1);color:var(--faint)}
 
 /* workspace page */
 .bcrumb{font-size:var(--fs-2);color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
@@ -767,7 +754,6 @@ body.hasdock:not(.nohex) .empty{right:var(--dock-w)}
 .aopts{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:var(--sp-2)}
 .ahint{font-size:var(--fs-2);line-height:var(--lh-2);font-weight:500;color:var(--text2);margin-bottom:calc(-1 * var(--sp-1))}
 .aopts .ot{display:flex;flex-direction:column;gap:2px;flex-grow:1;min-width:0} .aopts .osend{display:flex;align-items:center;gap:var(--sp-1);flex-shrink:0;font-size:var(--fs-2);font-weight:600;color:var(--accent-fg)}
-.aopts .osug{order:-1;align-self:flex-start;display:inline-flex;align-items:center;gap:var(--sp-1);height:20px;margin-bottom:2px;padding:0 var(--sp-2);border-radius:var(--r-full);background:var(--accent-subtle);font-size:var(--fs-1);font-weight:500;color:var(--accent-fg)} .aopts .osug.ph{visibility:hidden}
 .aopts button{display:flex;align-items:center;gap:var(--sp-3);padding:var(--sp-2) var(--sp-3);border-radius:var(--r-2);background:var(--card);border:1px solid var(--line);color:var(--text);text-align:left;font:inherit;font-size:var(--fs-3);line-height:var(--lh-3);max-width:100%;transition:transform var(--t-press) var(--ease)}
 .aopts button:hover:not(:disabled){border-color:var(--line-hover);background:var(--fill)}
 .aopts button:active:not(:disabled){background:var(--fill-active);transform:scale(.98)}
@@ -853,26 +839,20 @@ body:has(>main.ov){background:var(--canvas)}
 #pp h3{margin:0 0 var(--sp-1);font-size:var(--fs-3);font-weight:600} #pp p{margin:0;color:var(--dim);line-height:var(--lh-3)} #pp code{color:var(--fg);font:var(--fs-1) var(--mono)}
 #pp label{display:flex;align-items:center;gap:var(--sp-2);color:var(--dim)} #pp label input{margin:0}
 #pp .btns{display:flex;gap:var(--sp-2)} #pp button{flex:1;height:28px;border:0;border-radius:var(--r-1);background:var(--fill);color:var(--fg);font:inherit;font-weight:500}
-#pp form.wide{width:min(520px,92vw);max-height:72vh;overflow-y:auto} #pp h4{margin:var(--sp-1) 0 0;color:var(--dim);font-size:var(--fs-2);font-weight:500}
 #pp input[type=text],#pp select,#pp textarea{width:100%;padding:var(--sp-1) var(--sp-2);border:1px solid var(--line);border-radius:var(--r-1);background:var(--fill);color:var(--fg);font:inherit;outline:0}
 #pp form.big{--d0:var(--sheet);--d1:var(--bar);--d2:var(--fill);--ln:var(--hair);--rg:var(--line);--mid:var(--text2);--amb:var(--accent-solid);--ink:var(--on-accent);
   width:min(880px,94vw);height:min(620px,86vh);max-height:none;padding:0;gap:0;grid-template-rows:auto minmax(0,1fr) auto;overflow:hidden;border-radius:var(--r-3);background:var(--d0);box-shadow:var(--elev-3);font-size:var(--fs-3)}
-#pp form.big.cc{width:min(980px,94vw);height:min(660px,88vh)} #pp form.big.nw{width:min(640px,92vw);height:auto;max-height:86vh}
+#pp form.big.nw{width:min(640px,92vw);height:auto;max-height:86vh}
 #pp .gap{flex:1} #pp .sq{flex:0 0 auto;width:8px;height:8px;border-radius:2px}
 #pp .big>.dh{display:flex;align-items:center;gap:var(--sp-3);min-width:0;padding:var(--sp-4) var(--sp-5);box-shadow:inset 0 -1px 0 var(--ln)} #pp .nw>.dh{padding:var(--sp-4) var(--sp-5) var(--sp-3);box-shadow:none}
 #pp .dh h3{margin:0;font-size:var(--fs-5);line-height:var(--lh-5);font-weight:600;white-space:nowrap} #pp .dh .sub{min-width:0;overflow:hidden;color:var(--dim);font-size:var(--fs-2);text-overflow:ellipsis;white-space:nowrap}
 #pp .big>.btns{align-items:center;gap:var(--sp-2);padding:var(--sp-3) var(--sp-5);background:var(--d1);box-shadow:inset 0 1px 0 var(--ln)}
-#pp .big>.btns .err,#pp .big>.btns .note2{display:flex;align-items:center;gap:var(--sp-2);margin:0;font-size:var(--fs-1)} #pp .note2,#pp .tot{color:var(--dim);font-size:var(--fs-1)} #pp .big>.btns .err:empty{display:none}
+#pp .big>.btns .err{display:flex;align-items:center;gap:var(--sp-2);margin:0;font-size:var(--fs-1)} #pp .tot{color:var(--dim);font-size:var(--fs-1)} #pp .big>.btns .err:empty{display:none}
 #pp .big button{flex:0 0 auto;height:32px;padding:0 var(--sp-4);border-radius:var(--r-1);background:var(--fill);color:var(--fg);font-size:var(--fs-3);font-weight:500}
 #pp .big button:hover:not(:disabled){background:var(--fill-hover)}
-#pp .big button.pri,#pp .big button.go{display:flex;align-items:center;gap:var(--sp-2);padding:0 var(--sp-4);background:var(--amb);color:var(--ink);font-weight:600} #pp .big button.pri:hover,#pp .big button.go:hover{background:var(--accent-hover)} #pp .big button.pri kbd{font:var(--fs-1) var(--mono);opacity:.7}
+#pp .big button.pri{display:flex;align-items:center;gap:var(--sp-2);padding:0 var(--sp-4);background:var(--amb);color:var(--ink);font-weight:600} #pp .big button.pri:hover{background:var(--accent-hover)} #pp .big button.pri kbd{font:var(--fs-1) var(--mono);opacity:.7}
 #pp .big button.lite{display:flex;align-items:center;gap:6px;padding:0 var(--sp-2);background:none;color:var(--mid);font-size:var(--fs-2)} #pp .big button.lite:hover{background:var(--fill);color:var(--fg)} #pp .big button.lite:disabled{opacity:.45;background:none}
-#pp .big button.lite.red{color:var(--r)}
-#pp .big button.x{display:flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border-radius:var(--r-1);background:none;color:var(--dim)} #pp .big button.x:hover{background:var(--fill);color:var(--fg)} #pp .dh button.x{width:28px;height:28px}
 #pp .big input[type=text],#pp .big select{height:32px;padding:0 var(--sp-2);border-radius:var(--r-1);background:var(--d2);border:1px solid var(--rg)} #pp .big input[type=text]:focus{border-color:var(--amb)}
-#pp .big h4{margin:0;color:var(--fg);font-size:var(--fs-3);font-weight:600} #pp .big h4 small{margin-left:var(--sp-2);color:var(--dim);font-size:var(--fs-2);font-weight:400}
-#pp .big section{display:flex;flex-direction:column;gap:var(--sp-2);min-height:0}
-#pp .big ul{flex-shrink:0;border-radius:var(--r-2);background:var(--d2)} #pp .big li{gap:var(--sp-2);padding:var(--sp-2) var(--sp-3)} #pp .big li+li{box-shadow:inset 0 1px 0 var(--ln)}
 #pp .seg{display:flex;padding:2px;border-radius:var(--r-1);background:var(--d2)} #pp .big .seg button{display:flex;align-items:center;gap:6px;height:24px;padding:0 var(--sp-3);border-radius:var(--r-0);background:none;color:var(--dim);font-size:var(--fs-2)}
 #pp .big .seg [aria-pressed=true]{background:var(--sheet);color:var(--fg);font-weight:500;box-shadow:var(--shadow-sm)} #pp .seg kbd{color:var(--dim);font:var(--fs-1) var(--mono)}
 #pp .nwb{display:grid;align-content:start;gap:var(--sp-3);padding:0 var(--sp-5) var(--sp-4);overflow-y:auto}
@@ -885,8 +865,8 @@ body:has(>main.ov){background:var(--canvas)}
 #pp .tile input{appearance:none;flex:0 0 auto;width:16px;height:16px;margin:0;border-radius:var(--r-0);box-shadow:inset 0 0 0 1.5px var(--line-hover)} #pp .tile input:focus-visible{outline:none;box-shadow:var(--ring)}
 #pp .tile input:checked{box-shadow:none;background:var(--amb)}
 #pp .tile input:checked::after{content:"";display:block;width:10px;height:5px;margin:4px 0 0 3px;border:solid var(--ink);border-width:0 0 1.5px 1.5px;transform:rotate(-45deg)}
-#pp .tile>span,#pp .pn button>span{flex:1;min-width:0} #pp .tile b,#pp .tile small,#pp .pn b,#pp .pn small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} #pp .tile b,#pp .pn b{font-weight:600}
-#pp .tile small,#pp .pn small{color:var(--dim);font-size:var(--fs-1);font-weight:400}
+#pp .tile>span{flex:1;min-width:0} #pp .tile b,#pp .tile small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} #pp .tile b{font-weight:600}
+#pp .tile small{color:var(--dim);font-size:var(--fs-1);font-weight:400}
 </style>
 </head>
 <body>
@@ -1079,7 +1059,7 @@ const W = {
 };
 function widget(spec, small){
   try { return spec && W[spec.widget] ? W[spec.widget](spec.props || {}, small) : null }
-  catch (e) { console.log("widget failed", spec && spec.widget, e); return null }
+  catch { return null }
 }
 
 /* ---------- hexes ---------- */
@@ -1742,7 +1722,7 @@ function listAgent(p){
   if (asking(p)) return h("div", {class:"lag"}, sub(av(), "waiting ", el()),
     h("button", {class:"lbtn", onclick: e => { e.stopPropagation(); openAnswer(p.name) }}, "Answer"));
   if (a.state === "working") { const act = a.tool ? `${a.tool}${a.input ? ": " + a.input : ""}` : DOING[p.step];  // nothing to add: "working" alone says it
-    return h("div", {class:"lag"}, sub(av(), "working ", el()), act ? sub(h("span", {class:"adot", "aria-hidden":"true"}), h("span", {class:"mono", title: act}, act)) : null) }
+    return h("div", {class:"lag"}, sub(av(), "working ", el()), act ? sub(h("span", {class:"mono", title: act}, act)) : null) }
   if (["needs", "raised", "crashed"].includes(p.state)) return h("div", {class:"lag"},
     a.type ? sub(av(), p.state === "crashed" ? "crashed" : `idle ${ago(a.idle_h)}`) : sub(p.mr && p.mr.role === "review" ? "no agent · review request" : "no agent"),
     h("button", {class:"lbtn" + (p.state === "crashed" ? " bad" : p.state === "raised" ? " raised" : ""), onclick: go}, askLabel(p)));
@@ -1861,7 +1841,7 @@ function agentPanel(p){
     h("div", {class:"shd"}, agentAv(agType, 12, "av sm"),
       h("h2", {style:"flex-grow:1"}, `${who} ${verb}`), h("span", {class:"el", "data-since": t0}, clock(t0)),
       h("button", {type:"button", class:"btn sm", onclick: () => openOut(p.name)}, icon("file-text", 12), "View log")),
-    a.state === "working" && a.tool ? h("div", {class:"aline"}, h("span", {class:"adot", "aria-hidden":"true"}), h("span", {class:"mono"}, `${a.tool}${a.input ? ": " + a.input : ""}`)) : null,
+    a.state === "working" && a.tool ? h("div", {class:"aline"}, h("span", {class:"mono"}, `${a.tool}${a.input ? ": " + a.input : ""}`)) : null,
     tail && tail.length <= 900 && a.state !== "waiting" ? h("p", {class:"amsg"}, tail) : null,  // a waiting agent's question is in the answer box  // the message once, as prose; the raw log stays folded
     paras.length > 1 || tail.length > 900 ? h("details", {open: !!ui.msgOpen, ontoggle: e => { ui.msgOpen = e.target.open }}, h("summary", {}, "Last message"), W.log({lines: last.split("\n")})) : null,
     sessEl ? h("div", {class:"afoot"}, sessEl) : null);
@@ -1942,9 +1922,13 @@ function activity(r){
     if (e.kind === "q") {  // fold a run of quiet checks into one line
       let j = i; while (j + 1 < items.length && items[j + 1].kind === "q") j++;
       const key = e.ts, open = ui.actOpen && ui.actOpen.has(key);
-      if (j > i && !open) {
-        rows.push(h("li", {}, h("span", {class:"t"}, hm(e.ts)), h("span", {class:"k q"}),
-          h("button", {class:"quiet", onclick: () => { (ui.actOpen = ui.actOpen || new Set()).add(key); renderMain() }}, `${j - i + 1} quiet checks since ${hm(items[j].ts)}, nothing changed ▸`)));
+      if (j > i) {
+        if (!open) {
+          rows.push(h("li", {}, h("span", {class:"t"}, hm(e.ts)), h("span", {class:"k q"}),
+            h("button", {class:"quiet", onclick: () => { (ui.actOpen = ui.actOpen || new Set()).add(key); renderMain() }}, `${j - i + 1} quiet checks since ${hm(items[j].ts)}, nothing changed ▸`)));
+        } else {
+          for (let k = i; k <= j && rows.length < 40; k++) rows.push(h("li", {}, h("span", {class:"t"}, hm(items[k].ts)), h("span", {class:"k q"}), h("span", {class:"tx"}, short(items[k].text, 300))));
+        }
         i = j; continue;
       }
     }
@@ -2177,7 +2161,9 @@ function openOut(name){
 function closeOut(refocus){
   const o = ui.out; if (!o) return;
   saveOutLooked(o);
-  clearTimeout(o.timer); clearTimeout(o.xtimer); ui.out = null;
+  clearTimeout(o.timer); clearTimeout(o.xtimer); clearTimeout(o.jumpAwayT);
+  if (o.jumpAway) { document.removeEventListener("pointerdown", o.jumpAway); o.jumpAway = null }
+  ui.out = null;
   const el = document.getElementById("aout"); if (el) el.remove();
   const card = `.acard[data-name="${CSS.escape(o.name)}"]`;  // back where you clicked; the card's Answer/Open if its output line went (it asked, say)
   const back = refocus && (document.querySelector(`${card} button.aline`) || document.querySelector(`${card} button.open`) || document.querySelector("#main section.agents h2") || document.getElementById("main"));
@@ -2463,7 +2449,7 @@ function outHead(){  // who and what it's doing now, from the 5s snapshot; any r
   if (now.dataset.key === key) return;  // unchanged: a screen reader doesn't hear the same alert again
   now.dataset.key = key;
   now.replaceChildren(...(o.err ? [h("span", {class:"aerr", role:"alert"}, `Couldn't refresh: ${short(o.err, 160)}. Retrying.`)]
-    : a.state === "working" ? [h("span", {class:"adot", "aria-hidden":"true"}), h("span", {class:"mono", title: toolName ? `${toolName}: ${toolIn}` : ""}, toolName ? `${toolName}${toolIn ? ": " + toolIn : ""}` : "Working")]
+    : a.state === "working" ? [h("span", {class:"mono", title: toolName ? `${toolName}: ${toolIn}` : ""}, toolName ? `${toolName}${toolIn ? ": " + toolIn : ""}` : "Working")]
     : a.state === "waiting" ? [h("span", {class:"mono"}, "Waiting on your answer")] : [h("span", {class:"mono"}, "Not working right now")]));
 }
 /* ---------- All output, phases 2-3 (issue 191): turns and tool calls fold, search, filter and jump, stuck and looping warnings,
@@ -2720,10 +2706,12 @@ function outMarks(){
   for (const el of list.querySelectorAll(":scope > [data-id]")) { const e = byId.get(el.dataset.id); if (e && (o.hitSet?.has(e.id) || el.querySelector("mark"))) outMarkEl(el, e) }
 }
 /* Jump to: since you last looked, errors, tool calls, prompts, the latest */
-function outJumpMenu(open){
+function outJumpMenu(open, refocus = true){
   const o = ui.out, tb = document.getElementById("aout-tb"), btn = document.getElementById("aout-jumpbtn"); if (!o || !tb) return;
+  clearTimeout(o.jumpAwayT); o.jumpAwayT = 0;
+  if (o.jumpAway) { document.removeEventListener("pointerdown", o.jumpAway); o.jumpAway = null }
   document.getElementById("aout-jump")?.remove(); btn.setAttribute("aria-expanded", String(open));
-  if (!open) { btn.focus(); return }
+  if (!open) { if (refocus) btn.focus(); return }
   const errs = [...o.info.values()].filter(f => f.k === "err").length;
   const items = OUT_JUMPS.filter(([k]) => k !== "looked" || document.getElementById("aout-looked")).map(([k, d, label, key]) =>
     h("button", {role:"menuitem", class:"aomi", tabindex:"-1", onclick: () => { outJumpMenu(false); k === "latest" ? outBottom() : k === "fold" ? outFoldHere() : outJump(k, d) }},
@@ -2733,8 +2721,8 @@ function outJumpMenu(open){
     if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); f[(k + (e.key === "ArrowDown" ? 1 : -1) + f.length) % f.length].focus() }
     if (e.key === "Tab") { e.preventDefault(); e.stopPropagation(); outJumpMenu(false) } }}, ...items);
   tb.append(menu); menu.querySelector("[role=menuitem]")?.focus();
-  setTimeout(() => document.addEventListener("pointerdown", function away(ev){ if (!menu.contains(ev.target) && ev.target !== btn && !btn.contains(ev.target)) { menu.remove(); btn.setAttribute("aria-expanded", "false") }
-    document.removeEventListener("pointerdown", away) }), 0);
+  const away = ev => { if (!menu.contains(ev.target) && ev.target !== btn && !btn.contains(ev.target)) outJumpMenu(false, false) };
+  o.jumpAwayT = setTimeout(() => { o.jumpAwayT = 0; if (ui.out === o && menu.isConnected) { o.jumpAway = away; document.addEventListener("pointerdown", away) } }, 0);
 }
 function outJump(kind, dir = 1){  // from the last jump while it's in view, else from the edge of what you see; only the target's folds open
   const o = ui.out, log = document.getElementById("aout-log"), list = document.getElementById("aout-list"); if (!o || !log) return;
@@ -3061,13 +3049,15 @@ function render(){
 function sigOf(p){ return p ? [p.was || p.state, p.step, p.owner, p.agent.state].join("|") : "" }  // a lift isn't a reason to re-fetch the page
 function openPage(name){
   if (!shows("hex")) return post({cmd: "openPage", name});  // the workspaces live in another window: open it there
-  ui.page = {name, resp: null, loading: false, sig: sigOf(ui.snap.pucks.find(x => x.name === name))};
+  ui.page = {name, resp: null, loading: false, inflight: 0, freshInflight: false, sig: sigOf(ui.snap.pucks.find(x => x.name === name))};
   document.getElementById("main").scrollTop = 0;
   requestPage(false);
 }
 function requestPage(fresh){
   if (!ui.page) return;
-  ui.page.loading = true; if (fresh) ui.page.resp = null;
+  ui.page.loading = true;
+  ui.page.inflight = (ui.page.inflight || 0) + 1;
+  if (fresh) { ui.page.resp = null; ui.page.freshInflight = true }
   post({cmd: "page", name: ui.page.name, fresh});
   render();
 }
@@ -3100,7 +3090,7 @@ function activityLogEl(p){
 function hoverCard(p, tab = "overview"){
   const mr = p.mr && p.mr.iid ? p.mr : null, col = c(STATE[p.state].color), {n, i} = stepsOf(p), a = p.agent || {};
   const who = agentMeta(a.type).name, gs = ["working", "waiting"].includes(a.state) ? a.state : p.state === "crashed" ? "crashed" : a.type ? "idle" : null;  // as acard: a live agent outranks the crash
-  const sa = ago((Date.now() / 1000 - ui.snap.scanned) / 3600);
+  const sa = ui.snap.scanned ? ago((hostNow() - ui.snap.scanned) / 3600) : null;
   const tile = (k, v, m, tn) => h("div", {class: "ht"}, h("span", {class: "hk"}, k), h("span", {class: "v", style: tn ? `color:${ink(tn)}` : null}, v), m ? h("span", {class: "hm"}, m) : null);
   const branch = mr ? mr.source_branch : p.branch;
   let body;
@@ -3154,7 +3144,7 @@ function hoverCard(p, tab = "overview"){
   ];
   return h("div", {id: "hcard", role: "dialog", "aria-modal": "false", "aria-label": `${mr ? mrRef(mr) + " " : ""}${mr ? mr.title : p.name}`, "data-name": p.name, "data-tab": tab},
     h("div", {class: "row"}, statusPill(STATE[p.state].color.slice(2), STATE[p.state].label),
-      h("span", {class: "hm"}, sa === "now" ? "scanned just now" : `scanned ${sa} ago`)),
+      h("span", {class: "hm"}, !sa ? "not scanned yet" : sa === "now" ? "scanned just now" : `scanned ${sa} ago`)),
     h("div", {class: "hhd"}, mr ? h("div", {class: "id"}, h("b", {}, mrRef(mr)), h("span", {class: "hm"}, [p.project, mr.author].filter(Boolean).join(" · "))) : h("span", {class: "hm"}, p.project),
       h("div", {class: "tt"}, mr ? mr.title : p.name),
       sayOf(p) ? h("div", {class: "say", style: `color:${ink(STATE[p.state].color)}`}, short(sayOf(p), 140)) : null,  // what it's waiting on, in a line
@@ -3282,8 +3272,7 @@ function mergeEl(p, x){
 // dash.py tree merge / ready / signoff answered: the outcome in the toast (the hex left with the click)
 function merged(o){
   const name = Object.keys(ui.acting).find(n => ui.acting[n].path === o.path), t = stepTitle(o.step || "step");
-  if (!name) return o.error ? note(o.op === "signoff" ? `${t} didn't finish` : o.op === "ready" ? "Didn't mark it ready" : "Didn't merge", o.error, true)  // a reply after ACT_LOST: still say so
-    : console.log("dash: tree", o.op || "merge", "ok");
+  if (!name) { if (o.error) note(o.op === "signoff" ? `${t} didn't finish` : o.op === "ready" ? "Didn't mark it ready" : "Didn't merge", o.error, true); return }  // a reply after ACT_LOST: still say so
   acted(name, o.error, o.op === "signoff" ? [`${t} signed off`, o.ran ? `Ran ${o.ran}` : o.ref || ""]
     : o.op === "ready" ? [`${o.ref} is ready for review`, "Out of draft"] : [`Merged ${o.ref} into ${o.target}`, o.how]);
 }
@@ -3542,7 +3531,7 @@ document.addEventListener("pointerdown", e => {
 });
 
 /* ---------- to the Basement: Basement on a page, Open in Basement after New task ---------- */
-// B1 opens on the workspace's worktree: its latest tab there, or a new shell in it (Greenlight.swift: basement).
+// B1 opens on the workspace's worktree: its latest tab there, or a new shell in it (App.swift: basement).
 ui.sug = {}; ui.autorun = new Set();  // sug: greenlight's next step per workspace (the hover card's Next step); autorun: ones to run once it's written
 // resume (dash.py add_resume, issue 157): its last agent's tmux session to attach to, or the harness to continue there (terminal.html openWs)
 function toBasement(name){ const path = pathOf(name), r = (puckOf(name) || {}).resume; if (path) post({cmd: "basement", path, resume: r && typeof r === "object" ? r : {}}) }
@@ -3833,10 +3822,10 @@ window.mc = {
     if (ui.autorun.delete(r.name)) { if (r.prompt) runFor(r.name, r.prompt); else acted(r.name, r.error || "greenlight found no next step") }  // the hover card's Next step was waiting on it
     relabelCard(r.name) },
   merged(o){ merged(o) },
-  ran(r){ if (r.ok) delete ui.sug[r.name]; else console.log("dash: run failed:", r.name, r.error);  // the agent changes the state; the next suggestion follows it
+  ran(r){ if (r.ok) delete ui.sug[r.name];  // the agent changes the state; the next suggestion follows it
     acted(r.name, r.ok ? null : r.error || "it didn't start") },
   parked(r){  // the goal is set; the next snapshot carries it. A failure puts the hex back
-    if (r.error) { delete ui.parking[r.name]; console.log("dash: park failed:", r.error); render() }
+    if (r.error) { delete ui.parking[r.name]; render() }
   },
   tasked(r){ tasked(r) },
   steward(r){
@@ -3869,12 +3858,11 @@ window.mc = {
       // only SSH failure (255) gets a local fallback: a script exit (1) writes scan_error.json for the next stream tick
       if (code === 255) ui.rescanErr = {msg: "host unreachable", fix: "check SSH connection, then ↻",
         ts: Math.floor(hostNow()), prevScanned: ui.snap ? ui.snap.scanned : 0};
-      console.log("dash: rescan failed, exit " + code);
     } else ui.rescanErr = null;
     footer();
   },
   update(snap){
-    if (snap.error) { console.log("dash:", snap.error); return }
+    if (snap.error) return;
     clearTimeout(CONN.t); clearTimeout(CONN.t5); CONN.failed = CONN.refocus = false;
     if (snap.ts) ui.skew = Date.now() / 1000 - snap.ts;
     const hadSnap = !!ui.snap;
@@ -3934,6 +3922,10 @@ window.mc = {
   saved(r){ const sh = ui.out && ui.out.share; if (sh && r) { sh.saved = {ok: !!r.ok, error: r.error}; outShareRender() } },  // Save as file…'s outcome
   page(resp){
     if (!ui.page || resp.name !== ui.page.name) return;
+    const left = ui.page.inflight > 0 ? --ui.page.inflight : 0;
+    if (ui.page.freshInflight && left > 0) return;  // ignore stale earlier response(s) while a forced fresh refresh is still in flight
+    if (ui.page.resp && typeof ui.page.resp.designed === "number" && typeof resp.designed === "number" && resp.designed < ui.page.resp.designed) return;
+    ui.page.freshInflight = false;
     ui.page.loading = false;
     if (resp.error && !resp.facts) { ui.page.resp = {facts: {history: []}, error: resp.error}; render(); return }
     ui.page.resp = resp;

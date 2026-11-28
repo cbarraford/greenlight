@@ -10,17 +10,14 @@ import shutil
 import stat
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "scripts"))
+from conftest import ROOT
 
-os.environ.setdefault("GREENLIGHT_HOME", tempfile.mkdtemp(prefix="gl-plog-import-"))
-import pane_log  # noqa: E402
+import pane_log
 
 
 def test_valid_session_rejects_unsafe_names():
@@ -466,3 +463,71 @@ def test_live_tmux_hooks_record_across_detach_reattach_and_remote_noop(tmp_path)
         )
     finally:
         subprocess.run(["tmux", "-L", sock_swift, "kill-server"], env=env_sw, capture_output=True, timeout=10)
+
+
+def test_record_releases_lock_and_restores_sigterm_on_open_or_rotate_error(tmp_path, monkeypatch):
+    import signal
+    from unittest import mock
+
+    # BUG-INFRA-2a: exception in _open_session_log still closes and releases lock_fd
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "mc-sym.jsonl").symlink_to(tmp_path / "outside.jsonl")
+    r_fd, w_fd = os.pipe()
+    os.close(w_fd)
+    try:
+        with pytest.raises(OSError):
+            pane_log.record(session="mc-sym", log_dir=log_dir, in_fd=r_fd)
+        # Lock must be released so a subsequent acquisition succeeds
+        lock_fd = pane_log._acquire_session_lock(log_dir, "mc-sym")
+        assert lock_fd is not None
+        os.close(lock_fd)
+    finally:
+        os.close(r_fd)
+
+    # BUG-INFRA-2b: if _rotate_session_log closes fh then raises OSError, finally does not raise ValueError and closes lock_fd + restores SIGTERM
+    def failing_rotate(fh, *_a, **_kw):
+        fh.close()
+        raise OSError("simulated rotate failure")
+
+    r2, w2 = os.pipe()
+    os.write(w2, (b"a" * 3000) + b"\n" + (b"b" * 3000) + b"\n")
+    os.close(w2)
+    orig_sigterm = signal.getsignal(signal.SIGTERM)
+    try:
+        with mock.patch.object(pane_log, "_rotate_session_log", side_effect=failing_rotate), pytest.raises(OSError, match="simulated rotate failure"):
+            pane_log.record(session="mc-rotfail", max_bytes=8192, log_dir=log_dir, in_fd=r2)
+        assert signal.getsignal(signal.SIGTERM) == orig_sigterm
+        lock_fd = pane_log._acquire_session_lock(log_dir, "mc-rotfail")
+        assert lock_fd is not None
+        os.close(lock_fd)
+    finally:
+        os.close(r2)
+
+
+def test_attach_respects_code_dir_and_has_nonempty_file_handles_oserror(tmp_path):
+    from unittest import mock
+
+    # BUG-INFRA-4: code_dir passed to attach() is the repo root, not scripts/
+    fake_repo = tmp_path / "myrepo"
+    (fake_repo / "scripts").mkdir(parents=True)
+    (fake_repo / "scripts" / "pane_log.py").write_text("# stub\n")
+
+    cmds: list[list[str]] = []
+
+    def fake_run(cmd, **_kw):
+        cmds.append(list(cmd))
+        out = "0\n" if "display-message" in cmd else ""
+        return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+    with mock.patch.object(pane_log.subprocess, "run", side_effect=fake_run):
+        assert pane_log.attach("mc-cdir", cwd=str(tmp_path), socket="gl-sock", code_dir=fake_repo) is True
+    assert any("pipe-pane" in c and str(fake_repo / "scripts" / "pane_log.py") in c[-1] for c in cmds), cmds
+
+    # BUG-INFRA-11: _has_nonempty_file catches OSError (e.g., vanished file between is_file and stat)
+    p = tmp_path / "vanish.jsonl.1"
+    p.write_text("data\n")
+    assert pane_log._has_nonempty_file(p) is True
+    with mock.patch.object(Path, "stat", side_effect=FileNotFoundError("vanished")):
+        assert pane_log._has_nonempty_file(p) is False
+

@@ -28,7 +28,8 @@ final class Voice: NSObject, ObservableObject {
             ud.set(look.id, forKey: "stageStyle"); chatLookId = look.id; core?.look += 1
             if stageWebLoaded {
                 stageWeb.appearance = stageAppearance
-                stageWeb.evaluateJavaScript("(s => { \(look.vars) })(document.documentElement.style)")  // safety-ok: hardcoded Theme look.vars
+                if stageNav?.ready == true { stageWeb.evaluateJavaScript(look.vars) }  // safety-ok: hardcoded Theme look.vars
+                else if let q = stageNav?.queued { stageNav?.queued = q + ";\n" + look.vars }
             }
             core?.canvas.retheme()  // typed chat's canvas wears the look too (#208)
         }
@@ -158,7 +159,7 @@ final class Voice: NSObject, ObservableObject {
         if stageNav?.ready == true { stageWeb.evaluateJavaScript(code) }  // safety-ok: JSONSerialization args + hardcoded look.vars
         else { stageNav?.queued = (stageNav?.queued).map { $0 + ";\n" + code } ?? code }  // every call waits for the page, in order: the MR chips' map too (#208)
     }
-    /// A draw on the stage, and its `stage` event (#208): which draw, who asked for it (chief, fast, dwim, app), the card's kind
+    /// A draw on the stage, and its `stage` event (#208): which draw, who asked for it (chief, dwim, app), the card's kind
     /// and when in the turn it landed. `mark` is the turn as it was asked for, for a draw that lands later. Tokens and numbers only.
     func put(_ f: String, _ args: [Any], by: String, mark: (turn: Int, at: Date?)? = nil, extra: [String: Any] = [:]) {
         js(f, args)
@@ -278,7 +279,8 @@ final class Voice: NSObject, ObservableObject {
         guard !on, core?.recording == nil else { starting = false; return }  // dictation has the mic
         let live = Speech.shared.kind == "live"  // GPT-Live hears you itself: Speech Recognition isn't needed
         let finishAuth: (Bool, Bool) -> Void = { ok, speechOk in DispatchQueue.main.async {
-            guard g == self.startGen, !self.on, self.core?.recording == nil else { self.starting = false; return }
+            guard g == self.startGen else { return }
+            guard !self.on, self.core?.recording == nil else { self.starting = false; return }
             guard ok, speechOk else {
                 self.starting = false
                 self.core?.msgs.append(Msg(.note, "Voice mode needs Microphone and Speech Recognition: System Settings → Privacy & Security → Greenlight."))
@@ -319,7 +321,7 @@ final class Voice: NSObject, ObservableObject {
     }
 
     /// Drops an engine whose start failed, voice processing and all, for a new one. The player moves to the new engine.
-    /// Only while voice mode is off: play() reads `engine` off the main thread, and bails out first when it's off.
+    /// Only while voice mode is off: play() checks `on` on the main thread and bails out first when it's off.
     func freshEngine() {
         engine.stop()
         if inputTapped { engine.inputNode.removeTap(onBus: 0); inputTapped = false }
@@ -926,12 +928,25 @@ final class Speech {
         }
     }
 
+    private func readExact(_ fh: FileHandle, count: Int) throws -> Data {
+        var out = Data()
+        out.reserveCapacity(count)
+        while out.count < count {
+            guard let chunk = try fh.read(upToCount: count - out.count), !chunk.isEmpty else {
+                throw CocoaError(.fileReadUnknown)
+            }
+            out.append(chunk)
+        }
+        return out
+    }
+
     private func kokoroRead(_ text: String, kin: FileHandle, kout: FileHandle, voice: String) throws -> Data? {
         guard let line = try? JSONSerialization.data(withJSONObject: ["text": text, "voice": voice]) else { return nil }
         try kin.write(contentsOf: line + Data("\n".utf8))
-        guard let n = try kout.read(upToCount: 4), n.count == 4 else { throw CocoaError(.fileReadUnknown) }
+        let n = try readExact(kout, count: 4)
         let len = n.withUnsafeBytes { Int(UInt32(littleEndian: $0.loadUnaligned(as: UInt32.self))) }
-        return len == 0 ? nil : try kout.read(upToCount: len)
+        guard len <= 32 << 20 else { throw CocoaError(.fileReadUnknown) }
+        return len == 0 ? nil : try readExact(kout, count: len)
     }
 
     func kokoro(_ text: String) -> Data? {

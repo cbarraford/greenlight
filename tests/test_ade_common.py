@@ -311,6 +311,8 @@ def test_swarm_review_parser_and_security_regressions():
     assert ade_common.prompt_ask(oc_draft) is None
     assert ade_common.screen_state(oc_draft)["state"] == "finished"
     assert ade_common.screen_state(["Do you want to proceed?", "1. Yes", "2. No", "│ > fix the tests │"])["state"] == "unsent_draft"
+    # BUG-INFRA-5: bare `>` prompt with unsent draft must report unsent_draft, not finished
+    assert ade_common.screen_state(["Done.", "> follow up on tests"])["state"] == "unsent_draft"
 
     # broad prose false positives and restarted numbered lists after an answered prompt
     assert ade_common.prompt_ask(["• Update available packages:", "  1. ruff 0.9.0", "  2. pytest 8.3.0"]) is None

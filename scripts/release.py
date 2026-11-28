@@ -119,10 +119,6 @@ def committed(root: Path = ROOT) -> list[tuple[str, int, str]]:
     return sorted(rows)
 
 
-def backend_files(root: Path = ROOT) -> list[str]:
-    return [path for path, _, _ in committed(root)]
-
-
 def blobs(shas: list[str], root: Path = ROOT) -> list[bytes]:
     """Each blob's bytes, in one `git cat-file --batch`."""
     p = subprocess.run(["git", "-C", str(root), "cat-file", "--batch"], input="".join(f"{s}\n" for s in shas).encode(),

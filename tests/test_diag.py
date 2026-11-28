@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -307,7 +308,12 @@ def test_crash_reports_bundle_and_report_flow(diag_env, monkeypatch):
 
     monkeypatch.setenv("PATH", "/nonexistent")
     monkeypatch.setattr(diag.bins, "DIRS", ())
-    r = diag.report("Crash on scan", "It crashed.", execute=True)
+    with (
+        mock.patch.object(diag.shutil, "which", return_value=None),
+        mock.patch.object(diag.bins, "find", return_value=None),
+        mock.patch.object(diag.subprocess, "run", side_effect=AssertionError("would file a real issue")),
+    ):
+        r = diag.report("Crash on scan", "It crashed.", execute=True)
     assert r["filed"] is False and r["url"].startswith(f"https://github.com/{diag.REPO}/issues/new?"), r
 
     # the check fails closed: if audit can't load, nothing is exported
@@ -474,3 +480,91 @@ def test_cli_checks_reject_dirs_and_honour_harnesses_and_bins_gh(diag_env, tmp_p
     local_bin.mkdir(parents=True)
     diag.install("test_cli")
     assert str(local_bin) in os.environ["PATH"].split(os.pathsep)
+
+
+def test_issue_body_truncates_large_bundles():
+    big_events = [{"ts": i, "kind": "ping", "note": "x" * 600} for i in range(180)]
+    bundle = {
+        "manifest": {"version": "abc1234", "events": 180, "left_out": 0},
+        "summary": {"ok": True},
+        "doctor": {"ok": True},
+        "errors": [],
+        "events": big_events,
+    }
+    body = diag.issue_body("Steps to reproduce", bundle)
+    assert len(body) <= diag.ISSUE_MAX
+    assert body.endswith("</details>\n")
+
+
+def test_report_empty_title_inline_and_gh_failure(diag_env, monkeypatch):
+    monkeypatch.setattr(diag, "doctor", lambda: {"ok": True, "checks": []})
+    r_empty = diag.report("  ", "desc")
+    assert r_empty["ok"] is False and r_empty["blocked"] == "title"
+
+    r_prev = diag.report("Crash on startup", "Happens on launch", execute=False, inline=True)
+    assert r_prev["ok"] is True and r_prev["preview"] is True and "data" in r_prev
+
+    fake_gh = diag_env / "gh"
+    fake_gh.write_text("#!/bin/sh\n")
+    fake_gh.chmod(0o755)
+    with (
+        mock.patch.object(diag.bins, "find", return_value=str(fake_gh)),
+        mock.patch.object(diag.subprocess, "run", return_value=subprocess.CompletedProcess(["gh"], 1, stdout="", stderr="auth required")),
+    ):
+        r_fail = diag.report("Crash on startup", "Happens on launch", execute=True)
+    assert r_fail["ok"] is False and r_fail["filed"] is False and "auth required" in r_fail["reason"]
+
+
+def test_diag_cli_subcommands_step_privacy_and_malformed_configs(diag_env, monkeypatch, capsys):
+    monkeypatch.setattr(diag, "doctor", lambda quick=False: {"ok": True, "checks": []})
+    diag.event("ping", step="ci_green")
+    diag.event("orch", step="custom", step_h=diag.h("deploy_prod_acme"))
+    diag.event("orch", step="deploy_prod_acme", step_h="not-a-hash")
+
+    evs = _events()
+    assert evs[-3]["step"] == "ci_green" and "dropped" not in evs[-3]
+    assert evs[-2]["step"] == "custom" and len(evs[-2]["step_h"]) == 10 and "dropped" not in evs[-2]
+    assert "step" not in evs[-1] and "step_h" not in evs[-1] and evs[-1]["dropped"] == 2
+
+    # tail -n 0 prints nothing (BUG-INFRA-14)
+    diag.main(["tail", "-n", "0"])
+    assert capsys.readouterr().out == ""
+
+    diag.main(["tail", "-n", "10", "--kind", "ping"])
+    assert '"ping"' in capsys.readouterr().out
+
+    diag.main(["errors", "--since", "24h"])
+    assert isinstance(json.loads(capsys.readouterr().out), list)
+
+    diag.main(["summary", "--since", "24h"])
+    assert "version" in json.loads(capsys.readouterr().out)
+
+    diag.main(["bundle", "--out", "-"])
+    assert "manifest" in json.loads(capsys.readouterr().out)
+
+    out_file = diag_env / "b.json"
+    diag.main(["bundle", "--out", str(out_file)])
+    assert out_file.is_file()
+    capsys.readouterr()
+
+    with pytest.raises(SystemExit) as ex:
+        diag.main(["doctor"])
+    assert ex.value.code == 0
+    capsys.readouterr()
+
+    payload = json.dumps({"title": "UI bug", "body": "Something broke", "app_events": []})
+    monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
+    with pytest.raises(SystemExit) as ex:
+        diag.main(["report", "--json"])
+    assert ex.value.code == 0
+    assert json.loads(capsys.readouterr().out)["preview"] is True
+
+    # Non-dict JSON in config.json / automations.json must not crash config_shape() or doctor() (BUG-INFRA-14)
+    monkeypatch.undo()
+    monkeypatch.setattr(diag, "app_path", lambda: diag_env / "no-app.jsonl")
+    monkeypatch.setattr(diag, "crash_dir", lambda: diag_env / "crashes")
+    (diag_env / "config.json").write_text("[]")
+    (diag_env / "automations.json").write_text("[]")
+    assert diag.config_shape() == {}
+    doc = diag.doctor(quick=True)
+    assert isinstance(doc["checks"], list)

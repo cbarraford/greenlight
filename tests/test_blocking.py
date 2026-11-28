@@ -167,3 +167,48 @@ def test_scan_aggregation_and_all_failed_error(blocking_env):
         pytest.raises(RuntimeError, match="all 1 MR blocking checks failed"),
     ):
         blocking.scan()
+
+
+def test_open_mrs_milestone_and_plain(blocking_env, monkeypatch):
+    def fake_gl_all(url):
+        if "milestones?state=active" in url:
+            return [{"id": 10, "title": "rel-1.0"}, {"id": 11, "title": "other"}]
+        if "milestones/10/merge_requests" in url:
+            return [
+                {"iid": 1, "state": "opened", "draft": False, "project_id": 99},
+                {"iid": 2, "state": "opened", "draft": True, "project_id": 99},
+                {"iid": 3, "state": "opened", "draft": False, "project_id": 88},
+            ]
+        return [{"iid": 4, "state": "opened", "draft": False, "project_id": 99}]
+
+    monkeypatch.setattr(blocking.greenlight, "gl_all", fake_gl_all)
+    monkeypatch.setattr(blocking.greenlight, "gl", lambda _u: {"id": 99})
+    assert [m["iid"] for m in blocking.open_mrs("acme/widgets", "rel-")] == [1]
+    assert [m["iid"] for m in blocking.open_mrs("acme/widgets", None)] == [4]
+
+
+def test_blocking_cli_outputs_and_error(blocking_env, monkeypatch, capsys):
+    import json
+    import sys
+
+    sample = {
+        "acme/widgets!5": {"reason": "approval", "why": "awaiting your review", "n": 1, "url": "https://gl/5", "title": "Ship"},
+    }
+    monkeypatch.setattr(blocking, "blocks", lambda fresh=False: sample)
+    monkeypatch.setattr(sys, "argv", ["blocking.py", "--json"])
+    blocking.main()
+    assert json.loads(capsys.readouterr().out) == sample
+
+    monkeypatch.setattr(sys, "argv", ["blocking.py"])
+    blocking.main()
+    assert "[approval] acme/widgets!5" in capsys.readouterr().out
+
+    monkeypatch.setattr(blocking, "blocks", lambda fresh=False: {})
+    monkeypatch.setattr(sys, "argv", ["blocking.py"])
+    blocking.main()
+    assert "nothing is blocked on me" in capsys.readouterr().out
+
+    monkeypatch.setattr(blocking, "blocks", lambda fresh=False: None)
+    monkeypatch.setattr(sys, "argv", ["blocking.py"])
+    with pytest.raises(SystemExit):
+        blocking.main()

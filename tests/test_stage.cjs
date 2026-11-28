@@ -740,5 +740,45 @@ const { launchBrowser } = require("./js_harness.cjs");
   await cv.setViewportSize({ width: 340, height: cvFit });
   assert.ok(await cv.evaluate(() => { const h = document.getElementById("hist").getBoundingClientRect();
     return [...document.querySelectorAll("#s td")].every(td => td.getBoundingClientRect().bottom <= h.top); }), "history bar clears the last table row on the canvas");
+  // BUG-UI-7: stage.forward() back to liveEl (idle board) refreshes .chip nodes from REFS
+  const q4 = await b.newPage(); await q4.goto("file://" + require("path").join(__dirname, "../app/stage.html"));
+  await q4.evaluate(() => {
+    stage.refs({ "!5": { tone: "now", label: "CI running" }, "!6": { tone: "bad", label: "CI failed" } });
+    stage.text({ lead: "Card 1.", md: "- note" });
+    stage.wait("Listening", "");
+    stage.spec({ kind: "board", title: "", sections: [{ label: "Needs you", tone: "needs", rows: [
+      { ref: "!5", title: "a", age: "1h", why: "w1" },
+      { ref: "!6", title: "b", age: "2h", why: "w2" },
+      { ref: "!7", title: "c", age: "3h", why: "w3" },
+    ] }] });
+    stage.back();
+    stage.patch({ "!5": { tone: "ok", label: "CI passed" }, "!6": null, "!7": { tone: "needs", label: "Needs you" } });
+    stage.forward();
+  });
+  assert.deepEqual(await q4.$$eval("#s.board .chip", cs => cs.map(c => c.dataset.ref + ":" + c.textContent)),
+    ["!5:CI passed", "!7:Needs you"], "forward() to liveEl board refreshes updated/removed/new chips from REFS");
+  // BUG-UI-9: toggling reduced motion / data-motion=off clears fx immediately without a 200ms fade-out
+  await q4.evaluate(() => { document.documentElement.dataset.motion = "on"; stage.wait("One minute", "Working"); });
+  await q4.waitForTimeout(350);
+  assert.equal(await q4.evaluate(() => document.body.dataset.fx), "think");
+  await q4.evaluate(() => { document.documentElement.dataset.motion = "off"; stage.wait("Listening", ""); });
+  assert.equal(await q4.evaluate(() => document.body.dataset.fx), undefined, "fx clears immediately when motion is off");
+  assert.equal(await q4.evaluate(() => {
+    const c = document.getElementById("fx"), px = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    let n = 0; for (let i = 3; i < px.length; i += 4) if (px[i] > 0) n++; return n;
+  }), 0, "canvas has zero inked pixels immediately after stop under motion=off");
+  await q4.evaluate(() => { document.documentElement.dataset.motion = "on"; stage.wait("One minute", "Working"); });
+  await q4.waitForTimeout(350);
+  await q4.emulateMedia({ reducedMotion: "reduce" });
+  await q4.waitForTimeout(40);  // one rAF tick: frame() calls stop() which clears immediately
+  assert.equal(await q4.evaluate(() => document.body.dataset.fx), undefined, "reduced-motion clears fx immediately on next frame");
+  await q4.emulateMedia({ reducedMotion: "no-preference" });
+  // BUG-UI-10: stage.html(null/undefined) must not inject literal "null"/"undefined"
+  for (const val of [null, undefined]) {
+    await q4.evaluate(v => stage.html(v), val);
+    const srcdoc = await q4.getAttribute("#s iframe", "srcdoc");
+    assert.ok(!srcdoc.endsWith("null") && !srcdoc.endsWith("undefined"), `stage.html(${val}) leaked literal string into srcdoc`);
+  }
+  await q4.close();
   console.log("stage ok"); await b.close();
 })().catch(e => { console.error(e); process.exit(1); });

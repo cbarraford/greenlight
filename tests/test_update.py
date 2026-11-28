@@ -102,12 +102,45 @@ def test_install_from_tarball_lifts_a_single_top_folder(env):
     assert (root / "SKILL.md").is_file() and not (root / ".git").exists() and (root / "memory").is_symlink()
 
 
-@pytest.mark.parametrize("entries", [{"../x": "boom"}, {"/abs": "boom"}, {"SKILL.md": "x", "link": ("sym", "../../outside")}])
+@pytest.mark.parametrize("entries", [
+    {"../x": "boom"},
+    {"/abs": "boom"},
+    {"SKILL.md": "x", "link": ("sym", "../../outside")},
+    {"top/SKILL.md": "x", "top/VERSION": ("sym", "../VERSION")},
+])
 def test_install_refuses_unsafe_tarballs(env, entries):
     with pytest.raises(update.UpdateError) as e:
         update.install(_tar(env["tmp"] / "bad.tar.gz", entries))
     assert e.value.reason == "unsafe_archive"
     assert not (env["tmp"] / "x").exists()
+
+
+def test_install_refuses_symlink_version_and_corrupt_archive_and_reschedule_errors(env):
+    # SEC-2: symlinked VERSION in a source directory is refused before write_text
+    src = backend(env["tmp"] / "src-symver", ver=None)
+    target = env["tmp"] / "victim.txt"
+    target.write_text("original\n")
+    (src / "VERSION").symlink_to(target)
+    with pytest.raises(update.UpdateError) as e:
+        update.install(src, "1.2.3")
+    assert e.value.reason == "unsafe_archive"
+    assert target.read_text() == "original\n"
+
+    # BUG-INFRA-12: corrupt archive raises UpdateError("bad_archive")
+    bad_tgz = env["tmp"] / "corrupt.tar.gz"
+    bad_tgz.write_bytes(b"not a valid tar archive")
+    with pytest.raises(update.UpdateError) as e2:
+        update.install(bad_tgz)
+    assert e2.value.reason == "bad_archive"
+
+    # BUG-INFRA-12: reschedule returns "failed" on OSError / TimeoutExpired instead of crashing
+    unit = env["home"] / ".config/systemd/user/greenlight-auto.service"
+    unit.parent.mkdir(parents=True)
+    unit.write_text(f"ExecStart=python3 {update.versions_dir() / '1.0.0' / 'scripts' / 'auto.py'} tick\n")
+    with mock.patch.object(update.subprocess, "run", side_effect=OSError("no python")):
+        assert update.reschedule() == "failed"
+    with mock.patch.object(update.subprocess, "run", side_effect=update.subprocess.TimeoutExpired(["py"], 60)):
+        assert update.reschedule() == "failed"
 
 
 def test_swap_links_current_and_the_skill_then_rollback_goes_back(env):

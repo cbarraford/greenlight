@@ -6,8 +6,8 @@ that exits 0 without running any assertions when executed as `python3 tests/test
 
 For every `tests/test_*.py` (excluding the app-launching `test_uitest*.py` suites unless `--include-ui`):
   - If the file defines top-level `def test_*` functions or `class Test*` / `unittest.TestCase`,
-    execute it with `pytest -q` (and only run it as a standalone script too if it has
-    top-level executable assertions outside `if __name__ == "__main__"`).
+    execute it with `pytest -q` (and also run it as a standalone script if it defines an
+    `if __name__ == "__main__":` entrypoint).
   - Otherwise, execute it directly as a standalone script (`python3 <file>`).
   - Syntax errors or empty test files fail loudly without aborting the remaining suites.
   - Under `--coverage`, enables subprocess coverage (`COVERAGE_PROCESS_START` + temporary

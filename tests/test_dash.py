@@ -1269,3 +1269,206 @@ with tempfile.TemporaryDirectory() as _sd:
     assert "session_id" not in _uby["p-cross"], "active gemini must not cross-match a Claude transcript"
     assert "session_id" not in _uby["p-remote"] and "session_bin" not in _uby["p-remote"], "remote workspace must not get local disk session/bin"
 print("dash add_sessions ok")
+
+# --- SEC-9, BUG-CORE-4, BUG-CORE-10, settings edge cases, TEST-ADD-7 (forge, facts, git_facts, ask_user) ---
+import contextlib
+import io
+import subprocess
+
+# SEC-9: _agy_transcript_files skips invalid/path-traversal conversation_ids
+with tempfile.TemporaryDirectory() as _sec9_tmp:
+    _sec9_root = Path(_sec9_tmp)
+    _db = sqlite3.connect(_sec9_root / "conversation_summaries.db")
+    _db.execute("create table conversation_summaries (conversation_id text, workspace_uris text, updated_at text, summary text)")
+    _escape_dir = _sec9_root / "outside" / ".system_generated" / "logs"
+    _escape_dir.mkdir(parents=True)
+    (_escape_dir / "transcript.jsonl").write_text("{}\n")
+    _good_dir = _sec9_root / "brain" / "valid-cid-1" / ".system_generated" / "logs"
+    _good_dir.mkdir(parents=True)
+    (_good_dir / "transcript.jsonl").write_text("{}\n")
+    _db.execute("insert into conversation_summaries values (?, ?, ?, ?)", ("../outside", json.dumps(["/w/sec9"]), "2026-11-27T14:00:00Z", ""))
+    _db.execute("insert into conversation_summaries values (?, ?, ?, ?)", ("valid-cid-1", json.dumps(["/w/sec9"]), "2026-11-27T14:00:00Z", ""))
+    _db.commit()
+    _db.close()
+    with mock.patch.dict(os.environ, {"AGY_HOME": str(_sec9_root)}):
+        _found = dash._agy_transcript_files("/w/sec9", 0)
+    assert len(_found) == 1 and _found[0][1].parts[-4] == "valid-cid-1", _found
+
+# BUG-CORE-4: moves() disables on_auto on _intents is_held/is_parked, owner=="parked", "goal says hold"; tree_merge re-reads live goal
+dash.settings("autorun-set", "greenlight", json.dumps({"ci": 1, "merge": 0}))
+assert not any("auto" in m for m in dash.moves({**mine, "_intents": {"is_held": True}}))
+assert not any("auto" in m for m in dash.moves({**mine, "_intents": {"is_parked": True}}))
+assert not any("auto" in m for m in dash.moves({**mine, "next": {**mine["next"], "owner": "parked"}}))
+assert not any("auto" in m for m in dash.moves({**mine, "next": {**mine["next"], "action": "goal says hold; not merging"}}))
+with tempfile.TemporaryDirectory() as _gm_tmp:
+    _old_goals = dash.ade_common.GOALS
+    dash.ade_common.GOALS = Path(_gm_tmp) / "goals.json"
+    try:
+        _lj.write_text(json.dumps({"ts": 1, "rows": [_pending_auto]}))
+        dash.ade_common.set_goal("/w/b", "Merge !58 (hold)")
+        with mock.patch.object(dash, "moves", return_value=[{"kind": "merge", "how": "Squash", "target": "main", "auto": True}]), \
+             mock.patch.object(dash.audit, "same_target", return_value=True):
+            _res_hold = dash.tree_merge("/w/b", automatic=True)
+        assert "held or parked" in _res_hold.get("error", ""), _res_hold
+        dash.ade_common.set_goal("/w/b", "Completely new goal")
+        with mock.patch.object(dash, "moves", return_value=[{"kind": "merge", "how": "Squash", "target": "main", "auto": True}]), \
+             mock.patch.object(dash.audit, "same_target", return_value=True):
+            _res_chg = dash.tree_merge("/w/b", automatic=True)
+        assert "changed since scan" in _res_chg.get("error", ""), _res_chg
+    finally:
+        dash.ade_common.GOALS = _old_goals
+dash.settings("autorun-set", "greenlight", "{}")
+
+# BUG-CORE-10 + folded dash_settings unique assertions: missing STATE/MEMORY dirs, invalid ops, autorun bool rejection, run/transcript CLI error JSON
+with tempfile.TemporaryDirectory() as _s10_tmp:
+    _s10_state = Path(_s10_tmp) / "fresh-state"
+    _s10_mem = Path(_s10_tmp) / "missing-mem"
+    with mock.patch.object(dash.greenlight, "STATE", _s10_state), mock.patch.object(dash, "MEMORY", _s10_mem):
+        assert dash.settings("instructions-set", "-", "Run tests")["text"].strip() == "Run tests"
+        assert dash.settings("instructions-get", "-", "")["text"].strip() == "Run tests"
+        assert dash.settings("instructions-set", "-", "")["text"] == ""
+        assert dash.settings("memory-delete", "nonexistent", "") == {"notes": []}
+        assert dash.settings("memory-list", "-", "") == {"notes": []}
+        assert "error" in dash.settings("prompt-bogus", "widgets/ci", "")
+        assert "error" in dash.settings("lifecycle-bogus", "acme/widgets", "")
+        assert "error" in dash.settings("memory-bogus", "note1", "")
+        assert "error" in dash.settings("unknown-op", "-", "")
+        assert "error" in dash.settings("autorun-get", ".hidden", "")
+        _ar = dash.settings("autorun-set", "widgets", json.dumps({"ci": 0, "merge": True, "unknown": 0}))
+        assert _ar["on"] == {"ci": 0}
+        assert dash.settings("autorun-get", "widgets", "")["on"] == {"ci": 0}
+
+for _cli_op, _fn_name, _stdin in (("run", "run", "do work"), ("transcript", "transcript", "")):
+    _buf = io.StringIO()
+    with mock.patch.object(dash, _fn_name, side_effect=RuntimeError("cli boom")), \
+         mock.patch.object(sys, "argv", ["dash.py", _cli_op, "ws1"]), \
+         mock.patch.object(sys, "stdin", io.StringIO(_stdin)), \
+         contextlib.redirect_stdout(_buf):
+        dash.main()
+    _err_json = json.loads(_buf.getvalue())
+    assert _err_json["name"] == "ws1" and "cli boom" in _err_json["error"], _err_json
+
+# TEST-ADD-7: forge(), git_facts(), facts(), ask_user()
+_lj.write_text(json.dumps({"ts": 1, "rows": [{"name": "ws-gh", "project": "octo/app", "forge": "github", "mr": {"iid": 7, "forge": "github"}}]}))
+_gh_node = {"number": 7, "title": "Fix login", "url": "https://github.com/octo/app/pull/7", "updatedAt": "2026-11-27T00:00:00Z",
+            "isDraft": False, "author": {"login": "octo"}, "repository": {"nameWithOwner": "octo/app"}}
+with mock.patch.object(dash.greenlight, "gh", return_value={"data": {"search": {"nodes": [_gh_node]}}}), \
+     mock.patch.object(dash.greenlight, "gl", side_effect=RuntimeError("no glab")):
+    _f_repo = dash.forge("octo/app")
+    assert "Open in octo/app" in _f_repo and "workspace: ws-gh" in _f_repo, _f_repo
+    _f_all = dash.forge()
+    assert "Your MRs/PRs" in _f_all and "(couldn't ask gitlab:" in _f_all, _f_all
+
+with tempfile.TemporaryDirectory() as _gf_tmp:
+    subprocess.run(["git", "-C", _gf_tmp, "init", "-q", "-b", "main"], check=True)
+    subprocess.run(["git", "-C", _gf_tmp, "config", "user.email", "t@t"], check=True)
+    subprocess.run(["git", "-C", _gf_tmp, "config", "user.name", "t"], check=True)
+    (Path(_gf_tmp) / "hello.py").write_text("x = 1\ny = 2\n")
+    subprocess.run(["git", "-C", _gf_tmp, "add", "."], check=True)
+    subprocess.run(["git", "-C", _gf_tmp, "commit", "-qm", "init hello"], check=True)
+    _gf = dash.git_facts(_gf_tmp)
+    assert len(_gf["commits"]) == 1 and _gf["commits"][0]["subject"] == "init hello"
+    assert _gf["files"][0]["path"] == "hello.py" and _gf["files"][0]["add"] == 2
+with mock.patch.object(dash.subprocess, "run", side_effect=subprocess.TimeoutExpired("git", 10)):
+    assert dash.git_facts("/tmp") == {}
+
+with mock.patch.object(dash, "snapshot", return_value={"pucks": [{"name": "ws1", "path": "/tmp", "project": "o/r", "mr": {"iid": 3, "state": "opened", "forge": "github", "sha": "s1"}}]}), \
+     mock.patch.object(dash, "history", return_value=[]), \
+     mock.patch.object(dash, "git_facts", return_value={"commits": [], "files": []}), \
+     mock.patch.object(dash, "mr_facts", return_value={"pipeline": "success"}), \
+     mock.patch.object(dash.greenlight, "verify_status", return_value=None), \
+     mock.patch.object(dash.ws_state, "current_key", return_value="ws1"), \
+     mock.patch.object(dash.ws_state, "load", return_value={"failed_approaches": ["tried x"]}):
+    _fc = dash.facts("ws1")
+    assert _fc["mr_live"] == {"pipeline": "success"} and _fc["failed_approaches"] == ["tried x"]
+
+with mock.patch.object(dash, "waiting_term", return_value="no waiting agent"):
+    assert dash.ask_user("ws1") == {"name": "ws1", "error": "no waiting agent"}
+with mock.patch.object(dash, "waiting_term", return_value=({"path": "/tmp"}, {"state": "done", "lastAssistantMessage": "All set!"}, None, {})):
+    assert dash.ask_user("ws1") == {"name": "ws1", "question": "All set!", "kind": "prompt", "options": []}
+with mock.patch.object(dash, "waiting_term", return_value=({"path": "/tmp"}, {"state": "waiting", "lastAssistantMessage": "Deploy now?"}, None, {"tail": []})), \
+     mock.patch.object(dash, "ask", return_value='["Yes, deploy", "Hold off"]'):
+    _au = dash.ask_user("ws1")
+    assert _au["kind"] == "prompt" and [o["label"] for o in _au["options"]] == ["Yes, deploy", "Hold off"]
+
+# Folded from #258: task repos + repo-remove in settings
+with tempfile.TemporaryDirectory() as _rr_tmp:
+    import ade_basement as _ab
+    import diag as _dg
+    _rr = Path(_rr_tmp)
+    _r1 = _rr / "code" / "widgets"
+    _r1.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=_r1, check=True)
+    subprocess.run(["git", "remote", "add", "origin", "https://github.com/acme/widgets.git"], cwd=_r1, check=True)
+    _r2 = _rr / "code" / "local-only"
+    _r2.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=_r2, check=True)
+    with mock.patch.object(dash.greenlight, "STATE", _rr), \
+         mock.patch.object(_ab, "HOME", _rr), \
+         mock.patch.object(_ab, "REPOS", _rr / "repos.json"), \
+         mock.patch.dict(os.environ, {"GREENLIGHT_ADE": "native"}), \
+         mock.patch.object(dash.greenlight, "orca", return_value={"repos": []}):
+        _ab.register(str(_r1))
+        _ab.register(str(_r2))
+        with mock.patch.object(dash, "repos", return_value=[{"id": str(_r1.resolve()), "name": "widgets", "host": "github", "path": "acme/widgets"}]):
+            _listed = dash.task("repos", "-", "")
+        assert _listed["ade"] == "native"
+        assert _listed["repos"] == [{"name": "widgets", "host": "github", "path": "acme/widgets", "checkout": str(_r1.resolve())}]
+        assert set(_listed["registered"]) == {str(_r1.resolve()), str(_r2.resolve())}
+
+        for _bad in (
+            ("../evil", ""), (".hidden", ""), ("widgets", "{bad"), ("widgets", "[]"),
+            ("widgets", json.dumps({"path": "../bad"})),
+            ("widgets", json.dumps({"checkout": "relative/path"})),
+            ("widgets", json.dumps({"checkout": "/a/../b"})),
+        ):
+            assert "error" in dash.settings("repo-remove", *_bad)
+
+        _stages = [{"key": "ci_green", "req": "CI passes", "done": ""}]
+        dash.settings("lifecycle-set", "widgets", json.dumps({"stages": _stages}))
+        dash.settings("lifecycle-set", "acme/widgets", json.dumps({"stages": _stages}))
+        dash.settings("lifecycle-set", "keep", json.dumps({"stages": _stages}))
+        dash.settings("prompt-set", "widgets/ci", "Custom CI")
+        dash.settings("prompt-set", "keep/ci", "Keep CI")
+        dash.settings("autorun-set", "widgets", json.dumps({"ci": 0}))
+        dash.settings("autorun-set", "keep", json.dumps({"ci": 0}))
+
+        _events = []
+        with mock.patch.object(_dg, "event", side_effect=lambda kind, **f: _events.append((kind, _dg.clean(f)))):
+            _res = dash.settings("repo-remove", "widgets", "")
+        assert _res["ok"] is True and _res["repo"] == "widgets"
+        assert _res["unregistered"] == [str(_r1.resolve())]
+        assert _res["removed_config"] == ["autorun", "lifecycle", "prompts"]
+        assert _res["still_in_ade"] is False and "note" not in _res
+        assert _ab.saved() == [str(_r2.resolve())] and _r1.is_dir()
+        assert not (_rr / "lifecycles" / "widgets.md").exists()
+        assert not (_rr / "lifecycles" / "acme__widgets.md").exists()
+        assert not (_rr / "prompts" / "widgets").exists()
+        assert "widgets" not in dash.autorun()
+        assert (_rr / "lifecycles" / "keep.md").exists() and (_rr / "prompts" / "keep" / "ci.md").exists() and "keep" in dash.autorun()
+        assert _events and _events[-1][0] == "repo" and "dropped" not in _events[-1][1]
+
+        _dup = _rr / "more" / "local-only"
+        _dup.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=_dup, check=True)
+        _ab.register(str(_dup))
+        _amb = dash.settings("repo-remove", "local-only", "")
+        assert "error" in _amb and len(_ab.saved()) == 2
+        _ok_dup = dash.settings("repo-remove", "local-only", json.dumps({"checkout": str(_dup.resolve())}))
+        assert _ok_dup["ok"] is True and _ok_dup["unregistered"] == [str(_dup.resolve())] and _ab.saved() == [str(_r2.resolve())]
+
+        with mock.patch.object(dash.greenlight, "orca", return_value={
+            "repos": [{"id": str(_r2.resolve()), "path": str(_r2.resolve()), "displayName": "local-only"}]
+        }):
+            _still_nat = dash.settings("repo-remove", "local-only", "")
+        assert _still_nat["ok"] is True and _still_nat["still_in_ade"] is True and "Basement terminal" in _still_nat["note"]
+
+        with mock.patch.dict(os.environ, {"GREENLIGHT_ADE": "orca"}), \
+             mock.patch.object(dash.greenlight, "orca", return_value={
+                 "repos": [{"id": "o1", "path": "/orca/keep", "displayName": "keep",
+                            "gitRemoteIdentity": {"canonicalKey": "github.com/acme/keep"}}]
+             }):
+            _still_orca = dash.settings("repo-remove", "keep", json.dumps({"path": "acme/keep"}))
+        assert _still_orca["ok"] is True and _still_orca["ade"] == "orca" and _still_orca["still_in_ade"] is True
+        assert _still_orca["removed_config"] == ["autorun", "lifecycle", "prompts"] and "Orca" in _still_orca["note"]
+print("dash hardening & backfill ok")

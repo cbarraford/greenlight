@@ -272,7 +272,6 @@ button:focus-visible,.tab:focus-visible,select:focus-visible,summary:focus-visib
 #card .hd{display:flex;align-items:center;gap:8px} #card .hd b{flex:1;min-width:0;font:600 var(--fs-tsm)/20px var(--font);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #card .k-dim{color:var(--dim)}
 #card .pill,#card .tag{display:flex;align-items:center;gap:4px;flex-shrink:0;height:20px;box-sizing:border-box;padding:0 6px;border-radius:var(--r-full);font:500 var(--fs-cap)/14px var(--font);background:var(--tn-bg,var(--fill));color:var(--tn,var(--dim))}
-#card .pill i{display:none}
 #card .br{display:flex;align-items:center;gap:4px;margin-top:-8px;color:var(--dim);font:400 var(--fs-cap)/14px var(--mono);overflow:hidden;white-space:nowrap} #card .br span{overflow:hidden;text-overflow:ellipsis}  /* minmax(0,1fr): a long branch can't widen the card */
 #card .by{display:flex;align-items:center;gap:4px;margin-top:-8px;color:var(--dim);font:400 var(--fs-cap)/14px var(--font)} #card .by i{display:flex;margin-left:2px} #card .av{position:relative;display:grid;place-items:center;width:16px;height:16px;margin-left:-4px;border-radius:var(--r-full);overflow:hidden;background:var(--fill-a);color:var(--fg);font:500 var(--fs-cap)/1 var(--font);font-style:normal;box-shadow:0 0 0 2px var(--raised)} #card .av:first-child{margin-left:0} #card .av img{position:absolute;inset:0;width:100%;height:100%}
 #card .goal .lb,#card .rec .lb{display:block;margin-bottom:2px;color:var(--dim);font:500 var(--fs-lbl)/16px var(--font);font-style:normal}
@@ -343,7 +342,7 @@ button:focus-visible,.tab:focus-visible,select:focus-visible,summary:focus-visib
 #dlg button.lite{display:flex;align-items:center;gap:4px;padding:0 8px;background:none;color:var(--dim)} #dlg button.lite:hover:not(:disabled){background:var(--fill);color:var(--fg)} #dlg button.lite:disabled{background:none}
 #dlg .big .dn button.lite{color:var(--r)}
 #dlg button kbd{font:400 var(--fs-cap)/14px var(--font);opacity:.72;margin-left:4px}
-/* the project editor and the new-window picker: forms in the same modal */
+/* the design picker and modal forms */
 #dlg .dz{display:grid;grid-template-columns:1fr 1fr;gap:8px} #dlg .dz button{height:auto;display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:8px 12px;border-radius:var(--r-md);text-align:left}
 #dlg .dz button[aria-pressed=true]{box-shadow:0 0 0 2px var(--raised),0 0 0 4px var(--focus)} #dlg .dz .dots{display:flex;gap:4px} #dlg .dz i{width:12px;height:12px;border-radius:var(--r-full)}
 #dlg form.wide{width:min(640px,92vw);max-height:72vh;overflow-y:auto} #dlg h4{margin:4px 0 0;color:var(--fg);font:600 var(--fs-body)/16px var(--font)}
@@ -352,10 +351,8 @@ button:focus-visible,.tab:focus-visible,select:focus-visible,summary:focus-visib
 #dlg input[type=text]:hover,#dlg select:hover,#dlg textarea:hover{box-shadow:inset 0 0 0 1px var(--line-h)}
 #dlg input[type=text]:focus,#dlg select:focus,#dlg textarea:focus{box-shadow:inset 0 0 0 1px var(--focus),var(--ring)} #dlg textarea{padding:8px;resize:vertical;font:400 var(--fs-body)/19px var(--font)}
 #dlg input::placeholder,#dlg textarea::placeholder{color:var(--faint)}
-#dlg .pj{display:grid;grid-template-columns:1fr auto;gap:8px;padding:8px;border-radius:var(--r-md);background:var(--surface)} #dlg .pj textarea{grid-column:1/-1}
-#dlg .rp{display:grid;grid-template-columns:1fr 160px;align-items:center;gap:8px} #dlg .rp span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:400 var(--fs-cap)/14px var(--mono)}
 #dlg input[type=color]{width:100%;height:24px;padding:0;border:0;background:none}
-#dlg .err{display:flex;align-items:center;gap:4px;color:var(--r);font:400 var(--fs-cap)/14px var(--font)} #dlg .err:empty{display:none} #dlg label.sub{padding-left:24px} #dlg .grid{display:grid;gap:8px}
+#dlg .err{display:flex;align-items:center;gap:4px;color:var(--r);font:400 var(--fs-cap)/14px var(--font)} #dlg .err:empty{display:none}
 /* the roomy dialogs (projects, colours, open projects, diff, new workspace): a title bar, a body, a footer bar */
 #dlg form.big{width:min(880px,94vw);height:min(620px,86vh);max-height:none;padding:0;gap:0;grid-template-rows:auto minmax(0,1fr) auto;overflow:hidden}
 #dlg form.big.cc{height:min(660px,88vh)} #dlg form.big.nw{width:min(640px,92vw);height:auto;max-height:86vh}
@@ -400,7 +397,7 @@ button:focus-visible,.tab:focus-visible,select:focus-visible,summary:focus-visib
 #dlg .tile input{appearance:none;flex:0 0 auto;width:16px;height:16px;margin:0;border-radius:var(--r-xs);box-shadow:inset 0 0 0 1.5px var(--line-h)} #dlg .tile input:focus-visible{outline:0;box-shadow:inset 0 0 0 1.5px var(--line-h),var(--ring)}
 #dlg .tile input:checked{box-shadow:none;background:var(--accent)}
 #dlg .tile input:checked::after{content:"";display:block;width:9px;height:5px;margin:4px 0 0 3px;border:solid var(--on-accent);border-width:0 0 2px 2px;transform:rotate(-45deg)}
-#dlg .tile>span{flex:1;min-width:0} #dlg .tile b,#dlg .tile small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} #dlg .tile b,#dlg .pn b{font-weight:600}
+#dlg .tile>span{flex:1;min-width:0} #dlg .tile b,#dlg .tile small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} #dlg .tile b{font-weight:600}
 #dlg .tile small{color:var(--dim);font:400 var(--fs-cap)/14px var(--font)}
 /* colours: a preview of this window on the left; premade, your words or every colour on the right */
 #dlg .ccb{display:grid;grid-template-columns:360px minmax(0,1fr);min-height:0}
@@ -816,8 +813,7 @@ const agentCmd = (a, prompt) => {
   if (!prompt) return k;
   if (k === "agy" || k === "gemini") return `${k} -i ${ansi(prompt)}`;
   if (k === "opencode") return `${k} --prompt ${ansi(prompt)}`;
-  if (k === "pi") return `${k} -- ${ansi(prompt)}`;
-  return `${k} ${ansi(prompt)}`;
+  return `${k} -- ${ansi(prompt)}`;
 };
 const paneIcon = (p, w) => isClaude(p) ? I.claude(w) : isCodex(p) ? I.codex(w) : isAgy(p) ? I.agy(w) : I.shell(w);  // ⌬: codex, ◈: agy (tmux set-titles-string)
 const tabName = tab => tab.name || paneTitle(tab.focus);
@@ -1296,7 +1292,7 @@ function readyDone(o){
 }
 function mergeDone(o){
   if (autoMerge.delete(o.path)) return post({cmd: "notify", title: o.error ? `Didn't merge ${wsName(o.path)}` : `Merged ${o.ref} into ${o.target}`, body: o.error || "Auto-run: greenlight merged it"});
-  const box = cardWs === o.path && !$("card").hidden && $("card").querySelector(".mg");
+  const box = cardWs === o.path && !$("card").hidden && $("card").querySelector(".mg.st");
   if (!box) return o.error ? ask({icon: "warn", title: `Didn't merge ${wsName(o.path)}`, text: esc(o.error), cancel: false}) : toast(`Merged ${o.ref} into ${o.target}`);
   box.className = "mg " + (o.error ? "no" : "ok");
   box.innerHTML = o.error ? `<b>Didn't merge</b><code>${esc(o.error)}</code>` : I.merge + `<span><b>Merged ${esc(o.ref)} into ${esc(o.target)}</b><small>${esc(o.how)}</small></span>`;
@@ -1311,8 +1307,10 @@ function drawNext(){
 const facts = new Map();  // path → dash.py tree info, so the next open starts from the last answer
 const dfn = o => o && (o.added || o.removed) ? `+${o.added | 0} −${o.removed | 0}` : "";  // the card's Diff button: branch plus uncommitted, in lines
 const EDITOR = q.get("editor") || "Editor";  // the app's pick: Zed, Cursor or VS Code
-// a small modal: an icon, a title, some text (html) or risk rows, an optional checkbox → {checked} or null
+let dlgClose = null;  // closes/resolves the active #dlg modal before another replaces it
+// a small modal: an icon, a title, some text (html) or risk rows, an optional checkbox → {checked}, null, or false (superseded)
 function ask({icon, title, text, note, rows = [], check, ok = "Close", danger, cancel = "Cancel", safe}){
+  const prev = dlgClose; dlgClose = null; prev?.();
   const d = $("dlg"), f = el("form"); f.setAttribute("role", "dialog"); f.setAttribute("aria-label", title);
   f.innerHTML = (icon ? `<span class="ic ${icon === "trash" ? "k-r" : "k-o"}">${icon === "trash" ? IC.trash(17) : IC.warn}</span>` : "")
     + `<div><h3>${esc(title)}</h3>${text ? `<p>${text}</p>` : ""}</div>` + (note ? `<div class="note k-g">${g16(G.ok)}${note}</div>` : "")
@@ -1323,7 +1321,15 @@ function ask({icon, title, text, note, rows = [], check, ok = "Close", danger, c
   const btns = el("div", "btns"); btns.append(...(cancel ? [no] : []), yes); f.append(btns);
   d.replaceChildren(f); d.hidden = false; (safe ? no : yes).focus();
   return new Promise(res => {
-    const end = v => { d.hidden = true; d.replaceChildren(); res(v); cur?.focus.t.focus() };
+    let closed = false;
+    const end = (v, refocus = true) => {
+      if (closed) return;
+      closed = true;
+      if (dlgClose === close) dlgClose = null;
+      d.hidden = true; d.replaceChildren(); res(v); if (refocus) cur?.focus.t.focus();
+    };
+    const close = () => end(false, false);
+    dlgClose = close;
     no.onclick = () => end(null);
     f.onsubmit = e => { e.preventDefault(); end({checked: !!cb?.checked}) };
     f.onkeydown = e => { e.stopPropagation(); if (e.key === "Escape") end(null) };
@@ -1868,17 +1874,26 @@ setTitle();
 // a form in the modal: onOk() true closes it, false keeps it (a field said why). opt: cls "big" for the roomy layout (a title bar, a footer bar),
 // sub (a line by the title), head (nodes at the title bar's end), left/right (footer nodes either side of the gap), done (one Done button; the body has its own submit)
 function dlgForm(title, body, ok, onOk, onEnd, {cls = "wide", sub = "", head = [], left = [], right = [], done, icon} = {}){
+  const prev = dlgClose; dlgClose = null; prev?.();
   const d = $("dlg"), f = el("form", cls); f.setAttribute("role", "dialog"); f.setAttribute("aria-label", title);
   const tt = `<h3>${esc(title)}</h3>` + (sub ? `<span class="sub">${esc(sub)}</span>` : "");
   const h = el("div", "dh", icon ? `<span class="hic">${icon}</span><div class="stk">${tt}</div>` : tt); h.append(el("span", "gap"), ...head); f.append(h, body);
   const no = Object.assign(el("button", done ? "go" : ""), {type: "button", textContent: done ? "Done" : "Cancel"}), yes = Object.assign(el("button", "pri"), {type: "submit", textContent: ok});
   const btns = el("div", "btns"); btns.append(...left, ...left.length || right.length ? [el("span", "gap")] : [], ...right, no, ...done ? [] : [yes]); f.append(btns);
-  const end = () => { d.hidden = true; d.replaceChildren(); onEnd?.(); cur?.focus.t.focus() };
-  if (/\bbig\b/.test(cls) && !head.length) { const x = Object.assign(el("button", "x", ico("close", 14)), {type: "button", onclick: end}); x.setAttribute("aria-label", "Close"); h.append(x) }
-  no.onclick = end; f.onsubmit = e => { e.preventDefault(); if (onOk()) end() };
+  let closed = false;
+  const end = (refocus = true) => {
+    if (closed) return;
+    closed = true;
+    if (dlgClose === close) dlgClose = null;
+    d.hidden = true; d.replaceChildren(); onEnd?.(); if (refocus) cur?.focus.t.focus();
+  };
+  const close = () => end(false);
+  dlgClose = close;
+  if (/\bbig\b/.test(cls) && !head.length) { const x = Object.assign(el("button", "x", ico("close", 14)), {type: "button", onclick: () => end()}); x.setAttribute("aria-label", "Close"); h.append(x) }
+  no.onclick = () => end(); f.onsubmit = e => { e.preventDefault(); if (onOk()) end() };
   f.onkeydown = e => { e.stopPropagation(); if (e.key === "Escape") end() };
   d.replaceChildren(f); d.hidden = false; f.querySelector(".dh ~ * :is(input, select, textarea, button)")?.focus();
-  return end;
+  return () => end();
 }
 // Edit projects: Settings › Projects, the app's one editor for them (names, folders, repos); its saves come back as term.projects
 function editProjects(){ post({cmd: "settings", tab: "Projects"}) }
@@ -1886,7 +1901,6 @@ function editProjects(){ post({cmd: "settings", tab: "Projects"}) }
 function repoIn(ps, r){ return ps.find(p => p.repos.includes(r)) ?? ps.find(p => trees.some(w => w.main && w.project === r && p.dirs.some(d => under(w.path, d)))) }
 function reposOf(ps, p){ return [...new Set(trees.filter(w => w.project && repoIn(ps, w.project) === p).map(w => w.project))] }  // hoisted: setTitle runs first
 const nRepos = n => `${n} repo${n === 1 ? "" : "s"}`;
-// a project's color square, by its place in the list (ponytail: moves when projects reorder; store one per project if that bothers)
 const sq = name => `<i class="sq" aria-hidden="true">${esc((String(name || "").trim()[0] || "·").toUpperCase())}</i>`;  // a project's monogram tag (DESIGN.md §10.19), never a colour
 const tilde = p => HOME && under(p, HOME) ? "~" + p.slice(HOME.length) : p;
 // Open projects: in a new window (the app opens one, to put on any display) or this one (its shells stay); all projects, or the ones you tick
@@ -2028,8 +2042,8 @@ function pickDesign(opts, title = "Pick a design"){
     ["accent", "o", "r", "g", "b", "p", "y", "t"].forEach(k => { const d = el("i"); d.style.background = c[k] || "transparent"; dots.append(d) });
     b.onclick = () => pick(i); body.append(b);
   });
-  pick(0);
   dlgForm(title, body, "Use this", () => { setLook("own", {...worn(), ...opts[sel].colors}, opts[sel].light); toast("Restyled this window", true); return true }, () => { preview = null; paint() });
+  pick(0);
 }
 $("jump").onclick = () => palette(true);
 $("sdv").onmousedown = e => {
@@ -2082,8 +2096,17 @@ function restore(st){
     for (const t of st?.tabs || []) {
       if (!t.tree) continue;
       const tab = mkTab(t.ws || "", {...t, set: t.set ?? t.ws ?? ""}), mounts = [];  // older layouts: a set per workspace
-      tab.r.append(build(tab, t.tree, mounts));
-      tabs.forEach(x => x.r.hidden = x !== tab); mounts.forEach(m => m());
+      try {
+        const dom = build(tab, t.tree, mounts);
+        if (!tab.focus) throw new Error("empty tab tree");
+        tab.r.append(dom);
+        tabs.forEach(x => x.r.hidden = x !== tab); mounts.forEach(m => m());
+      } catch (e) {
+        for (const p of paneOf(tab)) { panes.delete(p.id); p.t.dispose?.() }
+        const idx = tabs.indexOf(tab); if (idx >= 0) tabs.splice(idx, 1);
+        tab.r.remove();
+        post({cmd: "error", text: "restore: " + e});
+      }
     }
   } catch (e) { post({cmd: "error", text: "restore: " + e}) }
   restored = true;
@@ -2533,6 +2556,7 @@ function diffShow(o){
     toAgent(ws, `Notes on the diff (${o.mode === "head" ? "uncommitted changes" : "this branch vs " + o.base}):\n` + k.map(n => `- ${n.f}:${n.at}: ${n.text.trim()}`).join("\n"));
     notes.length = 0; return true;
   }, () => diffs.delete(ws), {cls: "big cc", sub: `Click a line to leave ${targetWho()} a note on it`, head: [seg], left: [ed, dest]});
+  diffs.add(ws);
   count();
 }
 // a dev server's port, from processes started in this worktree's terminals: a click opens it (through an ssh tunnel when the host is remote)

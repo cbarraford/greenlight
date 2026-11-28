@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
 """audit: principal-agent contracts an unattended agent's work must keep before it leaves the box, and the outbound review gate.
 
-    audit.py gate push [--path DIR] [--target BRANCH] before an unattended push: the branch's diff against the goal. Exit 0 pass,
-                                                    3 blocked (each failed contract on its own line), 4 the audit couldn't run
+    audit.py gate push [--path DIR] [--target BRANCH] [--execute] [--force-with-lease]
+                                                    before an unattended push: the branch's diff against the goal (`--execute`
+                                                    pushes the audited commit). Exit 0 pass, 3 blocked (each failed contract on
+                                                    its own line), 4 the audit couldn't run
     audit.py gate post <comments.json> [--path DIR] [--kind review|reply] [--execute]
                                                     before posting review comments or thread replies: one JSON line {post, draft,
                                                     drop, failed}. `--execute` posts approved comments and resolves approved replies
-    audit.py gate pr <metadata.json> [--path DIR] --execute
-                                                    audit {title, body}, then create a draft PR/MR with those exact bytes
-    audit.py merge <worktree path>                  the merge audit for that workspace's MR at the head the last scan saw (cached
+    audit.py gate pr <metadata.json> [--path DIR] [--execute]
+                                                    audit {title, body}; `--execute` creates a draft PR/MR with those exact bytes
+    audit.py merge <worktree path> [--escalate] [--req FILE]
+                                                    the merge audit for that workspace's MR at the head the last scan saw (cached
                                                     per head commit): one JSON line, exit as `gate push`
+    audit.py checked-merge <forge> <project> <iid> <target> <sha> <target_oid> <cmd...>
+                                                    run the forge merge command only while live head/target still match
     audit.py publish <file>                         SafeToPublish on a file about to go out (report.html): exit as `gate push`
+    audit.py review [--path DIR] [--target BRANCH] [--deterministic-only]
+                                                    pre-PR review gate: ruff + check_safety + diff contracts against target
 
 Four contracts, asked in parallel through decide.batch (System One: scripts/decide.py), each phrased so True means kept:
     diff_matches_goal       NoScopeCreep   every change in the diff serves the goal
@@ -1428,6 +1435,11 @@ def _arg(args, flag, default=None):
 
 def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
+    if args[:1] == ["checked-merge"]:
+        if len(args) >= 10:
+            return checked_merge(args[1], args[2], args[3], args[4], args[5], args[6], args[7:])
+        print(__doc__.strip())
+        return 2
     path = _arg(args, "--path", os.getcwd())
     kind = _arg(args, "--kind", "review")
     esc = "--escalate" in args and not args.remove("--escalate")
@@ -1435,8 +1447,6 @@ def main(argv=None):
     force = "--force-with-lease" in args and not args.remove("--force-with-lease")
     requested_target = _arg(args, "--target")
     req = _arg(args, "--req")
-    if args[:1] == ["checked-merge"] and len(args) >= 10:
-        return checked_merge(args[1], args[2], args[3], args[4], args[5], args[6], args[7:])
     if args[:2] == ["gate", "pr"] and len(args) == 3:
         try:
             metadata = json.loads(Path(args[2]).read_text())
@@ -1711,6 +1721,8 @@ def main(argv=None):
                     errs.append(f"{label} failed:\n{(p.stderr or p.stdout).strip()[:800]}")
             except FileNotFoundError:
                 errs.append(f"{label}: tool not installed")
+            except (OSError, subprocess.TimeoutExpired) as e:
+                errs.append(f"{label} failed: {type(e).__name__}")
         if errs:
             print("\n".join(errs))
             return 3
@@ -1773,7 +1785,7 @@ class _Tee(io.TextIOBase):
 if __name__ == "__main__":
     import diag
     diag.install("audit")
-    op = next((a for a in sys.argv[1:] if a in ("checked-merge", "merge", "publish", "gate")), None)  # known ops only: never a value
+    op = next((a for a in sys.argv[1:] if a in ("checked-merge", "merge", "publish", "gate", "review")), None)  # known ops only: never a value
     gate = next((a for a in sys.argv[sys.argv.index("gate") + 1:][:1] if a in ("post", "pr", "push")), None) if op == "gate" else None
     tee = sys.stdout = _Tee(sys.stdout)
     with diag.span("audit", op=op, gate=gate) as d:

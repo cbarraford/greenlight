@@ -821,3 +821,19 @@ def test_config_sets_haiku_model(decide_env, capsys):
     assert decide.main(["config", "--haiku-model", "gpt-6-luna"]) == 0
     assert json.loads(capsys.readouterr().out)["haiku_model"] == "gpt-6-luna"
     assert decide.conf()["haiku_model"] == "gpt-6-luna"
+
+
+def test_haiku_cli_respects_deadline_cap(decide_env, monkeypatch):
+    # BUG-CORE-11: haiku() claude -p subprocess caps timeout with c.get("_deadline")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    decide_env.configure(provider="haiku", haiku_model="claude-haiku-5-5")
+    seen_timeouts = []
+
+    def fake_run(cmd, *, timeout=None, **_kw):
+        seen_timeouts.append(timeout)
+        return subprocess.CompletedProcess(cmd, 0, json.dumps({"structured_output": {"q0": {"p_yes": 0.9}}}), "")
+
+    with mock.patch.object(decide.subprocess, "run", side_effect=fake_run):
+        res = decide.batch("state-dl", {"q": {"type": "bool", "question": "ok?"}}, timeout=12)
+    assert res["q"]["provider"] == "haiku" and res["q"]["value"] is True
+    assert seen_timeouts == [12.0]

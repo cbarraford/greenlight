@@ -177,7 +177,7 @@ def preflight(goal, context="", answers=None, force=False, decide=None):
             return {"pause": False, "questions": [], "brief": brief, "why": why,
                     "record": base | {"ok": None, "why": why}}
         p, clarity = _p_true(amb), min(1.0, max(0.0, float(clear.get("score", 0.5))))
-    except Exception as e:  # ImportError until decide.py lands, a backend down, a malformed answer
+    except Exception as e:  # decide.py unavailable, a backend down, or a malformed answer
         why = f"no preflight: {type(e).__name__}: {str(e)[:160]}"
         return {"pause": False, "questions": [], "brief": brief, "why": why, "record": base | {"ok": None, "why": why}}
     verdict = {"p_ambiguous": round(p, 3), "clarity": round(clarity, 3), "provider": amb.get("provider") or clear.get("provider")}

@@ -14,24 +14,6 @@ import run_py_tests  # noqa: E402
 import swift_coverage  # noqa: E402
 
 
-def test_classify_test_file_modes(tmp_path):
-    p_pytest = tmp_path / "test_a.py"
-    p_pytest.write_text('"""doc"""\ndef test_one():\n    assert True\n')
-    assert run_py_tests.classify_test_file(p_pytest) == "pytest"
-
-    p_script = tmp_path / "test_b.py"
-    p_script.write_text("assert 1 == 1\n")
-    assert run_py_tests.classify_test_file(p_script) == "script"
-
-    p_both = tmp_path / "test_c.py"
-    p_both.write_text('def test_two():\n    assert True\nif __name__ == "__main__":\n    test_two()\n')
-    assert run_py_tests.classify_test_file(p_both) == "both"
-
-    p_empty = tmp_path / "test_d.py"
-    p_empty.write_text('"""just a docstring"""\nX = 1\n')
-    assert run_py_tests.classify_test_file(p_empty) == "empty"
-
-
 def test_parse_coverage_xml_emit_thresholds_and_prepare_cov_env(tmp_path):
     xml = tmp_path / "cov.xml"
     xml.write_text(

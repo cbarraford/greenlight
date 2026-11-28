@@ -16,7 +16,7 @@ sh_files=()
 while IFS= read -r f; do
   case "$f" in
     *.py) [ -f "$f" ] && py_files+=("$f") ;;
-    *.sh) [ -f "$f" ] && sh_files+=("$f") ;;
+    *.sh|.githooks/*) [ -f "$f" ] && sh_files+=("$f") ;;
   esac
 done <<< "$staged"
 

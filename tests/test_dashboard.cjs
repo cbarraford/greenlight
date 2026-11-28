@@ -2802,6 +2802,206 @@ test("Agents view: copy session ID and launch new terminal window connected to t
   assert.equal(afterScroll, beforeScroll, "clicking Copy must not reset the page's scroll");
 });
 
+test("hoverCard handles scanned:0 and host clock skew via hostNow() (BUG-UI-1)", async page => {
+  await page.evaluate(s => window.mc.update(s), {...SNAP, ts: Math.floor(Date.now() / 1000), scanned: 0});
+  await page.evaluate(() => { const el = document.querySelector(".cell[data-dock='plan-a']"); showCard(el, ui.dk["plan-a"]) });
+  assert.equal(await page.textContent("#hcard .row .hm"), "not scanned yet");
+  // Clock skew: remote host is 2 hours behind local clock, and scanned === host ts → "scanned just now"
+  const skewedTs = Math.floor(Date.now() / 1000) - 7200;
+  await page.evaluate(s => window.mc.update(s), {...SNAP, ts: skewedTs, scanned: skewedTs});
+  await page.evaluate(() => { hideCard(); const el = document.querySelector(".cell[data-dock='plan-a']"); showCard(el, ui.dk["plan-a"]) });
+  assert.equal(await page.textContent("#hcard .row .hm"), "scanned just now");
+  // Scanned 3h before skewed host clock → "scanned 3h ago"
+  await page.evaluate(s => window.mc.update(s), {...SNAP, ts: skewedTs, scanned: skewedTs - 3 * 3600});
+  await page.evaluate(() => { hideCard(); const el = document.querySelector(".cell[data-dock='plan-a']"); showCard(el, ui.dk["plan-a"]) });
+  assert.equal(await page.textContent("#hcard .row .hm"), "scanned 3h ago");
+});
+
+test("outJumpMenu keeps away listener active after inside click and cleans up on Escape/closeOut (BUG-UI-2)", async page => {
+  await openLog(page);
+  await page.click("#aout-jumpbtn");
+  await page.waitForSelector("#aout-jump");
+  await page.waitForTimeout(20);
+  // Pointerdown inside menu container (not on a button) must not remove the away listener
+  await page.evaluate(() => {
+    const m = document.getElementById("aout-jump");
+    m.dispatchEvent(new PointerEvent("pointerdown", {bubbles: true}));
+  });
+  assert.ok(await page.$("#aout-jump"), "menu stays open on inside pointerdown");
+  assert.ok(await page.evaluate(() => typeof ui.out.jumpAway === "function"), "away listener stays registered after inside pointerdown");
+  // Pointerdown outside now closes it and clears jumpAway
+  await page.evaluate(() => document.getElementById("aout-log").dispatchEvent(new PointerEvent("pointerdown", {bubbles: true})));
+  assert.equal(await page.$("#aout-jump"), null, "outside pointerdown closes menu after an earlier inside pointerdown");
+  assert.equal(await page.getAttribute("#aout-jumpbtn", "aria-expanded"), "false");
+  assert.equal(await page.evaluate(() => ui.out.jumpAway), null, "away listener cleared on close");
+  // Re-open and close immediately via closeOut() before setTimeout(0) fires — no leaked listener
+  await page.evaluate(() => {
+    outJumpMenu(true);
+    closeOut(false);
+  });
+  await page.waitForTimeout(20);
+  assert.equal(await page.$("#aout-jump"), null);
+  assert.equal(await page.evaluate(() => ui.out), null);
+});
+
+test("requestPage(true) ignores stale earlier cached response and mc.page error fallback renders cleanly (BUG-UI-3, TEST-ADD-11)", async page => {
+  await page.evaluate(s => window.mc.update(s), SNAP);
+  await page.evaluate(() => openPage("plan-a"));
+  // Initial requestPage(false) is in flight; trigger forced fresh refresh
+  await page.evaluate(() => requestPage(true));
+  assert.equal(await page.evaluate(() => ui.page.freshInflight), true);
+  // Stale cached response arrives first — must be ignored
+  await page.evaluate(() => window.mc.page({name: "plan-a", designed: 1000, facts: {history: []}, layout: {tiles: [{widget: "stat", title: "Stale", props: {value: "OLD"}}]}}));
+  assert.equal(await page.evaluate(() => ui.page.loading), true, "loading stays true while fresh request is still in flight");
+  assert.equal(await page.evaluate(() => ui.page.resp), null, "stale response did not clobber ui.page.resp");
+  // Fresh response arrives second — populates page
+  await page.evaluate(() => window.mc.page({name: "plan-a", designed: 2000, facts: {history: []}, layout: {tiles: [{widget: "stat", title: "Fresh", props: {value: "NEW"}}]}}));
+  assert.equal(await page.evaluate(() => ui.page.loading), false);
+  assert.match(await page.textContent(".ins"), /Fresh.*NEW/);
+  // Late older-designed response cannot overwrite newer layout
+  await page.evaluate(() => window.mc.page({name: "plan-a", designed: 1500, facts: {history: []}, layout: {tiles: [{widget: "stat", title: "Older", props: {value: "STALE"}}]}}));
+  assert.match(await page.textContent(".ins"), /Fresh.*NEW/);
+  // Error fallback when resp has error and no facts
+  await page.evaluate(() => { requestPage(true); window.mc.page({name: "plan-a", error: "designer timed out"}) });
+  assert.match(await page.textContent(".ins"), /designer timed out/);
+  assert.deepEqual(await page.evaluate(() => ui.page.resp.facts.history), []);
+});
+
+test("widget renderers (bar, stack, grid, steps, meter, spark) handle normal, zero, NaN, and XSS inputs (TEST-ADD-11)", async page => {
+  const xss = '<img src=x onerror="window.__w_xss=1">';
+  const res = await page.evaluate(xss => {
+    const specs = [
+      {widget: "bar", props: {done: 7, total: 10, label: xss}},
+      {widget: "bar", props: {done: 5, total: 5, tone: "bad", label: "done"}},
+      {widget: "bar", props: {done: NaN, total: 0, label: "zero"}},
+      {widget: "stack", props: {parts: [{label: "a/" + xss, value: 3, tone: "bad"}, {label: "ok", value: 7, tone: "ok"}, {label: "zero", value: 0, tone: "idle"}]}},
+      {widget: "stack", props: {parts: []}},
+      {widget: "grid", props: {cells: ["ok", "bad", "warn", "idle", "ok"], cols: 3}},
+      {widget: "grid", props: {cells: [], cols: NaN}},
+      {widget: "steps", props: {steps: ["Plan", xss, "Ship"], current: 1}},
+      {widget: "steps", props: {steps: ["Only"], current: 0}},
+      {widget: "meter", props: {value: 82, target: 80, label: xss}},
+      {widget: "meter", props: {value: -10, target: 50}},
+      {widget: "meter", props: {value: 150, tone: "bad"}},
+      {widget: "meter", props: {value: NaN}},
+      {widget: "spark", props: {points: [1, 4, 2, 8], label: xss, period: "7d"}},
+      {widget: "spark", props: {points: [5], label: "single"}},
+      {widget: "spark", props: {points: []}},
+    ];
+    const host = document.createElement("div");
+    document.body.append(host);
+    for (const sm of [false, true]) for (const sp of specs) {
+      const el = widget(sp, sm);
+      if (el) host.append(el);
+    }
+    const imgs = host.querySelectorAll("img").length;
+    const polylines = host.querySelectorAll("polyline").length;
+    const tracks = host.querySelectorAll(".w-track").length;
+    const cells = host.querySelectorAll(".w-cells span.bad").length;
+    const stepLabels = host.querySelectorAll(".w-steplabels span.cur").length;
+    const badWidget = widget({widget: "nope", props: {}}, false);
+    host.remove();
+    return {imgs, polylines, tracks, cells, stepLabels, badWidget, pwned: window.__w_xss};
+  }, xss);
+  assert.equal(res.imgs, 0, "no injected <img> from widget XSS props");
+  assert.equal(res.pwned, undefined);
+  assert.ok(res.polylines >= 6, "sparkline polylines rendered");
+  assert.ok(res.tracks >= 6, "bar tracks rendered");
+  assert.equal(res.cells, 1, "grid bad cell rendered in large mode");
+  assert.equal(res.stepLabels, 2, "steps current label rendered");
+  assert.equal(res.badWidget, null);
+});
+
+test("workspace page pingBox (option click, free-text submit, dismiss, double-submit guard) and activity quiet folding (TEST-ADD-11)", async page => {
+  await page.evaluate(s => window.mc.update(s), SNAP);
+  const nowSec = Math.floor(Date.now() / 1000);
+  // Option-chip ping
+  await page.evaluate(ts => {
+    window.mc.bell(1, false, [{id: "p1", text: "Deploy to staging?", options: ["Yes", "Hold"], ts: ts - 120, ws: ["plan-a", "plan-b"]}]);
+    openPage("plan-a");
+  }, nowSec);
+  assert.match(await page.textContent(".needs .abox"), /also about plan-b.*Deploy to staging\?/);
+  await page.click(".needs .pchips button:text-is('Yes')");
+  const sent1 = await page.evaluate(() => window.__posts.filter(m => m.cmd === "answerPing"));
+  assert.equal(sent1.length, 1);
+  assert.deepEqual(sent1[0], {cmd: "answerPing", id: "p1", text: "Yes"});
+  assert.equal(await page.isDisabled(".needs .pchips button:text-is('Hold')"), true, "double-submit guard disables options while sending");
+  // Dismiss button on a second ping
+  await page.evaluate(ts => {
+    window.mc.bell(1, false, [{id: "p2", text: "Provide release note", options: [], ts, ws: ["plan-a"]}]);
+  }, nowSec);
+  await page.fill("#preply", "  ");
+  await page.click(".needs form.areply button[type=submit]");
+  assert.equal((await page.evaluate(() => window.__posts.filter(m => m.cmd === "answerPing" && m.id === "p2"))).length, 0, "blank submit ignored");
+  await page.fill("#preply", "v2.4 ready");
+  await page.click(".needs form.areply button[type=submit]");
+  const sent2 = await page.evaluate(() => window.__posts.filter(m => m.cmd === "answerPing" && m.id === "p2"));
+  assert.equal(sent2.length, 1);
+  assert.equal(sent2[0].text, "v2.4 ready");
+  // Dismiss on a fresh ping
+  await page.evaluate(ts => {
+    window.mc.bell(1, false, [{id: "p3", text: "FYI", options: [], ts, ws: ["plan-a"]}]);
+  }, nowSec);
+  await page.click(".needs .abox button[aria-label='Dismiss']");
+  const sent3 = await page.evaluate(() => window.__posts.filter(m => m.cmd === "answerPing" && m.id === "p3"));
+  assert.equal(sent3.length, 1);
+  assert.equal(sent3[0].dismiss, true);
+  // Activity panel: quiet-check folding, expand, and All/Greenlight/Commits filters
+  const today = new Date().toISOString().slice(0, 10);
+  await page.evaluate(day => {
+    window.mc.page({
+      name: "plan-a",
+      facts: {
+        history: [
+          {ts: `${day} 10:05`, text: "CI passed"},
+          {ts: `${day} 10:04`, text: "checked: unchanged"},
+          {ts: `${day} 10:03`, text: "no action needed"},
+          {ts: `${day} 10:02`, text: "SKIPPED again"},
+        ],
+        git: {commits: [{ts: `${day} 10:01`, subject: "fix: retry logic"}]},
+      },
+      layout: {},
+    });
+  }, today);
+  assert.match(await page.textContent("ol.act button.quiet"), /3 quiet checks since 10:02, nothing changed/);
+  await page.click("ol.act button.quiet");
+  assert.equal(await page.locator("ol.act button.quiet").count(), 0, "quiet run expanded");
+  assert.equal(await page.locator("ol.act li").count(), 5, "all 4 history + 1 commit visible");
+  await page.click("[aria-label='Filter activity'] button:text-is('Commits')");
+  assert.equal(await page.locator("ol.act li").count(), 1);
+  assert.match(await page.textContent("ol.act"), /fix: retry logic/);
+  await page.click("[aria-label='Filter activity'] button:text-is('Greenlight')");
+  assert.equal(await page.locator("ol.act li").count(), 4);
+});
+
+test("All output cap eviction drops old entries, clears lastLooked on droppedNew, updates cursor, and marks refresh gap (TEST-ADD-11)", async page => {
+  const baseTs = Date.now() - 600e3;
+  await page.evaluate(s => window.mc.update(s), SNAP);
+  // Seed lastLooked right after initial entries so entries added and later evicted trigger droppedNew
+  await page.evaluate(([ts]) => { localStorage.setItem(LOOKED_KEY, JSON.stringify({"plan-b": ts + 1000})); openOut("plan-b") }, [baseTs]);
+  const initial = Array.from({length: 10}, (_, i) => ({id: `s1:${i}`, role: "assistant", text: `init ${i}`, ts: baseTs + i * 100}));
+  await page.evaluate(es => mc.transcript({name: "plan-b", before: null, more: null, source: "transcript", entries: es}), initial);
+  // Next poll delivers 520 brand-new entries with more:"s1:cursor" (exceeding 500 cap for transcript and triggering gap)
+  await nextPoll(page, 2);
+  const batch = Array.from({length: 520}, (_, i) => ({id: `s1:${10 + i}`, role: "assistant", text: `line ${10 + i}`, ts: baseTs + 2000 + i * 100}));
+  await page.evaluate(es => mc.transcript({name: "plan-b", before: null, more: "s1:prev", source: "transcript", entries: es}), batch);
+  const state = await page.evaluate(() => ({
+    len: ui.out.entries.length,
+    firstId: ui.out.entries[0]?.id,
+    more: ui.out.more,
+    lastLooked: ui.out.lastLooked,
+    gapShown: !!document.querySelector("#aout-list .aosep.gap"),
+    evictedInDom: !!document.querySelector("#aout-list [data-id='s1:0']"),
+  }));
+  assert.equal(state.len, 500, "transcript entries capped at 500");
+  assert.equal(state.firstId, "s1:30", "oldest 30 entries evicted");
+  assert.equal(state.more, "s1:30", "o.more updated to first kept entry");
+  assert.equal(state.lastLooked, null, "droppedNew cleared o.lastLooked");
+  assert.equal(state.gapShown, true, "full-page refresh with more rendered gap separator");
+  assert.equal(state.evictedInDom, false, "evicted entries removed from DOM");
+  await page.evaluate(() => closeOut(false));
+});
+
 test("classic scrollbars: a tall Agents strip, a board at its floor or a honeycomb past the page never scrolls it sideways", async () => {
   if (ENGINE !== "chromium") return;  // Playwright hides Chromium's scrollbars; this run shows them, as macOS does with a mouse attached
   const b = await chromium.launch({executablePath: browserPath(), ignoreDefaultArgs: ["--hide-scrollbars"]});

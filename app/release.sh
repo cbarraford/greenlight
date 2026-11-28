@@ -8,9 +8,11 @@
 #                        and staple. Unset: not notarized.
 # Prints one JSON line: {zip, signing, notarized}.
 set -euo pipefail
-cd "$(dirname "$0")"
 [ $# -eq 5 ] || { echo "usage: app/release.sh <version> <short> <build> <backend.tar.gz> <out dir>" >&2; exit 2; }
 ver=$1 short=$2 build=$3 backend=$4 out=$5
+case "$backend" in /*) ;; *) backend=$PWD/$backend ;; esac
+case "$out" in /*) ;; *) out=$PWD/$out ;; esac
+cd "$(dirname "$0")"
 case "$ver" in ''|*[!A-Za-z0-9._+-]*|[!A-Za-z0-9]*) echo "release.sh: bad version: $ver" >&2; exit 2 ;; esac
 case "$short" in ''|*[!0-9.]*) echo "release.sh: bad short version: $short" >&2; exit 2 ;; esac
 case "$build" in ''|*[!0-9]*) echo "release.sh: bad build: $build" >&2; exit 2 ;; esac

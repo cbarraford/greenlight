@@ -58,7 +58,7 @@ def test_name_resolution(home, monkeypatch):
     (home / "config.json").write_text(json.dumps({"ade": "nope"}))  # an unknown config value: the default
     assert ade.name() == "native"
     (home / "config.json").write_text("{not json")
-    assert ade.name() == "native" and ade.deprecated() is None
+    assert ade.name() == "native"
     (home / "config.json").write_text(json.dumps({"ade": "native"}))
     monkeypatch.setenv("GREENLIGHT_ADE", "t3")
     with pytest.raises(RuntimeError, match="live ADE backends are retired"):

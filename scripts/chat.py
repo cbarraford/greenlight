@@ -93,13 +93,26 @@ def _denial_parts(tool, inp):
     return None
 
 
-def denial_rule(tool, inp):
-    """(rule, what) for claude's --allowedTools, or None when the call cannot be scoped safely."""
-    parts = _denial_parts(tool, inp)
-    if not parts:
-        return None
-    rule, prefix, detail = parts
-    return rule, f"{prefix} ({detail})" if prefix else detail
+def _ensure_chat_dir():
+    os.makedirs(DIR, mode=0o700, exist_ok=True)
+    with contextlib.suppress(OSError):
+        os.chmod(DIR, 0o700)
+
+
+def _write_private(path, text):
+    """Atomically write sensitive local chat state with mode 0600."""
+    _ensure_chat_dir()
+    tmp = f"{path}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        with os.fdopen(os.open(tmp, flags, 0o600), "w") as fh:
+            fh.write(text)
+        with contextlib.suppress(OSError):
+            os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    finally:
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
 
 
 def _format_merged_what(prefix, details, limit=600):
@@ -350,8 +363,7 @@ def seen_save(s):
     try:
         with scope_lock():
             if scope_current_unlocked():
-                with open(os.path.join(DIR, SEEN), "w") as f:
-                    json.dump(s, f)
+                _write_private(os.path.join(DIR, SEEN), json.dumps(s))
     except OSError:
         pass  # session context is a cache; a full disk must not abort a delivered chat turn
 
@@ -1198,7 +1210,7 @@ def pid_matches(rec, group=False):
 
 @contextlib.contextmanager
 def scope_lock():
-    os.makedirs(DIR, exist_ok=True)
+    _ensure_chat_dir()
     with open(os.path.join(DIR, "conversation.lock"), "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         yield
@@ -1351,14 +1363,14 @@ def live_question_status(snapshot):
                 return "stale"
             if target.get("goal") and not comment:
                 try:
-                    scan_rows = json.load(open(greenlight.STATE / "last.json"))["rows"]
+                    with open(greenlight.STATE / "last.json") as fh:
+                        scan_rows = json.load(fh)["rows"]
                 except Exception:
                     return "unavailable"
                 if not any(r.get("id") == target["worktree_id"] and r.get("_goal_backfill") for r in scan_rows):
                     return "stale"
             link_key = "linkedPR" if target.get("forge") == "github" else "linkedGitLabMR"
-            if target.get("mr") and link_key in w:
-                linked = greenlight.linked_number(w[link_key])
+            if target.get("mr") and link_key in w and (linked := greenlight.linked_number(w.get(link_key))) is not None:
                 if (f"#{linked}" if link_key == "linkedPR" else f"!{linked}") != target["mr"]:
                     return "stale"
     for rec in open_questions:
@@ -1394,8 +1406,12 @@ def session(engine, val=None):
     if val is not None:
         with scope_lock():
             if scope_current_unlocked():
-                open(f, "w").write(val)
-    return open(f).read().strip() if os.path.exists(f) else None
+                _write_private(f, val)
+    try:
+        with open(f) as fh:
+            return fh.read().strip()
+    except FileNotFoundError:
+        return None
 
 
 def cleanup_run(pid, birth=None):
@@ -1409,14 +1425,13 @@ def cleanup_run(pid, birth=None):
                 os.remove(BGFILE)
 
 
-def run(cmd, engine, text, norm, check=False, guard=None, defer_done=False, request_guard=None):
-    """Run one turn, stream events. Returns (sid or None, error or None or "retry").
-    check: a done whose reply ignored the user (IGNORED) isn't emitted; the process is killed and "retry" returned."""
+def _spawn_run_proc(cmd):
+    """Spawn and register a harness child under scope_lock. Returns (proc, birth, err)."""
     with scope_lock():
         if not scope_current_unlocked():
-            return None, "Stopped"
+            return None, None, "Stopped"
         if pid_matches(pid_record()):
-            return None, "another turn running"
+            return None, None, "another turn running"
         with contextlib.suppress(OSError):
             os.remove(PIDFILE)
         p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -1429,141 +1444,100 @@ def run(cmd, engine, text, norm, check=False, guard=None, defer_done=False, requ
                 with contextlib.suppress(OSError):
                     if s:
                         s.close()
-            return None, "harness process identity unavailable"
+            return None, None, "harness process identity unavailable"
         with open(PIDFILE, "w") as pf:
             pf.write(json.dumps({"pid": p.pid, "birth": birth}))
-    stderr_buf = []
+    return p, birth, None
 
-    def _drain_stderr():
-        if not p.stderr:
-            return
-        total = 0
-        try:
-            while chunk := p.stderr.read(4096):
-                if total < 65536:
-                    stderr_buf.append(chunk[:65536 - total])
-                    total += len(chunk)
-        except (OSError, ValueError):
-            pass
 
-    err_thread = threading.Thread(target=_drain_stderr, daemon=True)
-    err_thread.start()
+def _mask_attachment_events(raw, hiding, needles, private):
+    for e in raw:  # before track(): the status it repeats a step's title in is the hidden one
+        if hiding and e["e"] == "step" and attach.mentions(DIR, e):
+            private.add(e["id"])
+        elif hiding and e["e"] == "step_done" and e.get("id") in private:
+            e["out"] = attach.HIDDEN
+            e.pop("full", None)
+        if hiding and e["e"] in ("step", "step_done", "plan"):
+            attach.hide(DIR, e, needles)
 
-    def _kill_child():
-        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
-            os.killpg(p.pid, signal.SIGTERM)
 
-    old_handlers = {}
-    if threading.current_thread() is threading.main_thread():
-        for sig in (signal.SIGTERM, signal.SIGHUP):
-            with contextlib.suppress(ValueError, OSError):
-                prev_h = signal.getsignal(sig)
+def _write_bg_shells(shells, hiding, needles):
+    for sh in shells if hiding else ():
+        attach.hide(DIR, sh, needles)
+    tmp_bg = f"{BGFILE}.{os.getpid()}.tmp"
+    fd = os.open(tmp_bg, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as bf:
+        json.dump(shells, bf)
+    os.replace(tmp_bg, BGFILE)
 
-                def _on_sig(signum, frame, _prev=prev_h):
-                    _kill_child()
-                    raise SystemExit(128 + signum)
 
-                old_handlers[sig] = prev_h
-                signal.signal(sig, _on_sig)
+def _emit_run_events(evs, engine, sid, norm, defer_done, hiding, needles, state):
+    for e in evs:
+        if e["e"] == "bg":  # not for the stream: `chat.py bg` serves it
+            _write_bg_shells(e["shells"], hiding, needles)
+            continue
+        if e["e"] == "done" and state["done"]:  # opencode can report one failure twice
+            continue
+        if e["e"] == "done":
+            if e["ok"] and sid:  # save only successful turns before the app hears done
+                session(engine, sid)
+            state["done"], norm.reply = True, e["text"] if e["ok"] else None
+            if not e["ok"]:
+                state["failed_done"] = e
+        if defer_done and e["e"] == "done":
+            norm.pending_done = e
+        else:
+            emit(**e)
 
-    assert p.stdin is not None and p.stdout is not None
-    try:
-        try:
-            p.stdin.write(text)
-            p.stdin.close()
-        except (OSError, ValueError):  # Clear may terminate the registered child before it reads the prompt
-            with contextlib.suppress(OSError):
-                p.stdin.close()
+
+def _extract_sid(d, prev_sid):
+    raw_init, raw_res = d.get("init"), d.get("result")
+    init: dict = raw_init if isinstance(raw_init, dict) else {}
+    result: dict = raw_res if isinstance(raw_res, dict) else {}
+    return (d.get("conversation_id") or init.get("conversation_id") or result.get("conversation_id")
+            or d.get("session_id") or d.get("thread_id") or d.get("sessionID")
+            or (d.get("id") if d.get("type") == "session" else None) or prev_sid)
+
+
+def _stream_run_stdout(p, engine, norm, check, guard, defer_done, kill_child):
+    sid, private = None, set[str]()
+    state = {"done": False, "failed_done": None}
+    for sid_, _ in norm.running:  # a rerun is a new process: steps the last one left open ended with it
+        emit(e="step_done", id=sid_, ok=False, out="interrupted")
+    if norm.plan_keys is not None:  # …and its plan and pace aren't this one's
+        emit(e="plan", done=0, total=0, title="", eta=None)
+    norm.plan_t0, norm.plan_keys, norm.running = None, None, []
+    hiding, needles = guard or watch_for_attachments()
+    for line in p.stdout:
+        with scope_lock():
+            stale = not scope_current_unlocked()
+        if stale:
+            kill_child()
             p.wait()
-            return None, "Stopped"
-        if os.environ.get("GREENLIGHT_ONLY"):
-            def watch_scope():
-                while p.poll() is None:
-                    with scope_lock():
-                        stale = not scope_current_unlocked()
-                    if stale:
-                        _kill_child()
-                        return
-                    time.sleep(0.1)
-            threading.Thread(target=watch_scope, daemon=True).start()
-        sid, done, private, failed_done = None, False, set(), None
-        for sid_, _ in norm.running:  # a rerun is a new process: steps the last one left open ended with it
-            emit(e="step_done", id=sid_, ok=False, out="interrupted")
-        if norm.plan_keys is not None:  # …and its plan and pace aren't this one's
-            emit(e="plan", done=0, total=0, title="", eta=None)
-        norm.plan_t0, norm.plan_keys, norm.running = None, None, []
-        hiding, needles = guard or watch_for_attachments()
-        for line in p.stdout:
-            with scope_lock():
-                stale = not scope_current_unlocked()
-            if stale:
-                _kill_child()
-                p.wait()
-                return sid, "Stopped"
-            try:
-                d = json.loads(line)
-            except ValueError:
-                continue
-            if not isinstance(d, dict):
-                continue
-            raw_init, raw_res = d.get("init"), d.get("result")
-            init: dict = raw_init if isinstance(raw_init, dict) else {}
-            result: dict = raw_res if isinstance(raw_res, dict) else {}
-            sid = d.get("conversation_id") or init.get("conversation_id") or result.get("conversation_id") or d.get("session_id") or d.get("thread_id") or d.get("sessionID") or (d.get("id") if d.get("type") == "session" else None) or sid
-            raw = getattr(norm, engine)(d)
-            for e in raw:  # before track(): the status it repeats a step's title in is the hidden one
-                if hiding and e["e"] == "step" and attach.mentions(DIR, e):  # a call that reads the attachments: none of its output is shown
-                    private.add(e["id"])
-                elif hiding and e["e"] == "step_done" and e.get("id") in private:
-                    e["out"] = attach.HIDDEN
-                    e.pop("full", None)
-                if hiding and e["e"] in ("step", "step_done", "plan"):  # anything else that shows an attachment's lines (a grep -R, a Write that copies one): those lines go
-                    attach.hide(DIR, e, needles)
-            evs = norm.phrase(norm.track(raw))  # track first, so its "Thinking" gets a phrase too
-            if check and any(e["e"] == "done" and e["ok"] and IGNORED.match(e["text"] or "") for e in evs):
-                _kill_child()
-                p.wait()
-                return sid, "retry"
-            for e in evs:
-                if e["e"] == "bg":  # not for the stream: `chat.py bg` serves it
-                    for sh in e["shells"] if hiding else ():
-                        attach.hide(DIR, sh, needles)  # its title is the step's: hidden as the step's is
-                    tmp_bg = f"{BGFILE}.{os.getpid()}.tmp"
-                    fd = os.open(tmp_bg, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                    with os.fdopen(fd, "w") as bf:
-                        json.dump(e["shells"], bf)
-                    os.replace(tmp_bg, BGFILE)
-                    continue
-                if e["e"] == "done" and done:  # opencode can report one failure twice
-                    continue
-                if e["e"] == "done" and e["ok"] and sid:  # save only successful turns before the app hears done
-                    session(engine, sid)
-                if e["e"] == "done":
-                    done, norm.reply = True, e["text"] if e["ok"] else None
-                    if not e["ok"]:
-                        failed_done = e
-                if defer_done and e["e"] == "done":
-                    norm.pending_done = e
-                else:
-                    emit(**e)
-        p.wait()
-        err_thread.join(timeout=1.0)
-    finally:
-        for sig, prev_h in old_handlers.items():
-            with contextlib.suppress(ValueError, OSError):
-                signal.signal(sig, prev_h)
-        if hasattr(p, "poll") and p.poll() is None:
-            _kill_child()
-            with contextlib.suppress(OSError, subprocess.SubprocessError):
-                p.wait(timeout=3)
-        for s in (getattr(p, "stdin", None), getattr(p, "stdout", None), getattr(p, "stderr", None)):
-            with contextlib.suppress(OSError, ValueError):
-                if s:
-                    s.close()
-        cleanup_run(p.pid, birth)
+            return sid, state, "Stopped"
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(d, dict):
+            continue
+        sid = _extract_sid(d, sid)
+        raw = getattr(norm, engine)(d)
+        _mask_attachment_events(raw, hiding, needles, private)
+        evs = norm.phrase(norm.track(raw))  # track first, so its "Thinking" gets a phrase too
+        if check and any(e["e"] == "done" and e["ok"] and IGNORED.match(e["text"] or "") for e in evs):
+            kill_child()
+            p.wait()
+            return sid, state, "retry"
+        _emit_run_events(evs, engine, sid, norm, defer_done, hiding, needles, state)
+    return sid, state, None
+
+
+def _finalize_run(p, sid, state, engine, norm, defer_done, stderr_buf):
     with scope_lock():
         if not scope_current_unlocked():
             return sid, "Stopped"
+    done = state["done"]
     if not done and not p.returncode:  # opencode has no final event: its clean exit is the done
         if sid:
             session(engine, sid)
@@ -1577,9 +1551,109 @@ def run(cmd, engine, text, norm, check=False, guard=None, defer_done=False, requ
         if p.returncode in (-15, 143):  # SIGTERM from `chat.py stop`
             return sid, "Stopped"
         return sid, "".join(stderr_buf).strip() or f"exit {p.returncode}"
-    if failed_done:
+    if state["failed_done"]:
         return sid, "model failed"
     return (None if done else sid), None  # done: its session is saved already
+
+
+def _install_run_signals(kill_child):
+    old_handlers = {}
+    if threading.current_thread() is threading.main_thread():
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            with contextlib.suppress(ValueError, OSError):
+                prev_h = signal.getsignal(sig)
+
+                def _on_sig(signum, frame, _prev=prev_h):
+                    kill_child()
+                    raise SystemExit(128 + signum)
+
+                old_handlers[sig] = prev_h
+                signal.signal(sig, _on_sig)
+    return old_handlers
+
+
+def _cleanup_run_proc(p, birth, old_handlers, kill_child):
+    for sig, prev_h in old_handlers.items():
+        with contextlib.suppress(ValueError, OSError):
+            signal.signal(sig, prev_h)
+    if hasattr(p, "poll") and p.poll() is None:
+        kill_child()
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            p.wait(timeout=3)
+    for s in (getattr(p, "stdin", None), getattr(p, "stdout", None), getattr(p, "stderr", None)):
+        with contextlib.suppress(OSError, ValueError):
+            if s:
+                s.close()
+    cleanup_run(p.pid, birth)
+
+
+def _start_stderr_drain(p, stderr_buf):
+    def _drain_stderr():
+        if not p.stderr:
+            return
+        total = 0
+        try:
+            while chunk := p.stderr.read(4096):
+                if total < 65536:
+                    stderr_buf.append(chunk[:65536 - total])
+                    total += len(chunk)
+        except (OSError, ValueError):
+            pass
+
+    t = threading.Thread(target=_drain_stderr, daemon=True)
+    t.start()
+    return t
+
+
+def _start_scope_watcher(p, kill_child):
+    if not os.environ.get("GREENLIGHT_ONLY"):
+        return
+
+    def watch_scope():
+        while p.poll() is None:
+            with scope_lock():
+                stale = not scope_current_unlocked()
+            if stale:
+                kill_child()
+                return
+            time.sleep(0.1)
+
+    threading.Thread(target=watch_scope, daemon=True).start()
+
+
+def run(cmd, engine, text, norm, check=False, guard=None, defer_done=False):
+    """Run one turn, stream events. Returns (sid or None, error or None or "retry").
+    check: a done whose reply ignored the user (IGNORED) isn't emitted; the process is killed and "retry" returned."""
+    p, birth, spawn_err = _spawn_run_proc(cmd)
+    if spawn_err:
+        return None, spawn_err
+    stderr_buf: list[str] = []
+    err_thread = _start_stderr_drain(p, stderr_buf)
+
+    def _kill_child():
+        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+            os.killpg(p.pid, signal.SIGTERM)
+
+    old_handlers = _install_run_signals(_kill_child)
+    assert p.stdin is not None and p.stdout is not None
+    try:
+        try:
+            p.stdin.write(text)
+            p.stdin.close()
+        except (OSError, ValueError):  # Clear may terminate the registered child before it reads the prompt
+            with contextlib.suppress(OSError):
+                p.stdin.close()
+            p.wait()
+            return None, "Stopped"
+        _start_scope_watcher(p, _kill_child)
+        sid, state, early = _stream_run_stdout(p, engine, norm, check, guard, defer_done, _kill_child)
+        if early is not None:
+            return sid, early
+        p.wait()
+        err_thread.join(timeout=1.0)
+    finally:
+        _cleanup_run_proc(p, birth, old_handlers, _kill_child)
+    return _finalize_run(p, sid, state, engine, norm, defer_done, stderr_buf)
 
 
 def watch_for_attachments():
@@ -1778,7 +1852,8 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
         with scope_lock():
             owned = False
             try:
-                active = json.load(open(path))
+                with open(path) as af:
+                    active = json.load(af)
                 if active.get("id") == token:
                     owned = not active.get("cancelled", False)
                     os.remove(path)
@@ -1830,8 +1905,9 @@ def reservation_current(token, generation):
 
 def reservation_current_unlocked(token, generation):
     try:
-        return scope_current_unlocked() and generation_unlocked() == generation and \
-            json.load(open(os.path.join(DIR, ACTIVE_TURN))).get("id") == token
+        with open(os.path.join(DIR, ACTIVE_TURN)) as af:
+            active = json.load(af)
+        return scope_current_unlocked() and generation_unlocked() == generation and active.get("id") == token
     except (OSError, ValueError):
         return False
 
@@ -2126,15 +2202,13 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
             return {"e": "done", "ok": False, "text": "Stopped",
                     "context": 0, "window": None, "ms": None}
         if new_sid:
-            with open(session_path(engine), "w") as sf:
-                sf.write(new_sid)
+            _write_private(session_path(engine), new_sid)
         if err and not compact or compact and not err:
             with contextlib.suppress(OSError):
                 os.remove(os.path.join(DIR, SEEN))
         elif not compact and (actual_sid := new_sid or session(engine)):
             with contextlib.suppress(OSError):  # a cache failure cannot lose the reply's pending question
-                with open(os.path.join(DIR, SEEN), "w") as f:
-                    json.dump((seen or {}) | {"key": f"{engine}:{actual_sid}"}, f)
+                _write_private(os.path.join(DIR, SEEN), json.dumps((seen or {}) | {"key": f"{engine}:{actual_sid}"}))
         if not compact and not err:
             if not stale_cleared or answer_text.strip().startswith(tuple(decisions.REPLY.values())):
                 decisions.quiet("heard", answer_text, chat=chat_identity())
@@ -2285,7 +2359,7 @@ def run_turn(tid, args):
 
 
 def main():
-    os.makedirs(DIR, exist_ok=True)
+    _ensure_chat_dir()
     args = sys.argv[1:]
     cmd = args[0] if args else "send"
     if cmd == "_run" and len(args) > 1 and TURN_ID.fullmatch(args[1]):
@@ -2367,7 +2441,7 @@ def send_turn(args, opt):
 
 
 def dispatch(args):
-    os.makedirs(DIR, exist_ok=True)
+    _ensure_chat_dir()
     cmd = args[0] if args else "send"
     opt = lambda k: args[i + 1] if k in args and (i := args.index(k)) + 1 < len(args) else None
     if cmd == "new":

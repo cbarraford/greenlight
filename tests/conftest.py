@@ -51,7 +51,6 @@ def _patch_loaded_modules(monkeypatch, home: Path) -> None:
     bindings: dict[str, dict[str, object]] = {
         "ade_common": {"GOALS": home / "goals.json"},
         "ade_basement": {"HOME": home, "REPOS": home / "repos.json", "BRIEFS": home / "briefs"},
-        "ade_herdr": {"BRIEFS": home / "briefs"},
         "adopt": {"DISMISSED": home / "dismissed.json", "STATE_FILE": home / "adopt.json", "LOG": home / "log.jsonl"},
         "auto": {"STATE": home, "FILE": home / "automations.json", "DIR": home / "auto"},
         "autonomy": {"STATE": home, "MEMORY": home / "MEMORY.md"},
@@ -65,6 +64,7 @@ def _patch_loaded_modules(monkeypatch, home: Path) -> None:
         "dwim": {"STATE": home, "DWIM": home / "dwim"},
         "last_agent": {"HOME": home, "FILE": home / "last_agent.json"},
         "lifestage": {"STATE": home, "CHECKS": home / "checks"},
+        "orchestrate": {"LOG": home / "log.jsonl"},
         "usage": {"STATE": home},
         "ws_state": {"STATE": home, "DIR": home / "state", "MEMORY": home / "memory"},
     }

@@ -55,6 +55,9 @@ KEYS = {"kind", "comp", "v", "run", "tool", "sub", "err", "msg_class", "op", "na
         "harness", "model", "status", "engine", "did", "reason", "cmd", "page", "to", "forge", "ade", "step", "owner",
         "state", "on", "verb", "host_kind", "macos", "phase", "ping_kind", "role", "check", "outcome", "draw", "by", "card",
         "source"}
+# Built-in lifecycle / orchestrator step tokens allowed verbatim under `step`; custom stage names go hashed in `step_h`.
+STEPS = frozenset({"mr_open", "ci_green", "no_conflicts", "verified", "review_bot", "milestone", "ready", "threads",
+                   "approved", "merge", "freeform", "review", "done", "error", "custom", "ci", "conflicts", "draft"})
 CLASSES = (  # first match wins: classify()
     ("rate_limit", r"rate.?limit|\b429\b|too many requests|usage limit|limit reached|out of (?:extra )?usage"),
     ("auth", r"\b401\b|\b403\b|unauthori[sz]ed|forbidden|authenticat|not logged in|log ?in|credential|token|publickey|invalid_grant|\boauth"),
@@ -202,8 +205,16 @@ def clean(fields):
                 out[k] = round(v, 3)
             else:
                 dropped += 1
-        elif isinstance(v, str) and k.endswith("_h") and HASH.fullmatch(v):
-            out[k] = v
+        elif isinstance(v, str) and k.endswith("_h"):
+            if HASH.fullmatch(v):
+                out[k] = v
+            else:
+                dropped += 1
+        elif isinstance(v, str) and k == "step":
+            if v in STEPS:
+                out[k] = v
+            else:
+                dropped += 1
         elif isinstance(v, str) and k in KEYS and token(v):
             out[k] = v
         elif isinstance(v, list) and k == "where" and all(isinstance(x, str) and token(x) for x in v):
@@ -347,6 +358,8 @@ def config_shape():
         c = json.loads((home() / "config.json").read_text())
     except (OSError, ValueError):
         return {}
+    if not isinstance(c, dict):
+        return {}
     shape: dict[str, Any] = {}
     for k, v in c.items():
         if isinstance(v, (bool, int, float)) or v is None:
@@ -489,6 +502,8 @@ def doctor(quick=False):
     try:
         autos = json.loads((home() / "automations.json").read_text())
     except (OSError, ValueError):
+        autos = {}
+    if not isinstance(autos, dict):
         autos = {}
     if any(isinstance(a, dict) and a.get("enabled", True) for a in autos.values()):
         tick = home() / "auto" / "last_tick"
@@ -724,7 +739,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.cmd == "tail":
         ev = [e for e in read(since(a.since)) if (not a.kind or e.get("kind") == a.kind) and (not a.run or e.get("run") == a.run)]
-        for e in ev[-a.n:]:
+        for e in (ev[-a.n:] if a.n > 0 else []):
             print(json.dumps(e))
     elif a.cmd == "errors":
         print(json.dumps(errors(read(since(a.since))), indent=1))

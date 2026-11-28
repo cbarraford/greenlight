@@ -137,6 +137,7 @@ with tempfile.TemporaryDirectory() as td:
 
     # Empty and SyntaxError test files fail cleanly without crashing collection
     (d / "test_empty.py").write_text('"""doc only"""\ndef helper():\n    return 1\n')
+    assert run_py_tests.classify_test_file(d / "test_empty.py") == "empty"
     (d / "test_syntax.py").write_text("def broken(:\n")
     assert run_py_tests.main(["--tests-dir", str(d)]) == 1
 

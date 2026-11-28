@@ -192,6 +192,27 @@ def test_cli_subcommands(tmp_path, monkeypatch, capsys):
         rc, out = run("wait", "--socket", str(sock), "false", "--timeout", "0.02")
         assert rc == 1 and json.loads(out)["error"] == "timeout"
 
+    # BUG-INFRA-10: stop suppresses missing/timed-out tmux cleanly
+    def _fail_tmux(exc):
+        def _run(cmd, **_kw):
+            if cmd and cmd[0] == "tmux":
+                raise exc
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return _run
+
+    with (
+        mock.patch.object(uitest, "rpc", return_value={"ok": True}),
+        mock.patch.object(uitest.subprocess, "run", side_effect=_fail_tmux(FileNotFoundError("tmux"))),
+    ):
+        rc, out = run("stop", "--socket", str(sock))
+        assert rc == 0 and json.loads(out)["ok"] is True
+    with (
+        mock.patch.object(uitest, "rpc", return_value={"ok": True}),
+        mock.patch.object(uitest.subprocess, "run", side_effect=_fail_tmux(subprocess.TimeoutExpired(["tmux"], 5))),
+    ):
+        rc, out = run("stop", "--socket", str(sock))
+        assert rc == 0 and json.loads(out)["ok"] is True
+
 
 def test_make_fixture_resolves_symlinked_root_for_native_worktrees(tmp_path):
     """On macOS /var is a symlink to /private/var; fixture ids/paths must match git worktree realpaths."""
@@ -344,6 +365,7 @@ def test_seed_fixture_agents_mocked_adversarial_scale_and_start_cleanup(tmp_path
 def test_chaos_forge_stubs_self_increment_and_rate_limit(tmp_path):
     """Under native mode (without bin/orca), chaos glab/gh stubs self-increment chaos-counter and emit 429 failures."""
     _, bindir, _ = uitest._make_fixture(tmp_path, "chaos")
+    assert not (bindir / "orca").exists() and not (tmp_path / "orca-ps.json").exists()
     glab, gh = str(bindir / "glab"), str(bindir / "gh")
     counter = tmp_path / "chaos-counter"
     r1 = subprocess.run([glab, "mr", "list"], capture_output=True, text=True)

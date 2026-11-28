@@ -382,3 +382,13 @@ def test_end_to_end_chat_turn_partial_line_and_head_change(decisions_env, tmp_pa
     (greenlight.STATE / "last.json").write_text(json.dumps({"rows": [head_row]}))
     new_id = decisions.asked("Merge this?" + OPTS, key="head-bound", ws=["head-bound"])
     assert old_id != new_id and next(r for r in decisions.load() if r["id"] == old_id)["closed"] == "superseded"
+
+
+def test_decisions_book_enforces_private_permissions(gl_home, monkeypatch):
+    import stat
+
+    priv_state = gl_home / "priv-dec"
+    monkeypatch.setattr(decisions, "STATE", priv_state)
+    decisions.asked("Keep draft?\nOptions: keep | ready", key="ws-1")
+    assert stat.S_IMODE(priv_state.stat().st_mode) == 0o700
+    assert stat.S_IMODE((priv_state / "decisions.jsonl").stat().st_mode) == 0o600

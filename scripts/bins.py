@@ -31,9 +31,6 @@ def is_executable(p):
     return bool(p) and os.path.isfile(p) and os.access(p, os.X_OK)
 
 
-_executable = is_executable
-
-
 def _clean_override(val):
     if not isinstance(val, str):
         return None

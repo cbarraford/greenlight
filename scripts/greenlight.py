@@ -112,8 +112,8 @@ INTENTS = {
 }
 MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
 DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
-ISSUE_GOAL_RE = re.compile(r"^Merge MR for #(\d+)")  # dash.py plan_send: the MR/PR that closes issue N
-PLAN_RE = re.compile(r"^Plan:")  # a planner workspace (dash.py plan): the Plan view's, never driven by greenlight
+ISSUE_GOAL_RE = re.compile(r"^Merge MR for #(\d+)")  # issue-linked goal: resolves to the MR/PR that closes issue N
+PLAN_RE = re.compile(r"^Plan:")  # planning-only workspace goal: never driven automatically by greenlight
 # Old /workspaces status lines ("Rebase !42 — dispatched 2026-01-13") aren't goals.
 STATUS_LINE_RE = re.compile(r"dispatched \d{4}-\d\d-\d\d")
 TRANSIENT_RE = re.compile(r"\b50[0234]\b|bad gateway|service unavailable|gateway time-?out|timed? ?out|"
@@ -163,6 +163,12 @@ def _run(cmd, timeout, tries, d):
         time.sleep(2 * 2 ** i)
 
 
+def _ensure_state_dir():
+    STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with contextlib.suppress(OSError):
+        os.chmod(STATE, 0o700)
+
+
 def whoami():
     """Your forge username: me.json, else glab's user, else gh's (cached). "" when neither answers."""
     f = STATE / "me.json"
@@ -176,7 +182,7 @@ def whoami():
             me = json.loads(run(cmd, timeout=20))[key]
         except Exception:  # noqa: BLE001 - not installed or not logged in: try the next
             continue
-        STATE.mkdir(parents=True, exist_ok=True)
+        _ensure_state_dir()
         f.write_text(json.dumps({"me": me}))
         return me
     return ""
@@ -188,10 +194,6 @@ ME = os.environ.get("GREENLIGHT_ME") or CONFIG["me"] or whoami()
 def orca(*args, timeout=120):
     """An Orca-shaped compatibility call answered by Greenlight's native backend."""
     return ade.call(*args)
-
-
-class PlacementRefused(RuntimeError):
-    """place_here said no: `ade` prints it and exits 3, like a read-only refusal."""
 
 
 def primary_agent(agents):
@@ -835,7 +837,7 @@ def verify_record(project, iid, verdict, sha="", summary="", evidence="", defect
     if verdict not in ("pass", "fail", "uncertain", "reset"):
         raise ValueError(f"bad verdict {verdict!r}: expected pass, fail, uncertain or reset")
     key, f = f"{project}#{iid}", STATE / "verify.json"
-    STATE.mkdir(parents=True, exist_ok=True)
+    _ensure_state_dir()
     with (STATE / "verify.lock").open("a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         vs = verifications()
@@ -985,7 +987,7 @@ def _save_approval_rules(f, key, entry):
     with _APPROVAL_RULES_LOCK:
         cache = _load_approval_rules(f) | {key: entry}
         try:
-            STATE.mkdir(parents=True, exist_ok=True)
+            _ensure_state_dir()
             tmp = f.with_name(f"{f.name}.{os.getpid()}.{threading.get_ident()}.tmp")
             tmp.write_text(json.dumps(cache))
             os.replace(tmp, f)
@@ -1649,7 +1651,7 @@ def backfill_revision():
 
 @contextlib.contextmanager
 def backfill_lock():
-    STATE.mkdir(parents=True, exist_ok=True)
+    _ensure_state_dir()
     with (STATE / "goal_backfill.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         yield
@@ -1835,6 +1837,7 @@ def scan(save=True, _backfill_retries=0):
             remembered = backfills.get(r["id"])
             if remembered and "resolved_mr" in remembered and remembered["resolved_mr"] != (mr or {}).get("iid"):
                 r["goal"] = "" if STATUS_LINE_RE.search(r["comment"]) else r["comment"]
+                r["_goal_backfill"] = False
                 if save:
                     prune_candidates.append((r["id"], remembered, (mr or {}).get("iid")))
             r["mr"] = mr and {k: mr.get(k) for k in ("iid", "web_url", "title", "state", "draft", "updated_at")} | {
@@ -1886,7 +1889,7 @@ def scan(save=True, _backfill_retries=0):
     import ws_state
     ws_state.keyed(rows, migrate=save)  # previews resolve legacy identities without writing owner pointers
 
-    STATE.mkdir(exist_ok=True)
+    _ensure_state_dir()
     for r in rows:
         p = prev_rows.get(r["id"])
         if p and (p["next"]["step"], p["next"]["owner"]) != (r["next"]["step"], r["next"]["owner"]):
@@ -1937,7 +1940,7 @@ def scan_clock_id():
 
 
 def keep(result, expected_backfill_revision=ANY_BACKFILL_REVISION):
-    STATE.mkdir(exist_ok=True)
+    _ensure_state_dir()
     import ws_state
     with backfill_lock(), ws_state.lock():
         if expected_backfill_revision is not ANY_BACKFILL_REVISION and backfill_revision() != expected_backfill_revision:
@@ -1981,7 +1984,11 @@ def keep(result, expected_backfill_revision=ANY_BACKFILL_REVISION):
         tmp = STATE / f"last.{uuid.uuid4().hex}.json"
         marker = STATE / f"scan_id.{uuid.uuid4().hex}"
         try:
-            tmp.write_text(json.dumps(result))
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            with os.fdopen(fd, "w") as fh:
+                fh.write(json.dumps(result))
+            with contextlib.suppress(OSError):
+                os.chmod(tmp, 0o600)
             tmp.replace(STATE / "last.json")
             marker.write_text(f"{scan_id} { (STATE / 'last.json').stat().st_ino }")
             marker.replace(STATE / "scan_id")
@@ -1993,9 +2000,10 @@ def keep(result, expected_backfill_revision=ANY_BACKFILL_REVISION):
 
 
 def outbox(ev):
-    STATE.mkdir(exist_ok=True)
+    _ensure_state_dir()
     path = STATE / "outbox.jsonl"
-    with path.open("ab+") as fh:
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    with os.fdopen(fd, "rb+") as fh:
         fh.seek(0, os.SEEK_END)
         if fh.tell():
             fh.seek(-1, os.SEEK_END)
@@ -2012,7 +2020,7 @@ def pinged(update=None):
             return json.loads(f.read_text()) if f.exists() else {}
         except (OSError, ValueError):
             return {}
-    STATE.mkdir(parents=True, exist_ok=True)
+    _ensure_state_dir()
     tmp = f.with_suffix(f".{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
     tmp.write_text(json.dumps(update))
     os.replace(tmp, f)
@@ -2020,7 +2028,7 @@ def pinged(update=None):
 
 def ping(text, key=None, ws=(), kind=None, proactive=False, ask=False):
     """Serialize the decision, audit and outbox path across concurrent scans."""
-    STATE.mkdir(parents=True, exist_ok=True)
+    _ensure_state_dir()
     with (STATE / "ping.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         diag.event("ping", ping_kind=kind, ws_n=len(ws or ()), proactive=proactive, ask=ask)
@@ -2158,7 +2166,7 @@ def ping_cli(args):
 
 
 def resolve(key, why):
-    STATE.mkdir(parents=True, exist_ok=True)
+    _ensure_state_dir()
     with (STATE / "ping.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         outbox({"resolve": key, "why": why})
@@ -2256,6 +2264,14 @@ def report(res):
         href = ev if re.match(r"https?://", ev) else "file://" + ev if ev.startswith("/") else ""
         ev = f' · <a href="{e(href)}">evidence</a>' if href else f" · evidence {e(ev)}" if ev else ""
         return f"<div class=sub>verify: {e(st)}{ev}</div>"
+    def mr_cell(r):
+        mr = r.get("mr")
+        if not mr:
+            return "—"
+        ref_s = e(mr.get("ref") or "!" + str(mr["iid"]))
+        url = str(mr.get("web_url") or "")
+        link = f'<a href="{e(url)}">{ref_s}</a>' if re.match(r"https?://", url) else ref_s
+        return f'{link}<div class=sub>{e(mr["role"])}</div>'
     for o in OWNERS:
         group = [r for r in rows if r["next"]["owner"] == o]
         if not group:
@@ -2263,7 +2279,7 @@ def report(res):
         trs = "".join(
             "<tr><td>{n}<div class=sub>{p}</div></td><td>{mr}</td><td><code>{s}</code></td><td>{a}{g}{v}</td><td>{ag}</td></tr>".format(
                 n=e(r["name"]), p=e(r["project"].rsplit("/", 1)[-1] + " · " + r["branch"]),
-                mr=(f'<a href="{e(r["mr"]["web_url"])}">{e(r["mr"].get("ref") or "!" + str(r["mr"]["iid"]))}</a><div class=sub>{e(r["mr"]["role"])}</div>' if r.get("mr") else "—"),
+                mr=mr_cell(r),
                 s=e(r["next"]["step"]), a=e(r["next"]["action"]),
                 g=f'<div class=sub>goal: {e(r["goal"][:140])}</div>' if r["goal"] else '<div class="sub warn">no goal</div>', v=vtag(r),
                 ag=f'{e(r["agent"]["state"])}<div class=sub>{"—" if r["agent"]["idle_h"] is None else f"{r['agent']['idle_h']}h idle"}</div>')
@@ -2272,6 +2288,7 @@ def report(res):
                         f"<table><tr><th>Workspace</th><th>MR</th><th>Step</th><th>Next</th><th>Agent</th></tr>{trs}</table></section>")
     when = time.strftime("%Y-%m-%d %H:%M", time.localtime(res["ts"]))
     return f"""<!doctype html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
 <title>Greenlight Report</title><style>
 :root{{--bg:#fafaf9;--fg:#1c1917;--mut:#78716c;--line:#e7e5e4;--card:#fff;
 --me:#dc2626;--greenlight:#7c3aed;--agent:#ea580c;--working:#16a34a;--ci:#0891b2;--reviewers:#2563eb;--author:#64748b;--dependency:#94a3b8;--parked:#d6d3d1;--done:#a8a29e}}
@@ -2335,7 +2352,7 @@ def scan_failed(e, started_ns=None):
     st_ns = started_ns if started_ns is not None else time.time_ns()
     if e is None:
         with contextlib.suppress(OSError):
-            STATE.mkdir(parents=True, exist_ok=True)
+            _ensure_state_dir()
             with (STATE / "scan_error.lock").open("a+") as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX)
                 if started_ns is not None and _scan_error_newer(f, st_ns):
@@ -2368,7 +2385,7 @@ def scan_failed(e, started_ns=None):
            "msg": f"{SCAN_TOOLS[tool]} {why}" if tool else why if why != "failed" else "crashed",
            "fix": fix}
     with contextlib.suppress(OSError):  # the traceback still reaches stderr
-        STATE.mkdir(parents=True, exist_ok=True)
+        _ensure_state_dir()
         with (STATE / "scan_error.lock").open("a+") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             if _scan_error_newer(f, st_ns):
@@ -2477,11 +2494,7 @@ def main():
             print(why, file=sys.stderr)
             sys.exit(3)
         os.environ.pop("GREENLIGHT_REQUEST", None)  # not for the ADE: a tmux server started here would hand it to every pane
-        try:
-            out = orca(*[a for a in without_change(sys.argv[2:]) if a != "--json"])
-        except PlacementRefused as e:
-            print(e, file=sys.stderr)
-            sys.exit(3)
+        out = orca(*[a for a in without_change(sys.argv[2:]) if a != "--json"])
         print(json.dumps(out, indent=1))
         if isinstance(out, dict) and out.get("error"):  # done in part (native: made, but its agent didn't start)
             sys.exit(1)
@@ -2497,7 +2510,7 @@ def main():
     if cmd == "repos":  # greenlight.py repos [list | add <path>... | rm <path>...]: the native engine's repos.json
         sys.exit(repos_cli(sys.argv[2:]))
     if cmd == "signoff":  # greenlight.py signoff <project> <iid|@branch> <stage>: the user signed off a custom stage
-        STATE.mkdir(parents=True, exist_ok=True)
+        _ensure_state_dir()
         with (STATE / "signoffs.lock").open("a+") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             so = signoffs()

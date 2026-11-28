@@ -703,3 +703,64 @@ def test_binary_precedence_and_installed_directory_rejection(gl_home, tmp_path, 
     assert "--all" not in chat.focus(rows, "status")
     monkeypatch.setenv("GREENLIGHT_ONLY", '["/w/ws-0"]')
     assert "--all" in chat.focus(rows, "status")
+
+
+def test_sec3_toolless_gemini_no_skip_trust_and_isolated_cwd(harness_env, tmp_path):
+    from unittest import mock
+
+    # SEC-3: gemini tools=False omits --skip-trust (still kept for tools=True)
+    cmd_tl, _ = harness.argv("gemini", "untrusted prompt", tools=False)
+    assert "--skip-trust" not in cmd_tl and "--approval-mode" in cmd_tl and "default" in cmd_tl, cmd_tl
+    cmd_tools, _ = harness.argv("gemini", "trusted prompt", tools=True)
+    assert "--skip-trust" in cmd_tools
+
+    # SEC-3: toolless harnesses without a native tool-disable flag always run in an empty tempdir even if cwd is passed
+    seen_cwds = []
+
+    def fake_run(cmd, *, cwd=None, **_kw):
+        seen_cwds.append((cmd[0], cwd))
+        out = json.dumps({"event": "result", "result": {"status": "SUCCESS", "response": "ok"}}) if cmd[0] == "agy" else "ok"
+        return type("P", (), {"returncode": 0, "stdout": out, "stderr": ""})()
+
+    repo_dir = tmp_path / "real-repo"
+    repo_dir.mkdir()
+    with mock.patch.object(harness.subprocess, "run", side_effect=fake_run):
+        assert harness.ask("hi", model="gemini", cwd=str(repo_dir), fallbacks=[]) == "ok"
+        assert harness.ask("hi", model="agy", cwd=str(repo_dir), fallbacks=[]) == "ok"
+        assert harness.ask("hi", model="opencode", cwd=str(repo_dir), fallbacks=[]) == "ok"
+        assert harness.ask("hi", model="claude", cwd=str(repo_dir), fallbacks=[]) == "ok"
+    by_bin = dict(seen_cwds)
+    for h in ("gemini", "agy", "opencode"):
+        assert by_bin[h] != str(repo_dir) and "greenlight-llm-" in str(by_bin[h]), by_bin
+    assert by_bin["claude"] == str(repo_dir)
+
+
+def test_window_applies_agy_gemini_and_parse_fallback_spec():
+    # TEST-ADD-9: _window_applies for agy and gemini pools/shared windows
+    assert harness._window_applies("agy", "5h", "claude pool", "agy:claude-opus-5-5") is True
+    assert harness._window_applies("agy", "5h", "claude pool", "gpt-6-luna") is False
+    assert harness._window_applies("agy", "5h", "gemini pool", "gemini-4-pro") is True
+    assert harness._window_applies("agy", "5h", "", "agy:claude-opus-5-5") is True
+    assert harness._window_applies("agy", "models", "", "agy:claude-opus-5-5") is True
+    assert harness._window_applies("agy", "claude", "", "agy:claude-opus-5-5") is True
+    assert harness._window_applies("agy", "claude", "", "gemini-4-flash") is False
+    assert harness._window_applies("agy", "gemini", "", "gemini-4-flash") is True
+    assert harness._window_applies("agy", "flash", "", "gemini-4-flash") is True
+    assert harness._window_applies("gemini", "5h", "", "gemini-4-pro") is True
+    assert harness._window_applies("gemini", "pro", "", "gemini-4-pro") is True
+    assert harness._window_applies("gemini", "flash", "", "gemini-4-pro") is False
+    assert harness._window_applies("gemini", "gemini", "", "gemini-4-pro") is True
+    assert harness._window_applies("gemini", "models", "", "gemini-4-pro") is True
+
+    # TEST-ADD-9: parse_fallback_spec all input forms
+    assert harness.parse_fallback_spec("claude-opus-5-5@high") == ("claude-opus-5-5", "high")
+    assert harness.parse_fallback_spec("  gpt-6-luna  ") == ("gpt-6-luna", None)
+    assert harness.parse_fallback_spec("   ") is None
+    assert harness.parse_fallback_spec("@high") is None
+    assert harness.parse_fallback_spec({"model": "codex", "effort": "medium"}) == ("codex", "medium")
+    assert harness.parse_fallback_spec({"model": "codex", "effort": "  "}) == ("codex", None)
+    assert harness.parse_fallback_spec({"model": ""}) is None
+    assert harness.parse_fallback_spec(("agy:m", "low")) == ("agy:m", "low")
+    assert harness.parse_fallback_spec(["agy:m", None]) == ("agy:m", None)
+    assert harness.parse_fallback_spec(["only-one"]) is None
+    assert harness.parse_fallback_spec(123) is None
