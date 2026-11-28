@@ -2475,10 +2475,10 @@ const OUT_JUMPS = [["looked", 0, "Since you last looked", "L"], ["err", 1, "Next
   ["tool", 1, "Next tool call", "]"], ["tool", -1, "Previous tool call", "["], ["prompt", 1, "Next prompt", "P"], ["latest", 0, "Latest output", "End"], ["fold", 0, "Fold or unfold this call", "F"]];
 /* a pane log is the terminal as drawn: blank rows, and a spinner's status line and its single letters, redrawn each tick */
 const STATUS_LINE = new RegExp([  // Claude Code's and Codex's spinner, hooks line, token counter and status bar, as drawn (shapes from real pane logs)
-  /^[✻✽✶✳✢·*•◦] [A-Z][a-z]+…(?: \d+)?$/, /^[✻✽✶✳✢·*•◦] .*\(.*esc to interrupt\)$/, /^[✻✽✶✳✢·*•◦] [A-Z][a-z]+… \((?:\d+m )?\d+s · .*tokens.*\)$/,
+  /^[✻✽✶✳✢·*•◦] [A-Z][a-z]+…(?: \d+)?$/, /^[✻✽✶✳✢·*•◦] .*\(.*esc to interrupt.*\)$/, /^[✻✽✶✳✢·*•◦] [A-Z][a-z]+… \((?:\d+m )?\d+s · .*tokens.*\)$/,
   /^Checking for updates…$/, /^running [A-Z]\w* hooks?(?:…| ·)/, /^(?:\d+m )?\d+s · [↓↑] [\d.]+k? tokens(?: · [^)]*)?\)$/, /^\s*\+\d+ -\d+ \| .*\btok\/s(?: \|.*)?$/,
 ].map(r => r.source).join("|"));
-const TICK_LINE = /^[✻✽✶✳✢·*●•◦⏺](?:\s*\d+)?$/;  // a spinner glyph alone (its timer digit with it): nothing to read
+const TICK_LINE = /^[✻✽✶✳✢·*●•◦⏺]$/;  // a spinner glyph alone: nothing to read (with a digit it may be a reply, "⏺ 3")
 function outKind(e){
   if (e.role === "user") return "prompt";
   if (e.role === "tool") return "tool";
@@ -2487,7 +2487,7 @@ function outKind(e){
   if (e.role === "line" && TOOL_LINE.test(t)) return "tool";
   if (e.role === "line" && PROMPT_LINE.test(t)) return "prompt";
   if (e.role === "line" && (!t.trim() || TICK_LINE.test(t))) return "blank";
-  if (e.role === "line" && STATUS_LINE.test(t)) return "status";  // before said: Codex's spinner starts with a bullet
+  if (e.role === "line" && STATUS_LINE.test(t) && !ERR_LINE.test(t)) return "status";  // before said (Codex's spinner starts with a bullet); an error-looking line is never hidden
   if (e.role === "line" && SAID_LINE.test(t)) return "said";
   if (e.role === "line" && ERR_LINE.test(t)) return "err";
   return e.role === "line" && /^\S/.test(t) && (t.replace(/\s+/g, "").length <= 3 || /^[A-Z][a-z]+…(?: \d+)?$/.test(t)) ? "frag" : "out";  // frag: maybe a spinner's stray letters or its bare word
