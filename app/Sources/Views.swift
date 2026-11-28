@@ -2446,15 +2446,16 @@ struct ChatView: View, Looked {
         }.buttonStyle(.plain).fixedSize(horizontal: false, vertical: true).modifier(Tip(c: c, text: "Change model and effort in Settings"))
     }
 
-    static let newTip = "New chat — forget this conversation and start fresh"
+    static let newTip = "Start over — clear the context and begin a new conversation"
 
     var newChat: some View {
         let hot = c.hint == Self.newTip
         return Button(action: { c.clear() }) {
-            Image(ds: "compose", size: iconSize(DS.TypeRole.body.size)).frame(width: padSize, height: padSize)
+            Label { Text("Start over") } icon: { Image(ds: "compose", size: iconSize(DS.TypeRole.label.size)) }
+                .font(ui(DS.TypeRole.label)).padding(.horizontal, DS.Space.s8).frame(height: padSize)
                 .foregroundColor(hot || mono ? fg : dim)
                 .background(RoundedRectangle(cornerRadius: corner).fill(hot ? card : .clear))
-        }.buttonStyle(.plain).modifier(Tip(c: c, text: Self.newTip)).accessibilityLabel("New chat")
+        }.buttonStyle(.plain).modifier(Tip(c: c, text: Self.newTip)).accessibilityLabel("Start over")
     }
 }
 

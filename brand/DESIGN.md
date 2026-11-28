@@ -790,7 +790,7 @@ The board is Greenlight's signature view: one hex per workspace, sized by urgenc
   - A turn holds together: 12 between your bubble, the reply and its status line, 24 before the next bubble.
 - **Header:** a bar like the top bar (§10.11): 44 on `bg.chrome` with its hairline, so the band and the line continue across the window.
   - The name is `title-sm`; where it runs follows in `caption` `fg.muted`. A state shows only while working or offline; idle says nothing.
-  - Its actions are 28 icon buttons on the right: New chat, look, voice, pop-out.
+  - Its actions are on the right: a quiet Start over button with the compose icon, then the look, voice and pop-out icon buttons.
 - **Surface:** the conversation is `bg.surface` in light and `bg.canvas` in dark, where the reading surface is the window's darkest plane and the bubbles and the composer sit on it.
 - **Empty:** the §10.21 empty state, centred in the conversation. Its line names the first action. Once there are sent prompts, a `caption` line under it shows ⌃R as a Kbd; the pane has no key hints elsewhere.
 - **Composer:** a §10.4 textarea with radius `md`, like the bubbles, and no rule over it: the text runs the full width, two lines growing to ten, over a row of controls: attach (quiet icon) on the left, mic and send on the right. The placeholder is `fg.faint`. Send is primary only when there's text; otherwise it's a bare `fg.faint` arrow.
