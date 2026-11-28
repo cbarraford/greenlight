@@ -280,81 +280,87 @@ const { launchBrowser } = require("./js_harness.cjs");
   // markup in a streamed reply is text, as in a one-shot draw
   await p.evaluate(() => stage.text({ md: "<img src=x onerror=alert(1)> and **<b>x</b>**", live: true }));
   assert.equal(await p.locator(".doc img, .doc p > b > b").count(), 0);
-  // thinking (issue 208 phase 2): a card already up stays, muted, its nodes untouched; with none, a still skeleton; the status
-  // strip says what the turn is doing, in the working colour after its glyph; the next drawing replaces either
-  await p.evaluate(() => { stage.status(""); stage.text({ lead: "Last answer.", md: "- one\n- two" }); document.querySelector(".doc li").dataset.mark = "kept"; stage.hold("Looking up !12"); });
-  assert.equal(await p.locator("#s.doc.held").count(), 1);
-  assert.equal(await p.getAttribute(".doc li", "data-mark"), "kept");
-  const muted = await p.evaluate(() => { const c = getComputedStyle(document.documentElement).getPropertyValue("--ds-fg-muted").trim(), t = document.createElement("i");
-    t.style.color = c; document.body.append(t); const want = getComputedStyle(t).color; t.remove(); return [getComputedStyle(document.querySelector(".doc .lead")).color, want]; });
-  assert.equal(muted[0], muted[1], "the held card is muted");
-  assert.equal(await p.$eval("#s.held", e => getComputedStyle(e, "::before").content), '"Last answer"');  // labelled, not colour alone
+  // thinking (refactored bidirectional transitions): holding dissolves the displayed card cleanly into #s.thinking and
+  // scatters needles into the Kuramoto field (keeping the card in history); with motion off or reduced motion, a still skeleton stands in.
+  await p.evaluate(() => { stage.status(""); stage.text({ lead: "Last answer.", md: "- one\n- two" }); stage.hold("Looking up !12"); });
+  assert.equal(await p.locator("#s.thinking").count(), 1);
+  assert.equal(await p.locator("#s.held").count(), 0);
+  assert.ok(["scatter", "think"].includes(await p.evaluate(() => document.body.dataset.fx)));
   assert.equal(await p.textContent("#status span"), "Looking up !12");
   assert.equal(await p.getAttribute("#status svg.tone", "aria-label"), "Now");  // the glyph with the colour
   const nowCol = await p.evaluate(() => { const t = document.createElement("i"); t.style.color = "var(--now)"; document.body.append(t); const c = getComputedStyle(t).color; t.remove(); return c; });
   assert.equal(await p.$eval("#status span", e => getComputedStyle(e).color), nowCol);
-  await p.evaluate(() => { stage.chart({ chart: "bar", title: "t", labels: ["a", "b"], series: [{ name: "n", values: [1, 3] }] }); stage.hold("x"); });
-  assert.equal(await p.$eval(".track i.peak", e => getComputedStyle(e).backgroundColor), await p.$eval(".track i:not(.peak)", e => getComputedStyle(e).backgroundColor));
-  await p.evaluate(() => { stage.text({ lead: "Last answer.", md: "- one\n- two" }); document.querySelector(".doc li").dataset.mark = "kept"; stage.hold("Looking up !12"); });
-  await p.evaluate(() => { stage.html("<p style='color:red'>page</p>"); stage.hold("x"); });  // Chief's own page can't take the colour: dimmed
-  assert.equal(await p.$eval("#s.held iframe", e => getComputedStyle(e).opacity), "0.6");
-  assert.ok(await p.evaluate(() => document.body.scrollHeight <= document.body.clientHeight && document.scrollingElement.scrollHeight <= innerHeight), "a held page doesn't overflow the stage");
-  assert.ok(await p.$eval("#s.held", e => parseFloat(getComputedStyle(e, "::before").paddingLeft)) >= 24, "its label keeps the gutter");
-  await p.evaluate(() => { stage.text({ lead: "Last answer.", md: "- one\n- two" }); document.querySelector(".doc li").dataset.mark = "kept"; stage.hold("Looking up !12"); });
-  await p.evaluate(() => stage.hold("Still looking"));  // a second hold keeps the same held card
-  assert.equal(await p.getAttribute(".doc li", "data-mark"), "kept");
+  // the dissolved card is still preserved in card history and can be stepped back to, then forward back to thinking
+  await p.evaluate(() => stage.back());
+  assert.equal(await p.textContent("#s .lead"), "Last answer.");
+  await p.evaluate(() => stage.forward());
+  assert.equal(await p.locator("#s.thinking").count(), 1);
+  assert.equal(await p.evaluate(() => document.body.dataset.fx), "think");
+  // a second hold while already thinking keeps the thinking canvas and updates the status line in place
+  await p.evaluate(() => stage.hold("Still looking"));
+  assert.equal(await p.locator("#s.thinking").count(), 1);
+  assert.equal(await p.textContent("#status span"), "Still looking");
   await p.evaluate(() => stage.spec({ kind: "table", title: "Board", columns: ["MR"], rows: [["!12"]] }));  // the instant card wins
-  assert.equal(await p.locator("#s.held").count(), 0);
+  assert.equal(await p.locator("#s.thinking").count(), 0);
   assert.ok(await p.isVisible("#status"));  // the strip stays until Chief speaks
-  for (const before of [() => stage.wait("Listening", "Say something."), () => stage.status("")]) {
-    await p.evaluate(before); await p.evaluate(() => { stage.wait("Listening", "Say something."); stage.hold("Thinking"); });
-    assert.equal(await p.locator("#s.skeleton .skel i").count(), 5);
-    assert.equal(await p.locator("#s.skeleton .skel i.lead").count(), 1);
-    assert.equal(await p.$eval(".skel i.lead", e => e.getBoundingClientRect().height), 12);
-    assert.equal(await p.$eval(".skel i:not(.lead)", e => [e.getBoundingClientRect().height, getComputedStyle(e).borderTopLeftRadius].join()), "8,4px");
-    assert.equal(await p.$eval(".skel i", e => getComputedStyle(e).animationName), "none");  // no shimmer
-    assert.equal(await p.locator("#s.skeleton h1, #s.skeleton .cursor").count(), 0);  // no wait card
-  }
+  // with Thinking motion off (or Reduced Motion), stage.hold falls back to the still skeleton so the stage is never blank
+  await p.evaluate(() => { document.documentElement.dataset.motion = "off"; stage.wait("Listening", "Say something."); stage.hold("Thinking"); });
+  assert.equal(await p.locator("#s.skeleton .skel i").count(), 5);
+  assert.equal(await p.locator("#s.skeleton .skel i.lead").count(), 1);
+  assert.equal(await p.$eval(".skel i.lead", e => e.getBoundingClientRect().height), 12);
+  assert.equal(await p.$eval(".skel i:not(.lead)", e => [e.getBoundingClientRect().height, getComputedStyle(e).borderTopLeftRadius].join()), "8,4px");
+  assert.equal(await p.$eval(".skel i", e => getComputedStyle(e).animationName), "none");  // no shimmer
+  assert.equal(await p.locator("#s.skeleton h1, #s.skeleton .cursor").count(), 0);  // no wait card
   await p.evaluate(() => stage.hold(null));
   assert.equal(await p.locator("#s.skeleton").count(), 1);
-  await p.evaluate(() => stage.text({ lead: "Gist.", md: "- a", live: true }));  // the stream replaces the skeleton
-  assert.equal(await p.locator("#s.skeleton, .skel").count(), 0);
-  // holding mid-stream ends the old stream so the next turn's stream draws a fresh, unheld card with a visible caret
-  await p.evaluate(() => stage.hold("Next turn"));
-  assert.equal(await p.locator("#s.doc.held:not(.streaming)").count(), 1);
-  assert.equal(await p.locator(".caret").count(), 0);
-  await p.evaluate(() => stage.text({ lead: "Next.", md: "- b", live: true }));
-  assert.equal(await p.locator("#s.doc.streaming:not(.held)").count(), 1);
-  assert.equal(await p.locator(".caret").count(), 1);
-  assert.notEqual(await p.$eval(".caret", c => getComputedStyle(c).display), "none");
   for (const scheme of ["light", "dark"]) {  // the skeleton's bars show on the stage in both themes
     await p.emulateMedia({ colorScheme: scheme }); await p.evaluate(() => { stage.wait("Listening", ""); stage.hold("x"); });
     assert.notEqual(await p.$eval(".skel i", e => getComputedStyle(e).backgroundColor), await p.$eval("body", e => getComputedStyle(e).backgroundColor), scheme);
   }
-  await p.emulateMedia({ colorScheme: "light" }); await p.evaluate(() => stage.status(""));
-  // The thinking field (DESIGN.md §10.18): needles while Chief works, clear of the wait card's words; the card that follows waits
-  // for them to land, then enters as ever. Your turn, Reduce Motion and Settings ▸ Thinking motion off all leave the stage still.
+  await p.emulateMedia({ colorScheme: "light" });
+  await p.evaluate(() => { document.documentElement.dataset.motion = "on"; stage.status(""); });
+  await p.evaluate(() => stage.text({ lead: "Gist.", md: "- a", live: true }));  // the stream replaces the skeleton
+  assert.equal(await p.locator("#s.skeleton, .skel").count(), 0);
+  // holding mid-stream ends the old stream so the next turn's stream draws a fresh card with a visible caret
+  await p.evaluate(() => stage.hold("Next turn"));
+  assert.equal(await p.locator("#s.thinking").count(), 1);
+  assert.equal(await p.locator(".caret").count(), 0);
+  await p.evaluate(() => stage.text({ lead: "Next.", md: "- b", live: true }));
+  assert.equal(await p.locator("#s.doc.streaming").count(), 1);
+  assert.equal(await p.locator(".caret").count(), 1);
+  assert.notEqual(await p.$eval(".caret", c => getComputedStyle(c).display), "none");
+  await p.evaluate(() => stage.status(""));
+  // The thinking & reactive field (DESIGN.md §10.18): scatter from display, Kuramoto drift while Chief works, rolling frontier
+  // for streaming text, local zero-jump reveal for cards, subtle reactive ambient in open whitespace (quiet on full cards).
   await p.setViewportSize({ width: 800, height: 500 });
   const fxNow = () => p.evaluate(() => document.body.dataset.fx), born = () => p.$eval("#s", e => e.classList.contains("born"));
   const settled = () => p.waitForFunction(() => !document.body.dataset.fx && !document.getElementById("s").classList.contains("born"));
-  await p.evaluate(() => { stage.wait("Listening", ""); stage.hold("Working"); });
-  assert.equal(await fxNow(), "think", "a held skeleton starts the thinking field");
-  await p.waitForTimeout(450);
-  await p.evaluate(() => stage.text({ lead: "Answer", md: "First line", live: true }));
-  assert.equal(await born(), false, "the first streamed text is not delayed by the thinking field");
-  assert.equal(await p.textContent("#s p:not(.lead)"), "First line");
-  await p.evaluate(() => stage.hold("Working again"));
-  assert.equal(await fxNow(), "think", "a held answer starts the thinking field");
-  const ink = title => p.evaluate(title => {  // how many pixels the field has inked: over the stage, or just over the wait card's title
+  const ink = title => p.evaluate(title => {  // how many pixels the field has inked: over the stage, or over the wait card's title
     const c = document.getElementById("fx"), d = c.width / innerWidth; let box = { left: 0, top: 0, width: innerWidth, height: innerHeight };
     if (title) { const r = document.createRange(); r.selectNodeContents(document.querySelector("h1").firstChild); box = r.getBoundingClientRect(); }
     const px = c.getContext("2d").getImageData(Math.round(box.left * d), Math.round(box.top * d), Math.max(1, Math.round(box.width * d)), Math.max(1, Math.round(box.height * d))).data;
     let n = 0; for (let i = 3; i < px.length; i += 4) if (px[i] > 8) n++; return n; }, title);
+  // Display -> Thinking scatter -> settles into think -> Streaming Rolling Frontier -> settles on live:false
+  const afterHold = await p.evaluate(() => { stage.voice("off", 0); stage.text({ lead: "Previous answer.", md: "- line one\n- line two" }); stage.hold("Working"); return document.body.dataset.fx; });
+  assert.equal(afterHold, "scatter", "holding a displayed card starts the scatter transition");
+  await p.waitForFunction(() => document.body.dataset.fx === "think");
+  assert.ok(await ink() > 2000, "full thinking field draws needles across the stage");
+  await p.evaluate(() => stage.text({ lead: "Answer", md: "First line", live: true }));
+  assert.equal(await born(), false, "the first streamed text is not delayed behind .born");
+  assert.equal(await fxNow(), "frontier", "streaming text engages the rolling frontier instead of hard-stopping");
+  assert.equal(await p.textContent("#s p:not(.lead)"), "First line");
+  await p.waitForTimeout(180);
+  assert.ok(await ink() > 500, "rolling frontier keeps needles active below the growing text");
+  await p.evaluate(() => stage.text({ lead: "Answer", md: "First line\n\nSecond paragraph\n\n- bullet one\n- bullet two", live: true }));
+  assert.equal(await fxNow(), "frontier");
+  await p.evaluate(() => stage.text({ lead: "Answer", md: "First line\n\nSecond paragraph\n\n- bullet one\n- bullet two" }));
+  await settled();
+  assert.equal(await ink(), 0, "rolling frontier settles cleanly once the stream finishes");
   await p.evaluate(() => stage.wait("Listening", "")); await settled();
-  assert.equal(await ink(), 0);  // your turn: nothing moves
+  assert.equal(await ink(), 0);  // voice off: nothing moves on Listening
   await p.evaluate(() => stage.wait("One minute", "Reading the diff"));
   assert.equal(await fxNow(), "think");
-  await p.waitForTimeout(700);
+  await p.waitForTimeout(450);
   assert.ok(await ink() > 2000, "needles are drawn while Chief works");
   assert.equal(await ink(true), 0, "and keep clear of the wait card's words");
   assert.equal(await p.$eval("#fx", e => getComputedStyle(e).pointerEvents + e.getAttribute("aria-hidden")), "nonetrue");  // decoration: not in the way, not read out
@@ -362,11 +368,11 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.equal(await fxNow(), "think");
   await p.evaluate(() => stage.spec({ title: "Three workspaces need you", kind: "list", items: [{ label: "one", detail: "review is in" }, { label: "two", detail: "ready to merge" }] }));
   assert.equal(await fxNow(), "reveal");
-  assert.equal(await p.$eval("#s", e => getComputedStyle(e).opacity), "0", "the card waits for the needles to land");
+  assert.equal(await p.$eval("#s", e => getComputedStyle(e).opacity), "0", "the card waits briefly for the needles to converge");
   await p.evaluate(() => stage.spec({ title: "Four workspaces need you", kind: "list", items: [{ label: "one" }] }));  // a newer card mid-reveal takes over
   assert.ok(await born());
   await p.waitForFunction(() => !document.getElementById("s").classList.contains("born"));
-  assert.equal(await p.$eval("#s", e => getComputedStyle(e).animationName), "in");  // then it enters as it always has
+  assert.equal(await p.$eval("#s", e => getComputedStyle(e).animationName), "fade", "materializes cleanly in place with zero vertical jump");
   assert.match(await p.textContent("h1"), /Four/);
   await settled();
   assert.equal(await ink(), 0, "and the field is gone");
@@ -402,15 +408,50 @@ const { launchBrowser } = require("./js_harness.cjs");
   assert.ok(!(await born()));
   await p.emulateMedia({ reducedMotion: "no-preference" });
   await p.evaluate(() => stage.wait("One minute", "x"));
-  await p.setViewportSize({ width: 640, height: 400 });  // the window changes size mid-thought: the field is laid out again
+  await p.setViewportSize({ width: 640, height: 400 });  // the window changes size mid-thought: the field is laid out phase-safely
   await p.waitForTimeout(300);
   assert.ok((await fxNow()) === "think" && (await ink()) > 1000 && await p.evaluate(() => Math.abs(document.getElementById("fx").width / innerWidth - Math.min(2, devicePixelRatio)) < .01));
-  await p.evaluate(() => stage.html("<p>page</p>"));  // Chief's own page has no lines to land on: the needles fall into step and fade
+  await p.evaluate(() => stage.html("<p>page</p>"));  // Chief's own page gets guide lines: needles converge cleanly and emerge
   assert.ok((await fxNow()) === "reveal" && await born());
-  await p.setViewportSize({ width: 800, height: 500 });  // a resize mid-reveal shows the card at once
+  await p.setViewportSize({ width: 800, height: 500 });  // a resize mid-reveal retargets smoothly and still settles
   await settled();
+  assert.equal(await born(), false);
   await p.evaluate(() => { stage.wait("One minute", "x"); stage.wait("Listening", "Go on"); });  // your turn ends the thinking
   await settled();
+  // Subtle reactive ambient state: alive in open whitespace below short cards while listening/speaking, completely quiet when
+  // a card fills the viewport, when muted, or on typed-chat canvas
+  await p.setViewportSize({ width: 800, height: 500 });
+  await p.evaluate(() => { stage.spec({ title: "Short card", kind: "list", items: [{ label: "one" }] }); stage.voice("listen", 0.55); });
+  await p.waitForTimeout(380);
+  assert.equal(await fxNow(), "listen", "subtle reactive listen state runs in open whitespace below a short card");
+  assert.ok(await ink() > 200, "ambient needles draw in the open floor below the short card");
+  const inkOverCard = () => p.evaluate(() => {
+    const c = document.getElementById("fx"), g = c.getContext("2d"), d = c.width / innerWidth;
+    const bot = Math.max(...[...document.getElementById("s").children].map(e => e.getBoundingClientRect().bottom));
+    const px = g.getImageData(0, 0, Math.round(innerWidth * d), Math.max(1, Math.round(bot * d))).data;
+    let n = 0; for (let i = 3; i < px.length; i += 4) if (px[i] > 8) n++; return n;
+  });
+  assert.equal(await inkOverCard(), 0, "ambient needles never draw over displayed card text");
+  await p.evaluate(() => stage.voice("speak", 0.65));
+  await p.waitForTimeout(160);
+  assert.equal(await fxNow(), "speak");
+  assert.equal(await inkOverCard(), 0, "speaking ambient needles stay strictly below card content");
+  // Options appended after a card update the ambient floor so needles clear the option buttons too
+  await p.evaluate(() => stage.options(["Merge it", "Hold"]));
+  await p.waitForTimeout(120);
+  assert.equal(await inkOverCard(), 0, "ambient needles clear option buttons added after settle");
+  // Full-height card: stays completely quiet (no ambient loop, zero ink)
+  await p.evaluate(() => stage.text({ lead: "Tall reply.", md: Array.from({ length: 28 }, (_, i) => `- item ${i} fills the viewport`).join("\n") }));
+  await settled();
+  assert.equal(await ink(), 0, "full-height card keeps the stage completely quiet");
+  // Muted: settles to completely quiet even on a short card
+  await p.evaluate(() => { stage.spec({ title: "Short card", kind: "list", items: [{ label: "one" }] }); stage.voice("listen", 0.5); });
+  await p.waitForTimeout(260);
+  assert.equal(await fxNow(), "listen");
+  await p.evaluate(() => stage.voice("muted", 0));
+  await settled();
+  assert.equal(await ink(), 0, "muted mic keeps the ambient field completely quiet");
+  await p.evaluate(() => stage.voice("off", 0));
   const inkWords = () => p.evaluate(() => {  // inked pixels over every line of the wait card's words
     const c = document.getElementById("fx"), g = c.getContext("2d"), d = c.width / innerWidth, r = document.createRange(), tw = document.createTreeWalker(document.getElementById("s"), NodeFilter.SHOW_TEXT);
     let n = 0; for (let t = tw.nextNode(); t; t = tw.nextNode()) { if (!t.nodeValue.trim()) continue; r.selectNodeContents(t);
@@ -419,16 +460,16 @@ const { launchBrowser } = require("./js_harness.cjs");
     return n; });
   for (const height of [360, 450, 522, 603, 693]) {  // the status strip lifts the wait card's words: the needles make way again
     await p.setViewportSize({ width: 800, height });
-    await p.evaluate(() => stage.wait("One minute", "Reading the diff")); await p.waitForTimeout(500);
+    await p.evaluate(() => stage.wait("One minute", "Reading the diff")); await p.waitForTimeout(400);
     await p.evaluate(() => stage.status("Running the tests"));
-    let over = 0; for (let k = 0; k < 8; k++) { await p.waitForTimeout(120); over = Math.max(over, await inkWords()); }
+    let over = 0; for (let k = 0; k < 8; k++) { await p.waitForTimeout(100); over = Math.max(over, await inkWords()); }
     assert.equal(over, 0, `needles keep clear of the words lifted by the status strip (${height}px)`);
     await p.evaluate(() => { stage.status(""); stage.wait("Listening", ""); }); await settled();
   }
   const needle = () => p.evaluate(() => { const c = document.getElementById("fx"), px = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
     for (let i = 3; i < px.length; i += 4) if (px[i] > 8) return px[i - 3] + px[i - 2] + px[i - 1]; return -1; });  // one inked pixel's r+g+b
   await p.emulateMedia({ colorScheme: "light" });
-  await p.evaluate(() => stage.wait("One minute", "x")); await p.waitForTimeout(500);
+  await p.evaluate(() => stage.wait("One minute", "x")); await p.waitForTimeout(400);
   const lightInk = await needle();
   await p.emulateMedia({ colorScheme: "dark" }); await p.waitForTimeout(150);  // the window turns dark mid-thought: the needles follow
   const darkInk = await needle();
@@ -442,10 +483,10 @@ const { launchBrowser } = require("./js_harness.cjs");
   await p.setViewportSize({ width: 800, height: 500 });
   for (const o of [{ chart: "bar", title: "Runs", labels: ["a", "b"], series: [{ name: "s", values: [2, 5] }] },  // ledger rows: the needles take the tracks
     { chart: "bar", stacked: true, title: "Runs", labels: ["a", "b"], series: [{ name: "ok", values: [4, 3] }, { name: "failed", values: [1, 2] }] }]) {  // bars: along their tops
-    await p.evaluate(() => stage.wait("One minute", "x")); await p.waitForTimeout(450);
+    await p.evaluate(() => stage.wait("One minute", "x")); await p.waitForTimeout(400);
     await p.evaluate(o => stage.chart(o), o);
     assert.equal(await fxNow(), "reveal");
-    await p.waitForTimeout(500);
+    await p.waitForTimeout(250);
     assert.ok(await ink() > 200, "the needles are on their way to the chart");
     await settled();
   }
@@ -509,13 +550,12 @@ const { launchBrowser } = require("./js_harness.cjs");
     return c.right <= next.left;
   }), true, "a long chip stays inside its table cell");
   await p.setViewportSize({ width: 800, height: 500 });
-  // a held card steps its chips (label and glyph both) down to muted along with the rest of the card
+  // holding dissolves a chipped card cleanly into thinking while keeping it in history (chips stay live when stepped back to)
   await p.evaluate(() => { stage.refs({ "!12": { tone: "bad", label: "CI failed" } }); stage.text({ md: "- !12 failed" }); stage.hold("Checking…"); });
-  assert.equal(await p.evaluate(() => {
-    const s = getComputedStyle(document.getElementById("s")).color;
-    return getComputedStyle(document.querySelector(".chip")).color === s && getComputedStyle(document.querySelector(".chip svg.tone")).color === s;
-  }), true, "held chip and its glyph step down to the held card's muted colour");
-  await p.evaluate(() => stage.status(""));
+  assert.equal(await p.locator("#s.thinking").count(), 1);
+  await p.evaluate(() => { stage.back(); });
+  assert.equal(await p.textContent("#s .chip"), "CI failed");
+  await p.evaluate(() => { stage.forward(); stage.status(""); });
   await p.evaluate(() => stage.refs({ "!12": { tone: "ok", label: "CI passed" }, "!99": { tone: "needs", label: "Needs you" } }));
   await p.evaluate(t => stage.spec(t), { ...tbl([["!12", "passed"]]), title: "Other" });  // another card: drawn fresh
   assert.deepEqual(await p.$$eval("table.grid tbody tr", rs => rs.map(r => r._mark ?? null)), [null]);
@@ -558,7 +598,10 @@ const { launchBrowser } = require("./js_harness.cjs");
   await p.evaluate(() => stage.text({ md: "See [docs](https://x/docs)", live: true }));
   assert.equal(await p.$eval(".doc .caret", c => c.parentElement.tagName), "P");
   await p.evaluate(() => { stage.text({ md: "See [docs](https://x/docs)." }); stage.hold("Thinking"); });
-  assert.equal(await p.$eval("#s a", a => getComputedStyle(a).color), await p.$eval("#s", e => getComputedStyle(e).color));
+  assert.equal(await p.locator("#s.thinking").count(), 1);
+  await p.evaluate(() => { stage.back(); });
+  assert.equal(await p.getAttribute("#s a", "href"), "https://x/docs");
+  await p.evaluate(() => { stage.forward(); });
   await p.evaluate(() => { stage.status(""); stage.html("<p>custom</p>"); stage.options(["Approve", "Skip"]); });
   assert.ok(await p.$eval("#s.frame > .options a.option", a => a.getBoundingClientRect().left >= 20 && a.getBoundingClientRect().bottom <= innerHeight - 20));
   await p.setViewportSize({ width: 340, height: 520 });
@@ -650,10 +693,13 @@ const { launchBrowser } = require("./js_harness.cjs");
   await q3.evaluate(b => { stage.text({ lead: "Only.", md: "x" }); stage.wait("Listening", ""); stage.spec(b); stage.back(); }, brd2("w"));
   assert.ok(await q3.isVisible("#hist")); assert.equal(await q3.$eval("#hist [data-go=forward]", b => b.disabled), false);
   await q3.evaluate(() => stage.forward()); assert.equal(await q3.locator("#s.board").count(), 1);
-  // holding from the idle board draws the skeleton (never "Last answer" over the board)
+  // holding from the idle board scatters cleanly into thinking (or skeleton with motion off; never "Last answer" over the board)
   await q3.evaluate(() => stage.hold("Looking up !5"));
-  assert.equal(await q3.locator("#s.skeleton .skel").count(), 1);
+  assert.equal(await q3.locator("#s.thinking").count(), 1);
   assert.equal(await q3.locator("#s.board.held").count(), 0);
+  await q3.evaluate(() => { document.documentElement.dataset.motion = "off"; stage.hold("Looking up !5"); });
+  assert.equal(await q3.locator("#s.skeleton .skel").count(), 1);
+  await q3.evaluate(() => { document.documentElement.dataset.motion = "on"; });
   // going back mid-stream, then starting a new turn (hold): ends the off-screen stream so the next stream renders on screen
   await q3.evaluate(() => { stage.status(""); stage.text({ lead: "P1.", md: "first" }); stage.text({ lead: "P2.", md: "- half", live: true });
     stage.back(); stage.hold("Next turn"); stage.text({ lead: "P3.", md: "fresh", live: true }); });
@@ -683,10 +729,11 @@ const { launchBrowser } = require("./js_harness.cjs");
   for (let i = 0; i < 8; i++) await q.evaluate(n => stage.spec({ kind: "list", title: "C" + n, items: [] }), i);  // only the last few are kept
   assert.equal(await q.textContent("#hist .hn"), "6 of 6");
   assert.ok(await q.evaluate(() => ![...document.querySelectorAll("#hist button")].some(b => [...b.attributes].some(a => a.name.startsWith("on")))));
-  // typed chat's canvas (issue 208 phase 7) is the same page: no voice hint, and #hist never overlaps card content
+  // typed chat's canvas (issue 208 phase 7) is the same page: no voice hint, no reactive voice field, and #hist never overlaps card content
   const cv = await b.newPage(); await cv.setViewportSize({ width: 340, height: 280 });
   await cv.goto("file://" + require("path").join(__dirname, "../app/stage.html"));
-  await cv.evaluate(() => { document.body.dataset.surface = "canvas"; stage.text({ md: "| a |\n|---|\n| 1 |" }); stage.text({ md: "| MR | Status | Action |\n|---|---|---|\n| !12 | ok | Merge now |\n| !13 | red | Fix lint failure |" }); });
+  await cv.evaluate(() => { document.body.dataset.surface = "canvas"; stage.voice("listen", 0.8); stage.text({ md: "| a |\n|---|\n| 1 |" }); stage.text({ md: "| MR | Status | Action |\n|---|---|---|\n| !12 | ok | Merge now |\n| !13 | red | Fix lint failure |" }); });
+  assert.equal(await cv.evaluate(() => document.body.dataset.fx), undefined, "typed chat canvas ignores live voice ambient state");
   assert.ok(await cv.isVisible("#hist")); assert.equal(await cv.isVisible("#hist .hh"), false);
   const cvFit = await cv.evaluate(() => { const s = document.getElementById("s"), t = s.getBoundingClientRect().top, p = parseFloat(getComputedStyle(s).paddingBottom) || 24;
     return Math.min(280, Math.max(96, Math.ceil([...s.children].reduce((a, e) => Math.max(a, e.getBoundingClientRect().bottom - t), 0) + p))); });
