@@ -58,7 +58,7 @@ def panes(cmd=False):
         parts = l.split(SEP)
         if len(parts) == 5 and not cmd:
             parts.append("")
-        if len(parts) == 6:
+        if len(parts) == 6 and not parts[1].startswith("gl-warm-"):
             out.append(dict(zip(("handle", "session", "cwd", "title", "at", "cmd"), parts)))
     return out
 

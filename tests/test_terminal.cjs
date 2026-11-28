@@ -1701,6 +1701,38 @@ test("term.ws with sessionId opens in the workspace and types the session connec
   } finally { await prePage.close() }
 });
 
+test("newTab fits the pane once at its final geometry before posting open", async page => {
+  const res = await page.evaluate(() => {
+    const orig = GhosttyWeb.FitAddon.prototype.fit;
+    let fits = 0;
+    GhosttyWeb.FitAddon.prototype.fit = function(...a){ fits++; return orig.apply(this, a) };
+    try {
+      const before = window.__posts.filter(m => m.cmd === "open").length;
+      newTab("/w/fix-login");
+      const open = window.__posts.filter(m => m.cmd === "open").slice(before);
+      return {fits, open, activeHidden: cur.r.hidden, othersHidden: tabs.filter(t => t !== cur).every(t => t.r.hidden)};
+    } finally { GhosttyWeb.FitAddon.prototype.fit = orig }
+  });
+  assert.equal(res.fits, 1, "mount fits once without a redundant second fit in show()");
+  assert.equal(res.open.length, 1);
+  assert.ok(res.open[0].cols > 20 && res.open[0].rows > 5, "fitted at real viewport dimensions");
+  assert.equal(res.activeHidden, false);
+  assert.equal(res.othersHidden, true);
+});
+
+test("show() debounces focusWs hints and avoids standby thrash on synchronous background tab bounce", async page => {
+  await page.evaluate(() => { newTab("/w/fix-login") });
+  await page.waitForFunction(() => window.__posts.some(m => m.cmd === "focusWs" && m.ws === "/w/fix-login"), null, {timeout: 2000});
+  const countBefore = await page.evaluate(() => window.__posts.filter(m => m.cmd === "focusWs").length);
+  // Mirror autoRun(): open a background tab on another workspace and immediately restore the current tab
+  await page.evaluate(() => { const was = cur; newTab("/w/sidebar"); show(was) });
+  await page.waitForTimeout(120);
+  const countAfter = await page.evaluate(() => window.__posts.filter(m => m.cmd === "focusWs").length);
+  assert.equal(countAfter, countBefore, "synchronous A -> B -> A bounce must not thrash focusWs");
+  await page.evaluate(() => { newTab("/w/sidebar") });
+  await page.waitForFunction(() => window.__posts.filter(m => m.cmd === "focusWs").pop()?.ws === "/w/sidebar", null, {timeout: 2000});
+});
+
 (async () => {
   const browser = await launchBrowser();
   let failed = 0;
