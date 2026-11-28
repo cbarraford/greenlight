@@ -1663,7 +1663,8 @@ function footer(){
 function renderOverview(main){
   const all = shown(), SHELF = ["quiet", "done"];
   main.classList.add("ov");
-  const strip = shows("agents") ? main.appendChild(agentsStrip(true)) : null;
+  const strip = shows("agents") ? main.appendChild(agentsStrip(true)) : null, cards = strip && strip.querySelector(".acards");
+  if (cards && cards.offsetHeight > 240) main.style.overflowY = "scroll";  // the board below will overflow (§10.7): the scrollbar's room comes out of W0 now, not after it's laid out
   const pucks = all.filter(p => !SHELF.includes(p.state)), shelf = all.filter(p => SHELF.includes(p.state));  // nothing to do here: they wait on the shelf
   const stacks = stackUp(pucks), W0 = main.clientWidth - (parseFloat(getComputedStyle(main).paddingRight) || 0);  // the dock's gutter
   const st = stacks.find(p => p.members && p.name === ui.drill);  // inside a stack: only its hexes, breadcrumbs back out
@@ -1691,7 +1692,7 @@ function renderOverview(main){
     const more = h("button", {class:"chip more", "aria-expanded":"false", onclick: () => { ui.shelfAll = true; render() }});
     do { more.textContent = `+${kids.length - i} more`; row.insertBefore(more, kids[i]) } while (more.offsetTop > y && i-- > 0);  // no room for one chip: just the count
   });
-  const cards = strip && strip.querySelector(".acards"), stripH = strip ? strip.offsetHeight - (cards ? Math.max(0, cards.offsetHeight - 240) : 0) : 0;  // the board sizes as if the strip held 240px of cards: more agents push it down the page, never shrink it
+  const stripH = strip ? strip.offsetHeight - (cards ? Math.max(0, cards.offsetHeight - 240) : 0) : 0;  // §10.7: the board sizes as if the strip held 240px of cards; more agents push it down the page, never shrink it
   const H0 = Math.max(260, main.clientHeight - stripH - head.offsetHeight - (shelfEl ? shelfEl.offsetHeight : 0));  // the shelf measured, never sliced by the drawer
   if (!items.some(p => p.name === ui.openStack)) ui.openStack = null;
   if (items.length) {
@@ -2918,7 +2919,7 @@ function renderMain(){
   const main = document.getElementById("main");
   const keep = main.scrollTop, acardsEl = main.querySelector(".acards"), keepAgents = acardsEl ? acardsEl.scrollTop : 0, inner = [...main.querySelectorAll(".w-log")].map(e => e.scrollTop);  // a refresh rebuilds them at the top; keepAgents is the detached window's own scroll (the docked strip never scrolls)
   const fe = document.activeElement, fid = document.hasFocus() && fe && main.contains(fe) && fe.id, fsel = fid && [fe.selectionStart, fe.selectionEnd];
-  main.replaceChildren(); main.classList.remove("ov"); ui.dk = {};
+  main.replaceChildren(); main.classList.remove("ov"); main.style.overflowY = ""; ui.dk = {};
   document.body.classList.toggle("nohex", !shows("hex"));
   if (!ui.snap) { main.classList.add("ov"); const bad = CONN.failed, retrying = !bad && CONN.tries > 0;
     const retry = () => { CONN.tries++; CONN.refocus = true; post({cmd: "ready"}); armConn(); renderMain(); footer(); document.querySelector("#main .empty").focus() };  // the page's own hello again: the app answers with the latest update

@@ -2713,9 +2713,10 @@ test("Agents view: copy session ID and launch new terminal window connected to t
   assert.ok(strip.mainScrolls, "a tall strip pushes the hexes down and the page scrolls to them");
   const board = await page.evaluate(() => {  // sized as if the strip held at most 240px of cards: more agents push the board down, never squeeze it
     const m = document.getElementById("main"), st = document.querySelector("#main .agents"), c = st.querySelector(".acards");
-    return {h: document.querySelector("#main .fieldwrap").offsetHeight, room: m.clientHeight - (st.offsetHeight - c.offsetHeight + 240) - document.querySelector("#main .whead").offsetHeight, cards: c.offsetHeight};
+    return {h: document.querySelector("#main .fieldwrap").offsetHeight, room: m.clientHeight - (st.offsetHeight - c.offsetHeight + 240) - document.querySelector("#main .whead").offsetHeight - (document.querySelector("#main .shelf")?.offsetHeight || 0), cards: c.offsetHeight};
   });
   assert.ok(board.cards > 240, `the strip should be taller than the old cap (${board.cards}px)`);
+  assert.equal(await page.evaluate(() => document.getElementById("main").style.overflowY), "scroll", "a tall strip reserves the page's scrollbar before the board is measured (classic scrollbars)");
   assert.ok(board.h >= board.room - 1, `a tall strip must not shrink the hex board (${board.h}px < ${board.room}px)`);
   await page.evaluate(() => { const m = document.getElementById("main"); m.scrollTop = m.scrollHeight });
   assert.ok(await page.evaluate(() => { const hx = document.querySelector("#main .hx"), m = document.getElementById("main").getBoundingClientRect();
