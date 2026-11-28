@@ -2166,18 +2166,23 @@ def resolve(key, why):
         pinged({k: t for k, t in pinged().items() if k != key})
 
 
-def grouped_moot(names, asked, by_key):
+def grouped_moot(names, asked, rows):
     """A grouped question is moot once every workspace it names has finished or gone since it was asked.
     asked: their situations in its decision record, which is the last scan's view of them. One already finished then (a deploy,
     a delete), one greenlight was about to finish itself (asked after its own merge, the record still reads unfinished) or one
     with no record keeps the question open: cleanup removes a merged workspace by itself, so its going says nothing about the
-    question. So does one missing from the scan with its folder still there: skipped (mid-rebase, a failed git call), not gone."""
+    question. So does one missing from the scan with its folder still there (skipped mid-rebase or by a failed git call, not
+    gone), or any time the folders are another machine's (ORCA_ENVIRONMENT), and any unfinished workspace under a named name:
+    the dashboard lifts by name, so a twin, or one recreated under that name, still reads as asked."""
     asked = [t for t in asked if t.get("workspace") in names]
     if not names or {t["workspace"] for t in asked} != set(names):
         return False
-    for t in asked:  # each by its id (two may share a name), then by name: one recreated under its name is not gone
-        r = by_key.get(t.get("worktree_id")) or by_key.get(t["workspace"])
-        if t.get("owner") in (None, "done", "greenlight") or (r["next"]["owner"] != "done" if r else os.path.isdir(str(t.get("worktree_id")).split("::")[-1])):  # an Orca id is repo::path
+    if any(r["name"] in names and r["next"]["owner"] != "done" for r in rows):
+        return False
+    by_id, remote = {r["id"]: r for r in rows}, bool(os.environ.get("ORCA_ENVIRONMENT"))
+    for t in asked:  # each by its id, never by name: a twin's row says nothing about this one
+        wid = str(t.get("worktree_id")); r = by_id.get(wid)
+        if t.get("owner") in (None, "done", "greenlight") or (r["next"]["owner"] != "done" if r else remote or os.path.isdir(wid.split("::")[-1])):  # an Orca id is repo::path
             return False
     return True
 
@@ -2201,7 +2206,7 @@ def close_stale(rows):
                 group_ws[k] = e.get("ws") or []  # the latest ask: one re-asked with no --ws is closed by hand again
     for r in decisions.load() if group_ws else []:
         if r.get("key") in group_ws:
-            asked[r["key"]] = [t for t in [r] + (r.get("workspaces") or []) if t.get("workspace")]
+            asked[r["key"]] = [t for t in r.get("workspaces") or [r] if t.get("workspace")]  # several: their own situations, not the shared fields
     if any(k.startswith(ws_prefixes) for k in open_pings):
         stuck_ids = {r.get("key"): [t.get("worktree_id") for t in [r] + (r.get("workspaces") or []) if t.get("worktree_id")]
                      for r in decisions.load() if str(r.get("key", "")).startswith(ws_prefixes)}
@@ -2217,7 +2222,7 @@ def close_stale(rows):
                 resolve(key, "workspaces no longer waiting on you")
             continue
         if key.startswith("@"):  # other grouped questions are closed by hand (`greenlight.py resolve`), or once grouped_moot
-            if grouped_moot(group_ws.get(key, []), asked.get(key, []), by_key):
+            if grouped_moot(group_ws.get(key, []), asked.get(key, []), rows):
                 resolve(key, "workspaces finished or removed")
             continue
         r = by_key.get(key)
