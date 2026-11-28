@@ -446,6 +446,31 @@ test("Chief's console opens the live agent session by name or worktree, ahead of
   assert.equal(closed.length, 1); assert.equal(closed[0].keep, true);
   await page.evaluate(() => { newTab("/w/review"); closeTab(cur) });
   assert.equal((await posts(page, "close")).pop().keep, undefined, "a tab's own shell session still ends with it");
+  // keep holds only while the agent still runs there: once trees stop listing its session (it quit: a login shell is left), it ends
+  const agentTrees = {trees: TREES.trees.map(w => w.path === "/w/review" ? {...w, resume: {harness: "claude", session: "mc-1a2b3c4d"}} : w)};
+  await page.evaluate(() => term.ws("mc-1a2b3c4d"));
+  await page.evaluate(t => term.workspaces(t), TREES);
+  await page.evaluate(() => closeTab(latestTab(t => paneOf(t).some(p => p.session === "mc-1a2b3c4d"))));
+  assert.equal((await posts(page, "close")).filter(m => m.session === "mc-1a2b3c4d").pop().keep, undefined, "its agent quit: the leftover shell ends");
+  // deleting the workspace ends its sessions, agent or not
+  await page.evaluate(t => term.workspaces(t), agentTrees);
+  await page.evaluate(() => term.ws("mc-1a2b3c4d"));
+  await page.evaluate(() => term.tree({op: "rm", path: "/w/review"}));
+  assert.equal((await posts(page, "close")).filter(m => m.session === "mc-1a2b3c4d").pop().keep, undefined, "a deleted workspace's agent session ends");
+  // the Basement button's resume (its own way to stop an agent: close the tab) is unchanged
+  await page.evaluate(() => term.ws("/w/review", {harness: "claude", session: "mc-1a2b3c4d"}));
+  await page.evaluate(() => closeTab(latestTab(t => paneOf(t).some(p => p.session === "mc-1a2b3c4d"))));
+  assert.equal((await posts(page, "close")).filter(m => m.session === "mc-1a2b3c4d").pop().keep, undefined, "the Basement's agent tab still ends it");
+});
+test("Chief's console that comes before the first trees waits for them, then attaches the live agent session", async page => {
+  const b = page.context().browser(), fresh = await b.newPage({viewport: {width: 1200, height: 800}, colorScheme: "dark"});
+  await fresh.addInitScript(() => { window.__posts = []; window.webkit = {messageHandlers: {term: {postMessage: m => window.__posts.push(JSON.parse(JSON.stringify(m)))}}} });
+  await fresh.goto(page.url()); await fresh.waitForFunction(() => window.term);
+  await fresh.evaluate(() => { term.restore({tabs: []}); term.ws("review") });
+  assert.equal((await posts(fresh, "open")).filter(o => o.session === "mc-1a2b3c4d").length, 0, "no trees yet: nothing to attach");
+  await fresh.evaluate(t => term.workspaces(t), {trees: TREES.trees.map(w => w.path === "/w/review" ? {...w, resume: {harness: "claude", session: "mc-1a2b3c4d"}} : w)});
+  assert.equal((await posts(fresh, "open")).filter(o => o.session === "mc-1a2b3c4d").length, 1, "the first trees: the agent's session");
+  await fresh.close();
 });
 test("Chief's console by a worktree's last part attaches only when one live agent's worktree ends that way", async page => {
   const mk = (path, session) => ({ade: "orca", project: "acme/" + path.split("/")[1], name: "api", path, branch: "b", main: false, agent: "working",
@@ -455,6 +480,9 @@ test("Chief's console by a worktree's last part attaches only when one live agen
   assert.equal((await posts(page, "open")).filter(o => /^mc-(aaaa1111|bbbb2222)$/.test(o.session)).length, 0, "two …/api: no guess");
   await page.evaluate(() => term.ws("mc-bbbb2222"));
   assert.equal((await posts(page, "open")).filter(o => o.session === "mc-bbbb2222").length, 1, "the session name is exact");
+  await page.evaluate(t => term.workspaces(t), {trees: [mk("/c/web", "mc-cccc3333"), {...mk("/d/web", ""), agent: "none", resume: {}}]});
+  await page.evaluate(() => term.ws("web"));
+  assert.equal((await posts(page, "open")).filter(o => o.session === "mc-cccc3333").length, 0, "…/web twice, one with an agent: still no guess");
 });
 test("title omits list before term.workspaces arrives so boot never overwrites L1's project list with empty repos/paths", async page => {
   const b = page.context().browser(), fresh = await b.newPage({viewport: {width: 1200, height: 800}, colorScheme: "dark"});

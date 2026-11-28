@@ -728,7 +728,6 @@ function newTab(ws = curWs || acct()?.dir || "", cmd, fresh, session){  // sessi
   if (HOMES.includes(ws)) uses[ws] = (uses[ws] || 0) + 1;
   const tab = mkTab(ws, {set: fresh ? undefined : cur?.ws === ws ? cur.set : wsTabs(ws).sort((a, b) => b.used - a.used)[0]?.set});
   const {p, mount} = newPane(tab, cmd, session);
-  if (session) p.keep = true;  // the agent's own session: closing this tab detaches, it never ends the agent
   tab.r.append(p.box); tab.focus = p;
   tabs.forEach(x => x.r.hidden = x !== tab);  // lay out at final geometry before mount() so fit() runs once
   mount(); show(tab, true);
@@ -756,7 +755,10 @@ function drag(e, dv, down){
   const up = () => { removeEventListener("mousemove", move); removeEventListener("mouseup", up); removeEventListener("blur", up); dv.classList.remove("drag"); document.body.style.cursor = ""; panes.forEach(p => p.fit.fit()) };
   addEventListener("mousemove", move); addEventListener("mouseup", up); addEventListener("blur", up);
 }
-function kill(p){ clearTimeout(p.scanT); clearTimeout(p.endT); clearTimeout(p.askT); clearTimeout(p.lnkT); pinged.delete(p.id); post({cmd: "close", id: p.id, session: p.session, ws: p.tab.ws, ...p.keep ? {keep: true} : {}}); panes.delete(p.id); p.t.dispose && p.t.dispose() }
+// Chief's console attached this pane to an agent's own session (p.keep): closing it detaches while that agent still runs there
+// (trees' resume.session); once it has quit, or the workspace is deleted (end), the session goes as any tab's does
+const keeps = (p, end) => !end && !!p.keep && trees.some(w => w.resume?.session === p.session);
+function kill(p, end){ clearTimeout(p.scanT); clearTimeout(p.endT); clearTimeout(p.askT); clearTimeout(p.lnkT); pinged.delete(p.id); post({cmd: "close", id: p.id, session: p.session, ws: p.tab.ws, ...keeps(p, end) ? {keep: true} : {}}); panes.delete(p.id); p.t.dispose && p.t.dispose() }
 function closePane(p){
   kill(p);
   const tab = p.tab, parent = p.box.parentElement;
@@ -769,7 +771,7 @@ function closePane(p){
   if (tab.focus === p) focusPane(left[left.length - 1]); else render();
   refit(tab);
 }
-function closeTab(tab = cur){ if (tab) { paneOf(tab).forEach(kill); dropTab(tab) } }
+function closeTab(tab = cur, o){ if (tab) { paneOf(tab).forEach(p => kill(p, o?.end === true)); dropTab(tab) } }
 function dropTab(tab){
   clearTimeout(tab.quiet); clearTimeout(tab.retry);
   const i = tabs.indexOf(tab); tabs.splice(i, 1); tab.r.remove();
@@ -1390,7 +1392,7 @@ async function treeDone(o){
     const r = await ask({icon: "warn", title: `${wsName(o.path)} has unsaved work`, text: "Deleting the worktree loses what's not committed.", rows, cancel: "Keep it", safe: true, ok: "Delete anyway", danger: true});
     if (r) post({cmd: "tree", op: "rm", path: o.path, force: true, ...teardown(o.path) && {text: teardown(o.path)}});
   } else if (o.error) ask({icon: "warn", title: o.op === "rm" ? `Couldn't delete ${wsName(o.path)}` : "Couldn't save the goal", text: esc(o.error), cancel: false});
-  else if (o.op === "rm") { if (o.warn) toast(o.warn); facts.delete(o.path); wsTabs(o.path).forEach(closeTab); if (cardWs === o.path) $("card").hidden = true }
+  else if (o.op === "rm") { if (o.warn) toast(o.warn); facts.delete(o.path); wsTabs(o.path).forEach(t => closeTab(t, {end: true})); if (cardWs === o.path) $("card").hidden = true }
 }
 addEventListener("mousedown", e => { if (!e.target.closest("#menu")) $("menu").hidden = true; if (!e.target.closest("#card, #menu, #dlg")) { clearTimeout(hoverT); $("card").hidden = true } else cardHover = false }, true);
 // hover: resting on a workspace row opens its card (sooner when one is already up). A card that hover opened stays while the pointer is on
@@ -1441,7 +1443,7 @@ const acctHome = () => acct()?.dir || (typeof acctCfg.host === "string" && HOMES
 // (its main checkout, read by dash.py trees) can name its project too, so a teammate's clone lands in the same one. A window shows all,
 // or ONLY these ids ("" is No Man's Land: in no project). A window of one project is that project's account: its file's look, host and hosts.
 const NML = "No Man's Land";
-let projects = [], allP = [], treesIn = false;  // yours; yours merged with the repos' files (what everything else reads)
+let projects = [], allP = [], treesIn = false, waitTrees = null;  // waitTrees: Chief's console that came before the first trees [ws, r, timer]  // yours; yours merged with the repos' files (what everything else reads)
 const pid = n => "p" + n.toLowerCase().replace(/\W+/g, "_").slice(0, 40);
 const acct = () => activeOnly()?.length === 1 ? allP.find(p => p.id === activeOnly()[0]) : null;
 function merge(){
@@ -1502,17 +1504,20 @@ function resumeWs(ws, r){
   newTab(ws, BIN_OK(r.bin) ? RESUME[r.harness].replace(/^\S+/, r.bin) : RESUME[r.harness]);
   return cur.resumed = {h: r.harness, at: Date.now()}, true;
 }
-function openWs(ws, r){
+function openWs(ws, r, noWait){
   if (resumeWs(ws, r)) return;
   // Chief's [console: …]: a tmux session, a worktree (path or its last part) or a tab's name; else that worktree's latest tab
   const latest = latestTab, explicit = ws === "" || ws.startsWith("/") || ws.startsWith("@"), q = ws.toLowerCase();
   const t = latest(t => paneOf(t).some(p => p.session === ws));
   if (t) return show(t);
-  const agents = trees.filter(w => SESSION_OK(w.resume?.session)), tails = agents.filter(w => w.path.endsWith("/" + ws));
-  const live = agents.find(w => w.resume.session === ws || w.path === ws) || (tails.length === 1 ? tails[0] : null);  // two "…/api": not a guess
+  const tails = trees.filter(w => w.path.endsWith("/" + ws)), one = tails.length === 1 ? tails[0] : null;  // two "…/api": not a guess
+  const live = trees.find(w => SESSION_OK(w.resume?.session) && (w.resume.session === ws || w.path === ws))
+    || (SESSION_OK(one?.resume?.session) ? one : null);
   if (live) {
     const existing = latest(t => paneOf(t).some(p => p.session === live.resume.session));
-    return existing ? show(existing) : newTab(live.path, undefined, false, live.resume.session) }
+    if (existing) return show(existing);
+    newTab(live.path, undefined, false, live.resume.session); cur.focus.keep = true; return }
+  if (!treesIn && !noWait) { clearTimeout(waitTrees?.[2]); waitTrees = [ws, r, setTimeout(() => { waitTrees = null; openWs(ws, r, true) }, 5000)]; return }  // a cold start: the live sessions come with the first trees (5 s at most)
   const other = explicit ? latest(t => t.ws === ws)
     : latest(t => t.ws === ws) || latest(t => t.ws && t.ws.endsWith("/" + ws))
       || (q && latest(t => (t.name || "").toLowerCase().includes(q)));
@@ -2667,7 +2672,7 @@ window.term = {
   projects: o => { projects = Array.isArray(o) ? o.filter(p => p && typeof p.id === "string" && p.id && Array.isArray(p.repos) && Array.isArray(p.dirs)) : [];
     merge(); setTitle(); render(); if (!$("pal").hidden) palRender() },
   // the window is closing for good: every pane's tmux session, for the app to end; nothing is saved after
-  closeAll: () => { restored = false; clearTimeout(saveT); clearTimeout(focusWsT); focusWsT = 0; lastFocusWs = null; const out = [...panes.values()].map(p => ({session: p.session, ws: p.tab.ws, ...p.keep ? {keep: true} : {}}));
+  closeAll: () => { restored = false; clearTimeout(saveT); clearTimeout(focusWsT); focusWsT = 0; lastFocusWs = null; const out = [...panes.values()].map(p => ({session: p.session, ws: p.tab.ws, ...keeps(p) ? {keep: true} : {}}));
     panes.forEach(p => { clearTimeout(p.scanT); clearTimeout(p.endT); clearTimeout(p.askT); clearTimeout(p.lnkT); p.t.dispose?.() }); panes.clear(); pinged.clear(); lastPanes = null;
     tabs.forEach(t => { clearTimeout(t.quiet); clearTimeout(t.retry); t.r.remove() }); tabs.length = 0; cur = null; lastScrollTab = lastScrollWs = null; return out },
   workspaces: o => { basementFoot(o?.usage); trees = o?.trees || []; if (Array.isArray(o?.agents) && o.agents[0]) defAgent = normAgent(o.agents[0]); treesIn = true; refreshing(false);
@@ -2675,6 +2680,7 @@ window.term = {
     if (JSON.stringify(acctCfg) !== was) { paint(); save() }
     for (const ws of made.keys()) if (wsInfo(ws)) { made.delete(ws); reveal(ws); save() }  // its real row: maybe another section than the bare one
     syncPanes(o?.panes);
+    if (waitTrees) { const [w, r, t] = waitTrees; waitTrees = null; clearTimeout(t); openWs(w, r) }
     setTitle(); render(); if (!$("pal").hidden) palRender(); autoRun() },
   palette: open => restored && palette(open),
 };
