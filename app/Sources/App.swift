@@ -2472,6 +2472,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if termBridge.hasPane(id) { termBridge.close(id: id, session: session, kill: killSession) }
         ptys.removeValue(forKey: id)?.stop()
     }
+    /// Whether closing a pane ends its tmux session: not when another pane still shows it (`held`), nor when the page attached
+    /// it to an agent's own session (`keep`): closing that tab detaches and the agent keeps running.
+    static func closeEnds(_ b: [String: Any], session: String?, held: (String) -> Bool) -> Bool {
+        b["keep"] as? Bool != true && session.map { !held($0) } ?? false
+    }
     /// Whether a pane other than `key` (any window) still shows this session: a workspace page's Basement button can attach
     /// an agent's session that another window already has open, and closing one of them must not kill the agent in the other.
     func heldElsewhere(_ session: String, except key: (String) -> Bool) -> Bool {
@@ -2575,7 +2580,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             guard let self else { return }
             for p in r as? [[String: Any]] ?? [] {
                 guard let s = p["session"] as? String, s.range(of: #"^mc-[\w-]{1,64}$"#, options: .regularExpression) != nil,
-                      !self.heldElsewhere(s, except: { $0.hasPrefix("\(wid):") }), let at = paneTarget(p["ws"] as? String ?? "") else { continue }
+                      App.closeEnds(p, session: s, held: { self.heldElsewhere($0, except: { $0.hasPrefix("\(wid):") }) }),
+                      let at = paneTarget(p["ws"] as? String ?? "") else { continue }
                 if !self.termBridge.killSession(host: at.host, session: s) {
                     ssh("\(App.tmux) kill-session -t \(shellQuote("=" + s)) 2>/dev/null", on: at.host)
                 }
@@ -2830,7 +2836,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 + "elif \(App.tmux) has-session -t \(shellQuote("=" + session)) 2>/dev/null; then f=/dev/null/live; "
                 + "elif f=$(mktemp \"${TMPDIR:-/tmp}/greenlight-run.XXXXXX\") && printf %s \"$r\" >| \"$f\"; then :; else [ -z \"$f\" ] || rm -f \"$f\"; f=; fi; "
                 + "printf '\(App.runMark)'; [ -n \"$f\" ] || \(go("$1"))\"$r\"; ")
-            + "printf '\(App.tmuxMark)'; exec \(App.tmux) start-server \\; "
+            + "unset TMUX; printf '\(App.tmuxMark)'; exec \(App.tmux) start-server \\; "  // unset TMUX: a launch from inside tmux would refuse to nest; -A attaches a live session read-write
             + (App.tmuxOpts + App.paneRecorderHooks(for: hooksHost ?? host)).joined(separator: " \\; ") + " \\; new-session -A -s \(shellQuote(session)) -c \"$PWD\""
             + (run.isEmpty ? "" : " " + shellQuote(go("$(command cat \"$1\" 2>/dev/null && command rm -f \"$1\")") + "'") + "\"$f\"" + shellQuote("'"))  // -A onto a live session: tmux ignores it
         if host.isEmpty || host == "local" { return inner }
@@ -2983,7 +2989,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         web?.evaluateJavaScript("term.toast(\(d))")
     }
     private func publishTrees() {
-        let obj = treesToPublish(server: &serverTreesObj, local: &localTreesObj, merge: !isLocalHost(host), primaryHost: host)
+        let obj = treesToPublish(server: &serverTreesObj, local: &localTreesObj, merge: !isLocalHost(host), primaryHost: host,
+                                 serverPending: !initialServerTreesDone,
+                                 localPending: !initialLocalTreesDone && !uitest && !selftest)  // a Mac fetch that failed or never runs: the server's word
         if let obj, JSONSerialization.isValidJSONObject(obj) {
             lastTreesObj = obj; paneReplay.add(obj["panes"])
             refreshProjects()
@@ -3006,6 +3014,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
                JSONSerialization.isValidJSONObject(obj) {
                 self.serverTreesObj = obj
+            } else {
+                self.serverTreesObj?["tmuxOk"] = false  // this fetch failed: the last trees are stale, its sessions unknown
             }
             self.publishTrees()
         })
@@ -3020,6 +3030,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                    JSONSerialization.isValidJSONObject(obj) {
                     self.localTreesObj = obj
                     self.publishTrees()
+                } else if self.serverTreesObj != nil {
+                    self.localTreesObj?["tmuxOk"] = false  // stale, as the server's above
+                    self.publishTrees()  // no Mac trees after all: the server's payload again, its own tmuxOk now (localPending over)
                 }
             })
         }
@@ -3072,8 +3085,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         case "size":
             ptySize[id] = (cols, rows)
             if !termBridge.resize(id: id, cols: cols, rows: rows) { ptys[id]?.resize(cols: cols, rows: rows) }
-        case "close":  // you closed it: the session goes too (quitting the app only detaches)
-            let kill = session.map { !heldElsewhere($0, except: { $0 == id }) } ?? false
+        case "close":  // you closed it: the session goes too, but an agent's own (keep) only detaches, as quitting the app does
+            let kill = App.closeEnds(b, session: session) { self.heldElsewhere($0, except: { $0 == id }) }
             let wasBridged = termBridge.hasPane(id)
             stopPty(id, killSession: kill); ptySession[id] = nil
             if !wasBridged, kill, let session, let at = paneTarget(b["ws"] as? String ?? ""),

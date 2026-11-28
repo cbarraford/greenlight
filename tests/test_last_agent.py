@@ -246,3 +246,23 @@ def test_add_resume_with_an_unwritable_home(home):
             mock.patch.object(last_agent, "note", side_effect=OSError("full")):
         dash.add_resume(pucks, [("/w/a", {"agentType": "claude"})])
     assert pucks[0]["resume"] == {}
+
+
+def test_add_resume_says_whether_tmux_answered(home):
+    """The console keeps an agent's tab only while trees list its session; when tmux didn't answer, none is listed, and
+    the page must know that means unknown, not quit."""
+    pucks = [{"path": "/w/a", "agent": {}}]
+    with mock.patch.object(ade_basement.subprocess, "run", return_value=_tmux_rows()):
+        assert dash.add_resume(pucks, [("/w/a", {})]) is True
+    with mock.patch.object(ade_basement.subprocess, "run", side_effect=subprocess.TimeoutExpired("tmux", 20)):
+        assert dash.add_resume(pucks, [("/w/a", {})]) is False
+    assert "session" not in pucks[0]["resume"]
+
+
+def test_agent_sessions_go_by_what_runs_not_a_lingering_title():
+    tm = [{"session": "mc-a", "cwd": "/w/a/src", "title": "✳ Done", "cmd": "claude"},  # running
+          {"session": "mc-b", "cwd": "/w/a", "title": "✳ Done", "cmd": "-zsh"},  # Claude quit there: its title stays
+          {"session": "mc-c", "cwd": "/w/a", "title": "x", "cmd": "codex"},
+          {"session": "gl-warm-1", "cwd": "/w/a", "title": "", "cmd": "claude"},  # not one of ours
+          {"session": "mc-d", "cwd": "/elsewhere", "title": "", "cmd": "claude"}]
+    assert dash.agent_sessions(tm, ["/w/a", "/w/b"]) == {"/w/a": ["mc-a", "mc-c"]}

@@ -116,6 +116,7 @@ _SYS_PATH_DIRS = frozenset({"/usr/bin", "/bin", "/usr/sbin", "/sbin"})
 def build_env(base: dict[str, str] | None = None) -> dict[str, str]:
     env = dict(os.environ if base is None else base)
     env.pop("GREENLIGHT_RUN", None)
+    env.pop("TMUX", None)  # the bridge may itself be launched inside tmux; its clients must attach independently
     env["TERM"] = "xterm-256color"
     env["COLORTERM"] = "truecolor"
     env["TERM_PROGRAM"] = "Greenlight"

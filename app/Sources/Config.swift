@@ -331,14 +331,20 @@ func mergeTreesPayload(_ primary: [String: Any]?, _ secondary: [String: Any]?, p
     out["usage"] = usageOf(primary, secondary)
     let scan = primary?["scanned"] != nil ? primary : secondary  // the Basement footer's scan facts, all from one host: greenlight's, else the Mac's
     for k in ["ts", "scanned", "scan_error"] { out[k] = scan?[k] }
+    // whether each host's tmux answered (dash.py trees): unknown on either is unknown, as a pane's session may be on either;
+    // no server trees at all (a merge always has the Mac's) knows nothing of its sessions either
+    out["tmuxOk"] = primary != nil && primary?["tmuxOk"] as? Bool != false && secondary?["tmuxOk"] as? Bool != false
     return out
 }
 /// The trees payload to publish after one host's `dash.py trees` answered: both hosts' worktrees (merged when greenlight runs on
 /// a server), but each host's pane states only once, from the fetch that read them. Each fetch publishes on its own, so without
 /// this the other host's states from the last refresh ride along: a stale "working" after a turn's ping, then the fresh "done",
 /// pinged the turn again (terminal.html syncPanes). Spent states are dropped from `server`/`local`.
-func treesToPublish(server: inout [String: Any]?, local: inout [String: Any]?, merge: Bool, primaryHost: String) -> [String: Any]? {
-    let obj = merge && local != nil ? mergeTreesPayload(server, local, primaryHost: primaryHost, secondaryHost: "local") : server ?? local
+func treesToPublish(server: inout [String: Any]?, local: inout [String: Any]?, merge: Bool, primaryHost: String,
+                    serverPending: Bool = false, localPending: Bool = false) -> [String: Any]? {
+    var obj = merge && local != nil ? mergeTreesPayload(server, local, primaryHost: primaryHost, secondaryHost: "local") : server ?? local
+    // a host's first trees still coming: its sessions are unknown (terminal.html waits, and keeps an attached agent's tab)
+    if merge && (server == nil && serverPending || local == nil && localPending) { obj?["hostsPending"] = true }
     server?["panes"] = nil; local?["panes"] = nil
     return obj
 }

@@ -1379,6 +1379,23 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
     let uBoth = mergeSnapshots(["usage": srvUsage], ["usage": macUsage], primaryHost: "devbox", secondaryHost: "local")?["usage"] as? [[String: Any]]
     let uMac = mergeTreesPayload(["usage": [[String: Any]]()], ["usage": macUsage], primaryHost: "devbox", secondaryHost: "local")?["usage"] as? [[String: Any]]
     let uNone = mergeTreesPayload(["trees": [[String: Any]]()], nil, primaryHost: "devbox", secondaryHost: "local")?["usage"]
+    let tmuxOf: ([String: Any]?, [String: Any]?) -> Bool? = { mergeTreesPayload($0, $1, primaryHost: "devbox", secondaryHost: "local")?["tmuxOk"] as? Bool }
+    check("trees merge: tmuxOk is false when either host's tmux didn't answer, true when both did or said nothing",
+          tmuxOf(["tmuxOk": true], ["tmuxOk": true]) == true && tmuxOf(["tmuxOk": false], ["tmuxOk": true]) == false
+          && tmuxOf(["tmuxOk": true], ["tmuxOk": false]) == false && tmuxOf(["trees": [[String: Any]]()], nil) == true
+          && tmuxOf(nil, ["tmuxOk": true]) == false)  // no server trees: its sessions unknown
+    var pubSrv: [String: Any]? = ["trees": [[String: Any]](), "tmuxOk": true], pubMac: [String: Any]? = nil
+    let srvOnly = treesToPublish(server: &pubSrv, local: &pubMac, merge: true, primaryHost: "devbox", localPending: true)
+    let macFailed = treesToPublish(server: &pubSrv, local: &pubMac, merge: true, primaryHost: "devbox", localPending: false)
+    let localOnly = treesToPublish(server: &pubMac, local: &pubSrv, merge: false, primaryHost: "local")
+    var noSrv: [String: Any]? = nil, mac: [String: Any]? = ["trees": [[String: Any]](), "tmuxOk": true]
+    let srvComing = treesToPublish(server: &noSrv, local: &mac, merge: true, primaryHost: "devbox", serverPending: true)
+    mac = ["trees": [[String: Any]](), "tmuxOk": true]
+    let srvFailed = treesToPublish(server: &noSrv, local: &mac, merge: true, primaryHost: "devbox", serverPending: false)
+    check("trees publish: hostsPending while a host's first trees are coming; not once its fetch failed or when it never runs, nor for one host alone",
+          srvOnly?["hostsPending"] as? Bool == true && srvOnly?["tmuxOk"] as? Bool == true
+          && macFailed?["hostsPending"] == nil && localOnly?["hostsPending"] == nil
+          && srvComing?["hostsPending"] as? Bool == true && srvFailed?["hostsPending"] == nil && srvFailed?["tmuxOk"] as? Bool == false)
     let uDup = mergeSnapshots(["usage": srvUsage], ["usage": srvUsage.map { var m = $0; m["state"] = "failed"; return m }],
                               primaryHost: "devbox", secondaryHost: "local")?["usage"] as? [[String: Any]]
     let rescueWin: [[String: Any]] = [["label": "5h", "pct": 20]]
@@ -1476,6 +1493,15 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
           && hooks.allSatisfy { $0.contains("#{pane_pipe}") && $0.contains("pane_log.py") && $0.contains("pipe-pane -O") }
           && App.tmuxQuote(#"a"b\c$HOME"#) == #""a\"b\\c\$HOME""#
           && App.tmuxFormatEscape("dir#1/file#2") == "dir##1/file##2")
+    let attach = delegate.paneCmd(session: "mc-agent", cwd: "/w/agent", on: "local")
+    check("pane: a live agent session attaches read-write, with our tmux options, outside an inherited tmux client",
+          attach.contains("unset TMUX; printf") && attach.contains("new-session -A -s 'mc-agent'")
+          && attach.contains("set -g status off") && !attach.contains("attach -r"))
+    check("pane: closing a tab ends its own tmux session, never an agent's it attached (keep) nor one another pane shows",
+          App.closeEnds(["cmd": "close"], session: "mc-shell", held: { _ in false })
+          && !App.closeEnds(["cmd": "close", "keep": true], session: "mc-agent", held: { _ in false })
+          && !App.closeEnds(["cmd": "close"], session: "mc-agent", held: { _ in true })
+          && !App.closeEnds(["cmd": "close"], session: nil, held: { _ in false }))
     // paneCmd's long run, for real: a login shell, then tmux where it's on PATH (else that shell), evals it byte for byte past tmux's
     // 16 KB command line, prints runMark and leaves no temp file; onto the live session again it saves nothing. Its own tmux socket,
     // no pane recorder (its hooks name the real socket and home), killed after through a login shell as the pane found tmux.

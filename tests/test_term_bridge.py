@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -22,6 +23,24 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import ade_basement  # noqa: E402
 import term_bridge  # noqa: E402
+
+
+def test_live_session_attaches_read_write_with_our_options_and_no_run_file(tmp_path):
+    bridge = object.__new__(term_bridge.TermBridge)
+    bridge.tmux_bin = "/usr/bin/tmux"
+    bridge.socket = "greenlight"
+    bridge.env = {"SHELL": "/bin/sh"}
+    bridge.pool = SimpleNamespace(has_session=lambda _session: True, opts_argv=[";", "set", "-g", "status", "off"],
+                                  claim=lambda *_a: pytest.fail("a live session is never a pooled claim"))
+    bridge.tmux_mark = term_bridge.DEFAULT_TMUX_MARK
+    bridge.run_mark = term_bridge.DEFAULT_RUN_MARK
+    bridge._write_run_file = lambda _run: pytest.fail("a live session's run is ignored by -A: no temp file")
+    argv, warm, marks, run_file = bridge._build_launch_argv("mc-agent", str(tmp_path), "echo ignored")
+    new = argv.index("new-session")
+    assert argv[:5] == ["/usr/bin/tmux", "-L", "greenlight", "-f", "/dev/null"] and "status" in argv[:new]
+    assert argv[new:new + 4] == ["new-session", "-A", "-s", "mc-agent"] and "attach" not in argv and "-r" not in argv
+    assert warm is False and marks == [bridge.run_mark.encode(), bridge.tmux_mark.encode()]
+    assert run_file is None and argv[-1].endswith("/dev/null/live")
 
 
 def _read_event(proc: subprocess.Popen[bytes], timeout: float = 5.0) -> dict[str, Any] | None:
@@ -84,8 +103,8 @@ def test_validation_env_and_tmux_cmd_splitting(tmp_path):
     assert term_bridge._run_shell_cmd("/usr/bin/fish", "$1", "echo hi").startswith("exec /bin/sh -c ")
     assert term_bridge._run_shell_cmd("/bin/zsh", "$1", "echo hi").startswith("exec /bin/zsh -lic ")
 
-    env = term_bridge.build_env({"PATH": "/usr/bin:/bin", "GREENLIGHT_RUN": "leaked-run-id"})
-    assert "GREENLIGHT_RUN" not in env
+    env = term_bridge.build_env({"PATH": "/usr/bin:/bin", "GREENLIGHT_RUN": "leaked-run-id", "TMUX": "outer-client"})
+    assert "GREENLIGHT_RUN" not in env and "TMUX" not in env
     assert env["TERM"] == "xterm-256color"
     assert env["COLORTERM"] == "truecolor"
     assert env["TERM_PROGRAM"] == "Greenlight"

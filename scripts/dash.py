@@ -963,19 +963,34 @@ def resume_agent(ag):
 def add_resume(pucks, agents):
     """Each puck's `resume`, what its page's Basement button opens (last_agent.py): the last agent's own tmux session while it
     still runs there, else its harness to continue there. Records what's running now first: the ADE's agents and the app's
-    Claude panes."""
+    Claude panes. Returns whether tmux answered (False: no session is listed, but one may well run)."""
     try:
         ab = importlib.import_module("ade_basement")
-        tm, is_agent = ab.panes(cmd=True), lambda t: ab.state(t) is not None
+        tm, is_agent, ok = ab.panes(cmd=True), lambda t: ab.state(t) is not None, True
     except Exception:  # no tmux, or no server yet: nothing to attach to
-        tm, is_agent = [], lambda t: False
+        tm, is_agent, ok = [], lambda t: False, False
     with contextlib.suppress(OSError):  # a read-only or full GREENLIGHT_HOME: the button falls back to what it knew
         last_agent.observe(agents, tm, is_agent)
     recs, now = last_agent.load(), dict(agents)  # now: the live agent (a puck's own may be the last scan's)
+    running = agent_sessions(tm, [p["path"] for p in pucks])
     for p in pucks:
+        p["agentSessions"] = running.get(p["path"], [])
         rec = recs.get(p["path"])
         p["resume"] = last_agent.resume(rec, tm, busy=(now.get(p["path"]) or {}).get("state") in ("working", "waiting"),
                                         created=created(p["path"]), binary=rec and harness_bin(rec["harness"]))
+    return ok
+
+
+def agent_sessions(panes, paths):
+    """{worktree: [our tmux sessions with a pane running an agent's command there]}, by what runs (not a title a quit agent
+    leaves behind): the console keeps an attached agent's tab while its session is one of these."""
+    names = set().union(*last_agent.CMDS.values())
+    out: dict[str, set[str]] = {}
+    for p in panes:
+        s, w = p.get("session") or "", last_agent.owner(p.get("cwd") or "", paths)
+        if w and last_agent.SESSION_RE.fullmatch(s) and last_agent.cmd(p) in names:
+            out.setdefault(w, set()).add(s)
+    return {w: sorted(v) for w, v in out.items()}
 
 
 _CODEX_HEAD_CACHE: dict[tuple[str, int, int], tuple[str, str, str]] = {}
@@ -3250,7 +3265,8 @@ def main():
         print(forge(a[1] if len(a) == 2 else None))
     elif a[:1] == ["trees"]:
         ts = trees()
-        print(json.dumps({"trees": ts, "panes": basement_panes(), "repoHosts": repo_hosts(ts),
+        tmux_ok = add_resume(ts, [(w["path"], {"state": w["agent"]}) for w in ts])
+        print(json.dumps({"trees": ts, "tmuxOk": tmux_ok, "panes": basement_panes(), "repoHosts": repo_hosts(ts),
                           "agents": greenlight.CONFIG.get("agents") or ["claude", "codex"], "usage": usage_now(), **scan_facts()}))
     elif a[:1] == ["turn"] and len(a) == 2 and SESSION_RE.match(a[1]):
         try:
