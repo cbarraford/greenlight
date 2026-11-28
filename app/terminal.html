@@ -760,8 +760,8 @@ function drag(e, dv, down){
 // or while that can't be told (no trees yet, tmux didn't answer): a leftover shell beats a killed agent
 // (trees' agentSessions: every session of ours with an agent's command running, by what runs, not a title a quit one leaves)
 // a worktree no trees have listed yet: its host's (a failed fetch) is unknown too; one listed before and gone from fresh trees
-// was deleted (a failed fetch marks its host's trees stale: tmuxOk), its session goes
-const keeps = (p, end) => !end && !!p.keep && (!treesIn || !tmuxOk || hostsPending || !treesSeen.has(p.tab.ws)
+// was deleted (a failed fetch marks its host's trees stale: listOk), its session goes
+const keeps = (p, end) => !end && !!p.keep && (!treesIn || !listOk || hostsPending || !treesSeen.has(p.tab.ws)
   || trees.some(w => w.resume?.session === p.session || w.agentSessions?.includes(p.session)));
 function kill(p, end){ clearTimeout(p.scanT); clearTimeout(p.endT); clearTimeout(p.askT); clearTimeout(p.lnkT); pinged.delete(p.id); post({cmd: "close", id: p.id, session: p.session, ws: p.tab.ws, ...keeps(p, end) ? {keep: true} : {}}); panes.delete(p.id); p.t.dispose && p.t.dispose() }
 function closePane(p){
@@ -1448,7 +1448,7 @@ const acctHome = () => acct()?.dir || (typeof acctCfg.host === "string" && HOMES
 // (its main checkout, read by dash.py trees) can name its project too, so a teammate's clone lands in the same one. A window shows all,
 // or ONLY these ids ("" is No Man's Land: in no project). A window of one project is that project's account: its file's look, host and hosts.
 const NML = "No Man's Land";
-let waitTrees = [], waitT = 0, tmuxOk = true, hostsPending = false, focusWait = false, treesSeen = new Set();  // the app's [ws, r] that came before every host's trees; trees' tmux answered; a host's first trees still out
+let waitTrees = [], waitT = 0, listOk = true, hostsPending = false, focusWait = false, treesSeen = new Set();  // the app's [ws, r] that came before every host's trees; trees' listing complete (tmux and every ADE); a host's first trees still out
 let projects = [], allP = [], treesIn = false;  // yours; yours merged with the repos' files (what everything else reads)
 const pid = n => "p" + n.toLowerCase().replace(/\W+/g, "_").slice(0, 40);
 const acct = () => activeOnly()?.length === 1 ? allP.find(p => p.id === activeOnly()[0]) : null;
@@ -1517,7 +1517,9 @@ function openWs(ws, r, app, waited){  // app: the app asked (Chief's console, a 
   const t = latest(t => paneOf(t).some(p => p.session === ws));
   if (t) return show(t);
   const tails = trees.filter(w => w.path.endsWith("/" + ws)), one = tails.length === 1 ? tails[0] : null;  // two "…/api": not a guess
-  const live = app && (trees.find(w => SESSION_OK(w.resume?.session) && (w.resume.session === ws || w.path === ws))
+  const byName = SESSION_OK(ws) && trees.find(w => w.agentSessions?.includes(ws));  // a second agent in a worktree, by its session
+  const live = app && (byName ? {path: byName.path, resume: {session: ws}}
+    : trees.find(w => SESSION_OK(w.resume?.session) && (w.resume.session === ws || w.path === ws))
     || (SESSION_OK(one?.resume?.session) ? one : null));  // a click in the page keeps going to your own tabs
   if (live) {
     const existing = latest(t => paneOf(t).some(p => p.session === live.resume.session));
@@ -2683,7 +2685,7 @@ window.term = {
   closeAll: () => { restored = false; clearTimeout(saveT); clearTimeout(waitT); waitT = 0; waitTrees.length = 0; focusWait = false; clearTimeout(focusWsT); focusWsT = 0; lastFocusWs = null; const out = [...panes.values()].map(p => ({session: p.session, ws: p.tab.ws, ...keeps(p) ? {keep: true} : {}}));
     panes.forEach(p => { clearTimeout(p.scanT); clearTimeout(p.endT); clearTimeout(p.askT); clearTimeout(p.lnkT); p.t.dispose?.() }); panes.clear(); pinged.clear(); lastPanes = null;
     tabs.forEach(t => { clearTimeout(t.quiet); clearTimeout(t.retry); t.r.remove() }); tabs.length = 0; cur = null; lastScrollTab = lastScrollWs = null; return out },
-  workspaces: o => { basementFoot(o?.usage); trees = o?.trees || []; if (Array.isArray(o?.agents) && o.agents[0]) defAgent = normAgent(o.agents[0]); treesIn = true; tmuxOk = o?.tmuxOk !== false; hostsPending = o?.hostsPending === true; trees.forEach(w => treesSeen.add(w.path)); refreshing(false);
+  workspaces: o => { basementFoot(o?.usage); trees = o?.trees || []; if (Array.isArray(o?.agents) && o.agents[0]) defAgent = normAgent(o.agents[0]); treesIn = true; listOk = o?.listOk !== false; hostsPending = o?.hostsPending === true; trees.forEach(w => treesSeen.add(w.path)); refreshing(false);
     Object.assign(scanFoot, {at: Date.now(), scanned: +o?.scanned || 0, err: o?.scan_error || null}, +o?.ts ? {skew: Date.now() / 1000 - o.ts} : {}); const was = JSON.stringify(acctCfg); merge(); if (!hostsPending) openWaiting(); firstShell();  // a host's first trees still out: the 5 s fallback
     if (JSON.stringify(acctCfg) !== was) { paint(); save() }
     for (const ws of made.keys()) if (wsInfo(ws)) { made.delete(ws); reveal(ws); save() }  // its real row: maybe another section than the bare one

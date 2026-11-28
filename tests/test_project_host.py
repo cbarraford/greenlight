@@ -148,7 +148,7 @@ def test_dash_trees_cli_includes_repo_hosts(tmp_path, monkeypatch, capsys):
     (lc_dir / "mac-tool.md").write_text("# mac-tool\n\nOptions: `host=auto`\n\n1. `mr_open` — Open.\n")
     fake_trees = [{"ade": "orca", "project": "mac-tool", "name": "main", "path": str(app_dir), "branch": "main",
                    "main": True, "agent": "none", "goal": "", "pinned": False, "active": None, "since": None, "created": None}]
-    monkeypatch.setattr(dash, "trees", lambda: fake_trees)
+    monkeypatch.setattr(dash, "trees", lambda failed=None: fake_trees)
     monkeypatch.setattr(dash, "basement_panes", dict)
     monkeypatch.setattr(sys, "argv", ["dash.py", "trees"])
     dash.main()
@@ -156,6 +156,23 @@ def test_dash_trees_cli_includes_repo_hosts(tmp_path, monkeypatch, capsys):
     assert out["repoHosts"]["mac-tool"]["mode"] == "auto"
     assert out["repoHosts"]["mac-tool"]["target"] == "mac"
     assert out["repoHosts"]["mac-tool"]["needs_mac"] is True
+
+
+def test_dash_trees_cli_says_whether_the_listing_is_complete(tmp_path, monkeypatch, capsys):
+    """A failed ADE listing leaves its worktrees out: the console must read that as unknown (listOk false), not deleted."""
+    monkeypatch.setattr(dash.greenlight, "STATE", tmp_path)
+    monkeypatch.setattr(dash, "basement_panes", dict)
+    monkeypatch.setattr(dash, "add_resume", lambda ts, agents: True)
+    def broken(name):
+        def call(*a):
+            raise RuntimeError("orca: app restarting")
+        return call
+    for ades, ok in ((["orca"], False), ([], True)):
+        monkeypatch.setattr(dash, "ades", lambda ades=ades: ades)
+        monkeypatch.setattr(dash, "ade_call", broken)
+        monkeypatch.setattr(sys, "argv", ["dash.py", "trees"])
+        dash.main()
+        assert json.loads(capsys.readouterr().out)["listOk"] is ok
 
 
 def test_adopt_skips_mac_repos_on_linux_and_adopts_on_darwin(tmp_path, monkeypatch):

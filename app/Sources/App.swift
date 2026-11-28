@@ -3006,7 +3006,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                JSONSerialization.isValidJSONObject(obj) {
                 self.serverTreesObj = obj
             } else {
-                self.serverTreesObj?["tmuxOk"] = false  // this fetch failed: the last trees are stale, its sessions unknown
+                self.serverTreesObj?["listOk"] = false  // this fetch failed: the last trees are stale, its sessions unknown
             }
             self.publishTrees()
         })
@@ -3022,8 +3022,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                     self.localTreesObj = obj
                     self.publishTrees()
                 } else if self.serverTreesObj != nil {
-                    self.localTreesObj?["tmuxOk"] = false  // stale, as the server's above
-                    self.publishTrees()  // no Mac trees after all: the server's payload again, its own tmuxOk now (localPending over)
+                    self.localTreesObj?["listOk"] = false  // stale, as the server's above
+                    self.publishTrees()  // no Mac trees after all: the server's payload again, its own listOk now (localPending over)
                 }
             })
         }

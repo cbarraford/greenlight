@@ -831,9 +831,19 @@ def ade_call(n):
     return greenlight.orca_cli if n == "orca" else ade.get(n).call
 
 
-def trees():
+def _ade_worktrees(name, failed=None):
+    """One ADE's worktree listing, [] when its CLI raises (its name appended to `failed`)."""
+    try:
+        return ade_call(name)("worktree", "ps", "--limit", "10000")["worktrees"]
+    except Exception:
+        if failed is not None:
+            failed.append(name)
+        return []
+
+
+def trees(failed=None):
     """Every installed ADE's worktrees merged, first ADE wins a shared path. An ADE whose CLI is missing or
-    app isn't running raises, and is skipped."""
+    app isn't running raises, and is skipped (its name appended to `failed`: the listing is incomplete)."""
     out, seen = [], set()
     try:  # greenlight's last scan: the MR, CI, threads and "needs you" for the workspaces it tracks (no API calls here)
         raw_rows = json.loads((greenlight.STATE / "last.json").read_text()).get("rows")
@@ -844,11 +854,7 @@ def trees():
     except (OSError, ValueError, KeyError, AttributeError):
         scan, blk = {}, None
     for name in ades():
-        try:
-            call = ade_call(name)
-            ws = call("worktree", "ps", "--limit", "10000")["worktrees"]
-        except Exception:
-            continue
+        ws = _ade_worktrees(name, failed)
         for w in ws:
             if w.get("isArchived") or not w.get("path") or w["path"] in seen:
                 continue
@@ -3097,9 +3103,11 @@ def main():
     elif a[:1] == ["forge"] and (len(a) == 1 or len(a) == 2 and re.fullmatch(r"[\w.-]+(/[\w.-]+)+", a[1])):
         print(forge(a[1] if len(a) == 2 else None))
     elif a[:1] == ["trees"]:
-        ts = trees()
+        failed: list[str] = []
+        ts = trees(failed)
         tmux_ok = add_resume(ts, [(w["path"], {"state": w["agent"]}) for w in ts])
-        print(json.dumps({"trees": ts, "tmuxOk": tmux_ok, "panes": basement_panes(), "repoHosts": repo_hosts(ts),
+        # listOk: the listing is complete (tmux and every ADE answered): a worktree or session it lacks may still be there
+        print(json.dumps({"trees": ts, "listOk": tmux_ok and not failed, "panes": basement_panes(), "repoHosts": repo_hosts(ts),
                           "agents": greenlight.CONFIG.get("agents") or ["claude", "codex"], "usage": usage_now(), **scan_facts()}))
     elif a[:1] == ["turn"] and len(a) == 2 and SESSION_RE.match(a[1]):
         try:

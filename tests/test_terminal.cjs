@@ -485,7 +485,7 @@ test("Chief's console that comes before the first trees waits for them, then att
   assert.equal((await posts(fresh, "open")).filter(o => o.session === "mc-1a2b3c4d").length, 1, "the first trees: the agent's session");
   assert.equal(await fresh.evaluate(() => tabs.length), 1, "no stray first shell beside it");
   // tmux didn't answer (no session listed): a kept pane is kept, not killed
-  await fresh.evaluate(t => term.workspaces({...t, tmuxOk: false}), TREES);
+  await fresh.evaluate(t => term.workspaces({...t, listOk: false}), TREES);
   await fresh.evaluate(() => closeTab(cur));
   assert.equal((await posts(fresh, "close")).pop().keep, true, "tmux unknown: keep the agent");
   await fresh.close();
@@ -543,6 +543,10 @@ test("Chief's console by a worktree's last part attaches only when one live agen
   assert.equal((await posts(page, "open")).filter(o => /^mc-(aaaa1111|bbbb2222)$/.test(o.session)).length, 0, "two …/api: no guess");
   await page.evaluate(() => term.ws("mc-bbbb2222"));
   assert.equal((await posts(page, "open")).filter(o => o.session === "mc-bbbb2222").length, 1, "the session name is exact");
+  await page.evaluate(t => term.workspaces(t), {trees: [{...mk("/a/api", "mc-aaaa1111"), agentSessions: ["mc-aaaa1111", "mc-eeee5555"]}]});
+  await page.evaluate(() => term.ws("mc-eeee5555"));
+  const second = (await posts(page, "open")).filter(o => o.session === "mc-eeee5555");
+  assert.equal(second.length, 1, "a worktree's second agent, by its session name"); assert.equal(second[0].ws, "/a/api");
   await page.evaluate(t => term.workspaces(t), {trees: [mk("/c/web", "mc-cccc3333"), {...mk("/d/web", ""), agent: "none", resume: {}}]});
   await page.evaluate(() => term.ws("web"));
   assert.equal((await posts(page, "open")).filter(o => o.session === "mc-cccc3333").length, 0, "…/web twice, one with an agent: still no guess");
