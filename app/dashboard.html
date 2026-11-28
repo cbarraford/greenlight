@@ -1691,7 +1691,8 @@ function renderOverview(main){
     const more = h("button", {class:"chip more", "aria-expanded":"false", onclick: () => { ui.shelfAll = true; render() }});
     do { more.textContent = `+${kids.length - i} more`; row.insertBefore(more, kids[i]) } while (more.offsetTop > y && i-- > 0);  // no room for one chip: just the count
   });
-  const H0 = Math.max(260, main.clientHeight - (strip ? strip.offsetHeight : 0) - head.offsetHeight - (shelfEl ? shelfEl.offsetHeight : 0));  // the shelf measured, never sliced by the drawer
+  const cards = strip && strip.querySelector(".acards"), stripH = strip ? strip.offsetHeight - (cards ? Math.max(0, cards.offsetHeight - 240) : 0) : 0;  // the board sizes as if the strip held 240px of cards: more agents push it down the page, never shrink it
+  const H0 = Math.max(260, main.clientHeight - stripH - head.offsetHeight - (shelfEl ? shelfEl.offsetHeight : 0));  // the shelf measured, never sliced by the drawer
   if (!items.some(p => p.name === ui.openStack)) ui.openStack = null;
   if (items.length) {
     const {R, pos, w, h: ht} = honey(items.length, W0, H0, 40, 3);
@@ -2915,7 +2916,7 @@ function renderNone(main){  // no workspaces at all: start one; all hidden by th
 }
 function renderMain(){
   const main = document.getElementById("main");
-  const keep = main.scrollTop, acardsEl = main.querySelector(".acards"), keepAgents = acardsEl ? acardsEl.scrollTop : 0, inner = [...main.querySelectorAll(".w-log")].map(e => e.scrollTop);  // a refresh rebuilds them at the top
+  const keep = main.scrollTop, acardsEl = main.querySelector(".acards"), keepAgents = acardsEl ? acardsEl.scrollTop : 0, inner = [...main.querySelectorAll(".w-log")].map(e => e.scrollTop);  // a refresh rebuilds them at the top; keepAgents is the detached window's own scroll (the docked strip never scrolls)
   const fe = document.activeElement, fid = document.hasFocus() && fe && main.contains(fe) && fe.id, fsel = fid && [fe.selectionStart, fe.selectionEnd];
   main.replaceChildren(); main.classList.remove("ov"); ui.dk = {};
   document.body.classList.toggle("nohex", !shows("hex"));
