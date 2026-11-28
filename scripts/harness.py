@@ -99,12 +99,19 @@ def binary(name):
         (p for p in (os.path.expanduser(f"~/.local/bin/{name}"), os.path.expanduser(f"~/.{name}/bin/{name}")) if os.path.exists(p)), name)
 
 
+def permissions(name):
+    """The permission args for a tool-using run of `name`, headless or interactive: its bypass ones when config.json sets
+    harnesses.<name>.bypass to exactly true, else its safe ones (None: it has no sandbox)."""
+    h = H[name]
+    return h["bypass"] if conf(name).get("bypass") is True else h["safe"]
+
+
 def argv(name, text, model=None, effort=None, sid=None, system=None, stream=False, images=(), tools=True, allow=()):
     if name not in H:
         raise ValueError(f"unknown harness {name!r}: one of {', '.join(H)}")
     h = H[name]
     if tools:
-        perms = h["bypass"] if conf(name).get("bypass") is True else h["safe"]
+        perms = permissions(name)
         if perms is None:
             raise ValueError(f"{name} has no permission sandbox: set harnesses.{name}.bypass true in config.json to use it")
     else:
@@ -147,16 +154,32 @@ def argv(name, text, model=None, effort=None, sid=None, system=None, stream=Fals
     return cmd, text
 
 
-def interactive(name, prompt):
-    """The command line that starts `name` in a terminal with a first prompt (opencode's positional is a project dir;
-    gemini's positional runs headless when stdin isn't a TTY, and agy takes -i/--prompt-interactive for an initial prompt)."""
+def trust(name, cwd):
+    """Args that trust cwd for this one session when name's bypass is on: agy's and codex's bypass flags don't skip their
+    trust-folder dialogs, which stall an unattended launch in a new worktree. Neither override is saved to their config.
+    Claude's dialog has no such flag (only -p skips it), so a new folder still asks once."""
+    if not cwd or conf(name).get("bypass") is not True:
+        return []
+    path = os.path.abspath(os.path.expanduser(cwd))
+    if name == "agy":
+        return ["--settings", json.dumps({"trustedWorkspaces": [path]})]
+    if name == "codex":  # a TOML inline table: the path has dots, so a dotted -c key can't name it; a JSON string is a TOML one
+        return ["-c", "projects={" + json.dumps(path) + '={trust_level="trusted"}}']
+    return []
+
+
+def interactive(name, prompt, cwd=None):
+    """The command line that starts `name` in a terminal (in cwd) with a first prompt (opencode's positional is a project dir;
+    gemini's positional runs headless when stdin isn't a TTY, and agy takes -i/--prompt-interactive for an initial prompt).
+    It carries the same permission args as a headless run, and trust(name, cwd)."""
     name = canonical(name)
     if name not in H:
         raise ValueError(f"unknown harness {name!r}: one of {', '.join(H)}")
     b = binary(name)
     model = conf(name).get("model")
     mflag = {"codex": "-m", "opencode": "-m", "gemini": "-m"}.get(name, "--model")
-    base = [b, *([mflag, model] if model else [])]
+    perms = permissions(name) or []  # pi has no gate: it runs as it always has, with you watching its terminal
+    base = [b, *perms, *trust(name, cwd), *([mflag, model] if model else [])]
     if not prompt:
         return base
     flag = {"opencode": ["--prompt"], "gemini": ["-i"], "agy": ["-i"]}.get(name)

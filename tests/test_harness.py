@@ -45,8 +45,28 @@ def test_argv_bypass_and_interactive(harness_env):
     assert harness.argv("pi", "x", effort="max", sid="u1", stream=True)[0] == [
         "pi", "-p", "--mode", "json", "--thinking", "xhigh", "--session", "u1",
     ]
-    assert harness.interactive("opencode", "go") == ["opencode", "--prompt", "go"]
+    assert harness.interactive("opencode", "go") == ["opencode", "--auto", "--prompt", "go"]
     assert harness.interactive("pi", "") == ["pi"]
+
+
+def test_interactive_carries_headless_permissions(harness_env):
+    # a terminal launch gets the same safe/bypass args as a headless run (agy once launched with neither and stopped on
+    # every command); with bypass on, agy and codex also trust the worktree for that session so their trust dialogs can't stall it
+    for name in ("claude", "codex", "agy", "gemini", "opencode"):
+        assert harness.interactive(name, "go")[1:1 + len(harness.H[name]["safe"])] == harness.H[name]["safe"], name
+    harness_env.update(claude={"bypass": True}, codex={"bypass": True}, agy={"bypass": True, "model": "gemini-4-neon-high"})
+    assert harness.interactive("claude", "go") == ["claude", "--permission-mode", "bypassPermissions", "--", "go"]
+    assert harness.interactive("codex", "go") == ["codex", "--dangerously-bypass-approvals-and-sandbox", "--", "go"]
+    assert harness.interactive("agy", "go") == ["agy", "--dangerously-skip-permissions", "--model", "gemini-4-neon-high", "-i", "go"]
+    cmd = harness.interactive("agy", "go", cwd="/w/ws-1")
+    assert cmd[:2] == ["agy", "--dangerously-skip-permissions"] and cmd[-2:] == ["-i", "go"], cmd
+    assert json.loads(cmd[cmd.index("--settings") + 1]) == {"trustedWorkspaces": ["/w/ws-1"]}
+    assert harness.interactive("codex", "go", cwd="/w/ws.1") == [
+        "codex", "--dangerously-bypass-approvals-and-sandbox", "-c", 'projects={"/w/ws.1"={trust_level="trusted"}}', "--", "go"]
+    assert harness.interactive("claude", "go", cwd="/w/ws-1") == harness.interactive("claude", "go")  # no session-only trust
+    harness_env["agy"] = {"bypass": "yes"}  # strict True only, as headless
+    assert harness.interactive("agy", "go", cwd="/w/ws-1") == ["agy", "--mode", "accept-edits", "-i", "go"]
+    assert harness.interactive("pi", "go") == ["pi", "--", "go"]  # no gate either way
 
 
 def test_norm_opencode_events():
@@ -98,8 +118,8 @@ def test_gemini_argv_and_interactive(harness_env):
     )
     harness_env.update(gemini={"bypass": True})
     assert harness.argv("gemini", "x")[0] == ["gemini", "--approval-mode", "yolo", "--skip-trust"]
-    assert harness.interactive("gemini", "go") == ["gemini", "-i", "go"]
-    assert harness.interactive("gemini", "") == ["gemini"]
+    assert harness.interactive("gemini", "go") == ["gemini", "--approval-mode", "yolo", "--skip-trust", "-i", "go"]
+    assert harness.interactive("gemini", "") == ["gemini", "--approval-mode", "yolo", "--skip-trust"]
 
 
 def test_route_model_to_harness(harness_env):
@@ -289,14 +309,14 @@ def test_harness_default_model(harness_env):
 def test_canonical_interactive_and_failover(harness_env, monkeypatch):
     # agy uses -i for interactive prompts; antigravity alias normalizes to agy; configured default models pass through
     assert harness.canonical("antigravity") == "agy" and harness.canonical("Claude") == "claude"
-    assert harness.interactive("agy", "ship it") == ["agy", "-i", "ship it"]
-    assert harness.interactive("antigravity", "ship it") == ["agy", "-i", "ship it"]
-    assert harness.interactive("codex", "ship it") == ["codex", "--", "ship it"]
+    assert harness.interactive("agy", "ship it") == ["agy", "--mode", "accept-edits", "-i", "ship it"]
+    assert harness.interactive("antigravity", "ship it") == ["agy", "--mode", "accept-edits", "-i", "ship it"]
+    assert harness.interactive("codex", "ship it") == ["codex", "-c", "sandbox_mode=workspace-write", "--", "ship it"]
     harness_env["agy"] = {"model": "gemini-4-neon-high"}
     harness_env["codex"] = {"model": "gpt-6-luna"}
-    assert harness.interactive("agy", "hi") == ["agy", "--model", "gemini-4-neon-high", "-i", "hi"]
-    assert harness.interactive("codex", "hi") == ["codex", "-m", "gpt-6-luna", "--", "hi"]
-    assert harness.interactive("agy", "") == ["agy", "--model", "gemini-4-neon-high"]
+    assert harness.interactive("agy", "hi") == ["agy", "--mode", "accept-edits", "--model", "gemini-4-neon-high", "-i", "hi"]
+    assert harness.interactive("codex", "hi") == ["codex", "-c", "sandbox_mode=workspace-write", "-m", "gpt-6-luna", "--", "hi"]
+    assert harness.interactive("agy", "") == ["agy", "--mode", "accept-edits", "--model", "gemini-4-neon-high"]
 
     # greenlight normalizes Orca's "antigravity" so rate-limit failover moves to the next agent instead of looping on agy
     assert greenlight.canonical_agent("antigravity") == "agy" and greenlight.canonical_agent("codex") == "codex"
