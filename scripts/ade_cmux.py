@@ -98,9 +98,10 @@ def send(handle, text, enter):
 
 
 def launch(ws_id, agent, prompt):
+    cwd = next((w.get("path") for w in worktrees() if w["id"] == ws_id), None)  # agy and codex bypass trust it for the session
     s = cmux("new-pane", "--type", "terminal", "--workspace", ws_id, "--focus", "false")["surface_id"]
     time.sleep(2)  # ponytail: fixed wait for the shell prompt; poll read-screen if 2s ever proves short
-    send(s, shlex.join(harness.interactive(agent, prompt)), True)
+    send(s, shlex.join(harness.interactive(agent, prompt, cwd=cwd)), True)
     return {"terminal": {"handle": s}}
 
 

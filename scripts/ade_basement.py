@@ -342,7 +342,7 @@ def launch(path, agent, prompt):
         prompt = f"Your brief is in {brief}. Read it and follow it."
     s = f"mc-{secrets.token_hex(4)}"
     # -i: the agent's PATH (~/.local/bin for claude) is set in .zshrc/.bashrc, which a bare `sh -c` from tmux never reads
-    shell_cmd = "$SHELL -lic " + shlex.quote(shlex.join(harness.interactive(agent, prompt))) + "; exec $SHELL -l"
+    shell_cmd = "$SHELL -lic " + shlex.quote(shlex.join(harness.interactive(agent, prompt, cwd=path))) + "; exec $SHELL -l"
     tmux_args = ["new-session", "-d", "-s", s, "-c", path, shell_cmd]
     try:
         import pane_log
