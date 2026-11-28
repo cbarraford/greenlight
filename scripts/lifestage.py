@@ -59,6 +59,10 @@ import tempfile
 import time
 from pathlib import Path
 
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ade_common  # noqa: E402
+
 STATE = Path(os.environ.get("GREENLIGHT_HOME") or Path.home() / ".greenlight")
 STAGES = (
     ("define", "Define", (("capture", "Capture"), ("scope", "Scope"), ("done-condition", "Done condition"), ("plan", "Plan"))),
@@ -426,15 +430,19 @@ def block_of(r, roster):
 WAS = ("pile", "by", "holder", "do", "why", "suggestion", "blocker", "stage", "stage_name", "sub", "sub_name", "at")
 
 
-def now(life, agent_state, logged_out=False, block=None):
-    """`life` with what's true right now applied: a waiting agent makes it yours, a working one means it's in hand, and
-    an MR the roster says I'm blocking (block: blocking.py's entry for it) is mine whatever the threads' last authors say."""
+def now(life, agent_state, logged_out=False, block=None, asking=None):
+    """`life` with what's true right now applied: a waiting agent makes it yours (asking: the prompt it's stopped on,
+    ade_common.prompt_ask's), a working one means it's in hand, and an MR the roster says I'm blocking (block:
+    blocking.py's entry for it) is mine whatever the threads' last authors say."""
     life = {k: v for k, v in life.items() if k != "_was"} | life.get("_was", {})  # undo an earlier now()
     was = {k: life.get(k) for k in WAS}
     if agent_state == "waiting":
         life = life | {"pile": "yours", "by": "you", "holder": "you", "why": "your agent is waiting on your answer",
                        "do": "Your agent asked you a question and has stopped until you answer it.",
                        "suggestion": {"label": "Answer your agent", "kind": "answer"}}
+        if isinstance(asking, dict) and ade_common.clean_prompt_str(asking.get("text")):
+            asks = ade_common.format_prompt_text(asking)
+            life["do"] = f"Your agent is stopped on a prompt until you answer it: {asks[:300]}"
     elif block and life["pile"] != "done" and life["by"] not in HOLDER:  # my side doesn't know it holds this one
         if block.get("reason") == "discussion" and life["sub"] == "re-review":
             life = life | at("review", "respond")  # a thread is waiting on me after all
@@ -466,7 +474,8 @@ def rows():
 def of(r):
     """A row's life: what the scan stored, else worked out from the row (a snapshot from before lifestage.py)."""
     life = r.get("life") or place(r)
-    return now(life, (r.get("agent") or {}).get("state"), "logged out" in (r.get("next") or {}).get("action", ""), block_of(r, blocks()))
+    ag = r.get("agent") or {}
+    return now(life, ag.get("state"), "logged out" in (r.get("next") or {}).get("action", ""), block_of(r, blocks()), ag.get("asking"))
 
 
 def main():

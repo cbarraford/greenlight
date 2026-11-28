@@ -411,8 +411,12 @@ def board(only=None, with_ids=False):
     if live is not None:
         rows = live_rows(rows, live)
         for r in rows:
-            if ag := live[r["id"]][1]:  # the live agent, not the scan's: one started since shows as working
+            w, ag = live[r["id"]]
+            if ag:  # the live agent, not the scan's: one started since shows as working
                 r["agent"] = {**r["agent"], "state": ag.get("state", r["agent"]["state"])}
+            elif isinstance(w.get("agents"), list):
+                r["agent"] = {**r["agent"], "state": "none"}
+            live_asking(r["agent"], ag)
     if any(not r.get("card") for r in rows):
         import ws_state
         rows = ws_state.keyed(rows, migrate=False)  # a pre-upgrade scan still needs stable question targets
@@ -451,7 +455,8 @@ def board(only=None, with_ids=False):
         where = f"step {i + 1}/{len(steps)} {nxt['step']}" if steps and i is not None else nxt["step"]
         ident = (r["name"], mr.get("ref"), r["project"])
         location = f", {r['path']}" if identity_counts[ident] > 1 else ""
-        lines.append(((st != "needs", st != "raised"), f"- {r['name']} ({ref}, {r['project']}{location}): {where} · on {nxt['owner']} · {(nxt.get('action') or why)[:110]}"
+        detail = why if (r.get("agent") or {}).get("state") == "waiting" else (nxt.get("action") or why)
+        lines.append(((st != "needs", st != "raised"), f"- {r['name']} ({ref}, {r['project']}{location}): {where} · on {nxt['owner']} · {detail[:110]}"
                       + (f" · do: {ad}" if ad else "") + (" · agent working" if (r.get("agent") or {}).get("state") == "working" else "")))
     lines.sort(key=lambda x: x[0])
     result = "\n".join(l for _, l in lines) + f"\n({done} more finished)" * bool(done)
@@ -537,11 +542,20 @@ def forge(repo=None):
     return "\n".join(out + [f"(couldn't ask {e})" for e in errs]) or "Nothing open."
 
 
+def live_asking(row_agent, ag):
+    """The prompt the live agent is stopped on (ade_basement's `asking`) onto the row's agent; an answered one goes."""
+    if ag and ag.get("state") == "waiting" and isinstance(ag.get("asking"), dict):
+        row_agent["asking"] = ag["asking"]
+    elif not ag or ag.get("state") != "waiting" or ade.is_native():
+        row_agent.pop("asking", None)
+
+
 def state_of(r, blk=None):
     """(state, why) from greenlight's next step plus the live agent and what I'm blocking."""
     nxt, ag = r["next"], r["agent"]
     if ag["state"] == "waiting":
-        return "needs", "agent is waiting on your answer"
+        what = greenlight.prompt_text(ag)
+        return "needs", f"agent is waiting on your answer: {what[:200]}" if what else "agent is waiting on your answer"
     if nxt["step"] == "error" or "logged out" in nxt.get("action", ""):
         return "crashed", nxt.get("action", "")
     if b := block_of(r, blk):
@@ -719,6 +733,9 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
                               last=(ag.get("lastAssistantMessage") or r["agent"]["last"] or "")[-(20000 if full else 400):],
                               task=(ag.get("taskTitle") or ag.get("prompt") or "")[:160], tool=ag.get("toolName") or "",
                               input=(ag.get("toolInput") or "")[:160], since=ag.get("stateStartedAt"))
+        elif isinstance(w.get("agents"), list):
+            r["agent"]["state"] = "none"
+        live_asking(r["agent"], ag)
         r["agent"]["idle_h"] = w.get("lastOutputAt") and round((now - w["lastOutputAt"]) / 3.6e6, 1)
         r["agent"]["last_output_at"] = w.get("lastOutputAt")
         state, why = state_of(r, blk)
@@ -749,7 +766,8 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
             "blocking": (block_of(r, blk) or {}).get("reason"),  # the reason I'm blocking its MR, if I am
             # lifestage.py: lifecycle stage and sub-stage, who holds it, the suggested move (the hover card's line and button label),
             # with the agent's state as of now rather than the scan's
-            "life": lifestage.now(r.get("life") or lifestage.place(r), r["agent"]["state"], "logged out" in r["next"].get("action", ""), block_of(r, blk)),
+            "life": lifestage.now(r.get("life") or lifestage.place(r), r["agent"]["state"], "logged out" in r["next"].get("action", ""), block_of(r, blk),
+                                          r["agent"].get("asking")),
         })
         att = ws_state.stage_attempts(card, r, check_local=True)
         if att:
@@ -874,6 +892,7 @@ def trees():
                 _normalize_row(r)
                 out[-1]["puck"] = r.get("name") or out[-1]["name"]  # greenlight's name for it: `suggest` and the dashboard know it by this
                 r["agent"] = {**r["agent"], "state": out[-1]["agent"]}  # the live agent, not the scan's
+                live_asking(r["agent"], ag)
                 card = ws_state.load(r["card"]) if r.get("card") else ws_state.blank(r.get("name") or out[-1]["name"])
                 att = ws_state.stage_attempts(card, r, check_local=True)
                 if att:
@@ -882,7 +901,10 @@ def trees():
                 _, out[-1]["steps"], out[-1]["step_index"] = progress(r)  # the card's lifecycle checklist
                 out[-1]["step"], out[-1]["owner"], out[-1]["advice"] = r["next"]["step"], r["next"]["owner"], advice(r, attempts=att)  # and what to do, when it's on you
                 if r.get("life"):
-                    out[-1]["life"] = r["life"]  # the stage, for the step line
+                    life = r["life"]
+                    out[-1]["life"] = (lifestage.now(life, r["agent"]["state"], "logged out" in r["next"].get("action", ""), block_of(r, blk),
+                                                     r["agent"].get("asking"))
+                                       if "pile" in life and "by" in life else life)  # full scan stage refreshed with live state/prompt
                 if mv := moves(r, blk, card=card, attempts=att):
                     out[-1]["moves"] = mv
                     if any("auto" in m for m in mv):  # auto-run: has greenlight's scan caught up with what's pushed? (the tab's "needs you")
@@ -1955,7 +1977,7 @@ def tree_reset_attempts(path):
     return {"ok": True}
 
 
-MENU_RE = re.compile(r"^\s*(?:[❯›●▸]\s*)?(\d)\.\s+(\S.*)$")
+MENU_RE = re.compile(r"^\s*(?:[❯›●▸>]\s*)?(\d)\.\s+(\S.*)$")
 
 
 def waiting_term(name, done_ok=False):
@@ -2020,12 +2042,14 @@ def ask_user(name, model=None, effort="low", fallbacks=None):
     q = (ag.get("lastAssistantMessage") or "").strip()
     if ag.get("state") == "done":
         return {"name": name, "question": q[-4000:], "kind": "prompt", "options": []}
-    opts = menu(rd.get("tail") or [])
+    tail = rd.get("tail") or []
+    ask_q = greenlight.prompt_text(ag) or ade_common.format_prompt_text(ade_common.prompt_ask(tail))
+    opts = menu(tail)
     if opts:  # "Type something." needs a second, typed step in the picker; that one is answered in the workspace
-        pq, det = picker(rd.get("tail") or [])
+        pq, det = picker(tail)
         key = chat_key(opts)  # not an answer: the page offers it as a chat about the question (answer(chat=True)),
         chat = key if ag.get("stateStartedAt") and "lastAssistantMessage" in ag else None  # an ADE that says when a turn ends and what was said (not herdr, basement)
-        return {"name": name, "question": (pq or q)[-4000:], "kind": "menu", "chat": chat, "said": q[-4000:] if chat else "",  # said: in a chat, its reply
+        return {"name": name, "question": (pq or q or ask_q)[-4000:], "kind": "menu", "chat": chat, "said": q[-4000:] if chat else "",  # said: in a chat, its reply
                 "questions": pending_questions(w.get("path") or "", ag.get("agentType")),
                 "options": [{"key": k, "label": l[:200], "detail": det.get(k, "")[:400]} for k, l in opts if l != "Type something." and k != key]}
     cache = DASH / "ask" / f"{safe(name)}.json"
@@ -2036,7 +2060,7 @@ def ask_user(name, model=None, effort="low", fallbacks=None):
             return c["out"]
     except (OSError, ValueError):
         pass
-    out = {"name": name, "question": q[-4000:], "kind": "prompt", "options": []}
+    out = {"name": name, "question": (q or ask_q)[-4000:], "kind": "prompt", "options": []}
     try:
         raw = ask("A coding agent ended its turn with this message to the developer. If it asks the developer to choose or confirm "
                   "something, list up to 3 short replies (each under 12 words, in the developer's voice) that answer it. "
