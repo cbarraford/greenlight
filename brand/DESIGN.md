@@ -631,7 +631,7 @@ Each recipe lists its tokens, sizes and every state. **R** rest · **H** hover �
   - **Rows:**
     1. Avatar (agent mark, 20), title `strong`, elapsed time `caption` tabular figures, right-aligned.
     2. Meta in `label` `fg.muted`: ref · project · goal.
-    3. The current line: the question for needs, the tool line for working, in `body` with 2 lines at most. A longer question gets a quiet "Full question" beside it. The strip is at most 240 tall and scrolls, so the board stays in view.
+    3. The current line: the question for needs, the tool line for working, in `body` with 2 lines at most. A longer question gets a quiet "Full question" beside it. Docked, the strip never scrolls on its own: every agent shows at full height and the page scrolls down to the board. The board is sized as if the cards stood at most 240 tall: more agents push it down the page and never shrink it. Detached, the card grid scrolls inside its window.
     4. The lifecycle bar (§10.10) and the MR's facts, only when there are any.
   - **Actions:** one action button. Only the first needs-you card's is primary: one primary per view. The others are secondary.
   - **Status:** shown by the status pill, never by tinting the whole card. A crashed card gets a 2px `status.crashed.solid` leading edge as the only tint.

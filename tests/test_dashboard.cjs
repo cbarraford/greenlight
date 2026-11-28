@@ -5,7 +5,7 @@
 //
 // The browser is $CHROME, else the newest Playwright headless shell under ~/.cache/ms-playwright.
 const fs = require("fs"), path = require("path"), os = require("os"), assert = require("assert");
-const { launchBrowser } = require("./js_harness.cjs");
+const { launchBrowser, ENGINE, chromium, browserPath } = require("./js_harness.cjs");
 
 const PAGE = "file://" + path.join(__dirname, "../app/", "dashboard.html");
 // Playwright WebKit doesn't intercept file:// subresources via page.route(), so stage terminal.html + ghostty-web.js side by side.
@@ -2718,12 +2718,50 @@ test("Agents view: copy session ID and launch new terminal window connected to t
     agent: {...puck(`m-${k}`, `Task ${k}`, "working").agent, type: "claude", state: "working", session_id: sidCl, session_harness: "claude"},
   }));
   await page.evaluate(s => window.mc.update(s), {...SNAP, pucks: many});
-  await page.evaluate(() => { document.querySelector(".acards").scrollTop = 180 });
-  const beforeScroll = await page.evaluate(() => document.querySelector(".acards").scrollTop);
-  assert.ok(beforeScroll > 0, "expected .acards to be scrollable");
+  // Docked: the strip never scrolls on its own; every agent shows and the page scrolls down to the hexes
+  const strip = await page.evaluate(() => {
+    const c = document.querySelector(".acards"), cs = getComputedStyle(c), m = document.getElementById("main");
+    return {n: c.querySelectorAll(".acard").length, maxH: cs.maxHeight, oy: cs.overflowY, sh: c.scrollHeight, ch: c.clientHeight, mainScrolls: m.scrollHeight > m.clientHeight};
+  });
+  assert.equal(strip.n, 10, "every agent gets a card");
+  assert.equal(strip.maxH, "none", "the docked strip has no height cap");
+  assert.equal(strip.oy, "visible", "the docked strip is not a scroll area");
+  assert.ok(strip.sh <= strip.ch + 1, `the docked strip shows all of its cards (scrollHeight ${strip.sh} > clientHeight ${strip.ch})`);
+  assert.ok(strip.mainScrolls, "a tall strip pushes the hexes down and the page scrolls to them");
+  const board = await page.evaluate(() => {  // sized as if the strip held at most 240px of cards: more agents push the board down, never squeeze it
+    const m = document.getElementById("main"), st = document.querySelector("#main .agents"), c = st.querySelector(".acards");
+    return {h: document.querySelector("#main .fieldwrap").offsetHeight, room: m.clientHeight - (st.offsetHeight - c.offsetHeight + 240) - document.querySelector("#main .whead").offsetHeight - (document.querySelector("#main .shelf")?.offsetHeight || 0), cards: c.offsetHeight};
+  });
+  assert.ok(board.cards > 240, `the strip should be taller than the old cap (${board.cards}px)`);
+  assert.ok(board.h >= board.room - 1, `a tall strip must not shrink the hex board (${board.h}px < ${board.room}px)`);
+  await page.evaluate(() => { const m = document.getElementById("main"); m.scrollTop = m.scrollHeight });
+  assert.ok(await page.evaluate(() => { const hx = document.querySelector("#main .hx"), m = document.getElementById("main").getBoundingClientRect();
+    if (!hx) return false; const r = hx.getBoundingClientRect(); return r.top < m.bottom && r.bottom > m.top }), "scrolling the page brings the hexes into view");
+  await page.evaluate(() => document.querySelector(".acard[data-name='m-9'] button.asid").scrollIntoView({block: "nearest"}));  // in view first: the click mustn't scroll the page itself
+  const beforeScroll = await page.evaluate(() => document.getElementById("main").scrollTop);
+  assert.ok(beforeScroll > 0, "expected the page to be scrolled");
   await page.click(".acard[data-name='m-9'] button.asid");
-  const afterScroll = await page.evaluate(() => document.querySelector(".acards").scrollTop);
-  assert.ok(afterScroll > 0, `clicking Copy must not reset .acards scrollTop (was ${beforeScroll}, now ${afterScroll})`);
+  const afterScroll = await page.evaluate(() => document.getElementById("main").scrollTop);
+  assert.equal(afterScroll, beforeScroll, "clicking Copy must not reset the page's scroll");
+});
+
+test("classic scrollbars: a tall Agents strip or a board at its floor never scrolls the page sideways", async () => {
+  if (ENGINE !== "chromium") return;  // Playwright hides Chromium's scrollbars; this run shows them, as macOS does with a mouse attached
+  const b = await chromium.launch({executablePath: browserPath(), ignoreDefaultArgs: ["--hide-scrollbars"]});
+  try {
+    for (const [n, height] of [[10, 900], [2, 480], [3, 420]]) {  // cards past 240; the board's 260 floor in a short window; a honeycomb past it
+      const p = await b.newPage({viewport: {width: 1300, height}});
+      await p.addInitScript(() => { window.webkit = {messageHandlers: {mc: {postMessage: () => {}}}} });
+      await p.goto(PAGE);
+      const pucks = Array.from({length: n}, (_, k) => ({...puck(`c-${k}`, `Task ${k}`, "working"), path: `/w/c-${k}`}));
+      await p.evaluate(s => window.mc.update(s), {...SNAP, pucks});
+      const g = await p.evaluate(() => { const m = document.getElementById("main"); return {sw: m.scrollWidth, cw: m.clientWidth, sh: m.scrollHeight, ch: m.clientHeight, bar: m.offsetWidth - m.clientWidth} });
+      assert.ok(g.sh > g.ch, `${n} agents at ${height}px tall should scroll the page down (${g.sh} <= ${g.ch})`);
+      assert.ok(g.bar > 0, "this run should draw classic scrollbars");
+      assert.ok(g.sw <= g.cw + 1, `${n} agents at ${height}px tall: the page scrolls sideways (${g.sw} > ${g.cw})`);
+      await p.close();
+    }
+  } finally { await b.close() }
 });
 
 (async () => {
