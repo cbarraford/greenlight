@@ -452,6 +452,13 @@ test("Chief's console opens the live agent session by name or worktree, ahead of
   await page.evaluate(t => term.workspaces(t), TREES);
   await page.evaluate(() => closeTab(latestTab(t => paneOf(t).some(p => p.session === "mc-1a2b3c4d"))));
   assert.equal((await posts(page, "close")).filter(m => m.session === "mc-1a2b3c4d").pop().keep, undefined, "its agent quit: the leftover shell ends");
+  // a second agent in the same worktree: trees now name its session, but this pane still shows its own agent: kept
+  await page.evaluate(t => term.workspaces(t), agentTrees);
+  await page.evaluate(() => term.ws("mc-1a2b3c4d"));
+  await page.evaluate(t => term.workspaces({...t, trees: t.trees.map(w => w.path === "/w/review" ? {...w, resume: {harness: "claude", session: "mc-9z9z9z9z"}} : w),
+    panes: {"mc-1a2b3c4d": {state: "working", title: "✳ Busy"}}}), agentTrees);
+  await page.evaluate(() => closeTab(latestTab(t => paneOf(t).some(p => p.session === "mc-1a2b3c4d"))));
+  assert.equal((await posts(page, "close")).filter(m => m.session === "mc-1a2b3c4d").pop().keep, true, "its agent still runs: kept");
   // deleting the workspace ends its sessions, agent or not
   await page.evaluate(t => term.workspaces(t), agentTrees);
   await page.evaluate(() => term.ws("mc-1a2b3c4d"));

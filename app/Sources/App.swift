@@ -3018,6 +3018,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                    JSONSerialization.isValidJSONObject(obj) {
                     self.localTreesObj = obj
                     self.publishTrees()
+                } else if self.serverTreesObj != nil {
+                    self.publishTrees()  // no Mac trees after all: the server's payload again, its own tmuxOk now (localPending over)
                 }
             })
         }

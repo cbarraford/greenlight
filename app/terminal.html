@@ -758,7 +758,9 @@ function drag(e, dv, down){
 // Chief's console attached this pane to an agent's own session (p.keep): closing it detaches while that agent still runs there
 // (trees' resume.session); once it has quit, or the workspace is deleted (end), the session goes as any tab's does
 // or while that can't be told (no trees yet, tmux didn't answer): a leftover shell beats a killed agent
-const keeps = (p, end) => !end && !!p.keep && (!treesIn || !tmuxOk || trees.some(w => w.resume?.session === p.session));
+// trees name one session per worktree (its newest agent), so the pane's own signs count too: an agent's title, a pane state
+const keeps = (p, end) => !end && !!p.keep && (!treesIn || !tmuxOk || isAgent(p) || !!lastPanes?.[p.session]?.state
+  || trees.some(w => w.resume?.session === p.session));
 function kill(p, end){ clearTimeout(p.scanT); clearTimeout(p.endT); clearTimeout(p.askT); clearTimeout(p.lnkT); pinged.delete(p.id); post({cmd: "close", id: p.id, session: p.session, ws: p.tab.ws, ...keeps(p, end) ? {keep: true} : {}}); panes.delete(p.id); p.t.dispose && p.t.dispose() }
 function closePane(p){
   kill(p);
