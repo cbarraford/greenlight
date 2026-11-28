@@ -196,16 +196,41 @@ def _signoff_move(r):
     return {"kind": "signoff", "step": step, "run": st["run"]}
 
 
-def moves(r, blk=None):
+def _attach_auto(out, r, mr, mine, on_auto, stuck):
+    """Mark moves that Settings › Repositories › Auto-run will run unattended."""
+    for m in out:
+        if stuck and m["kind"] != "merge":
+            continue  # never auto-retry a stuck stage unattended
+        g = on_auto.get(m["kind"]) if m["kind"] not in ("ready", "signoff") and not (m["kind"] == "merge" and len(out) > 1) \
+            and (mine or m["kind"] not in ("conflicts", "ci", "threads")) else None  # unattended pushes only to your own branch
+        if not (isinstance(g, int) and 0 <= g < max(1, len(AUTO[m["kind"]][1]))):
+            continue
+        if m["kind"] != "merge":  # the run's own gate, then audit.py's: the contracts before it pushes, the outbound scorer before it posts
+            m["sha"], m["auto"] = mr.get("sha"), f"{AUTO_HEAD}{AUTO[m['kind']][1][g][1]} {audit.brief(m['kind'], g)}".rstrip() + f"\n\n{m['prompt']}"
+            continue
+        tag = audit.ident(r, mr)
+        v = audit.cached(r.get("path") or "", mr.get("sha") or "", tag)  # an unattended merge waits on the semantic audit of this head
+        scoped = r.get("project") and mr.get("iid") and r.get("forge") and mr.get("target_branch")
+        valid = audit.fresh(v) and (not scoped or audit.same_target(v, r["project"], mr["iid"], r["forge"], mr["sha"], mr["target_branch"]))
+        if valid and v.get("ok"):
+            m["sha"], m["auto"] = mr.get("sha"), True
+        elif valid:
+            m["audit"] = audit.summary(v)  # held: the user was pinged the failed contracts; the card's Merge is still theirs
+        elif r.get("path") and mr.get("sha"):
+            audit.kick(r["path"], mr["sha"], escalate=True, tag=tag,
+                       spec={"target": mr.get("target_branch"), "goal": audit.goal_of(r, mr), "project": r.get("project"),
+                             "iid": mr.get("iid"), "forge": r.get("forge"), "name": r.get("name"),
+                             "ref": mr.get("ref"), "web_url": mr.get("web_url")})
+            m["audit"] = "auditing"
+
+
+def moves(r, blk=None, card=None, attempts=None):
     """Both hover cards' (and the page's) buttons for this row's open MR, most urgent first: conflicts › ci › threads (the MR's fixes) ›
     review (your review is the next move) › merge (greenlight can merge now; never beside a fix) › ready (take it out of
     draft, when that waits on you) › signoff (a custom sign-off stage). None → the card
     shows greenlight's generated next step instead. Each prompt's {vars} filled in."""
     mr, nxt = r.get("mr") or {}, r.get("next") or {}
-    if mr.get("state") == "merged":
-        sm = _signoff_move(r)
-        return [sm] if sm else []
-    if not mr:
+    if not mr or mr.get("state") == "merged":
         sm = _signoff_move(r)
         return [sm] if sm else []
     if mr.get("state") != "opened":
@@ -229,12 +254,15 @@ def moves(r, blk=None):
                 last_review_sha=mr.get("reviewed_sha"), threads=lines(mr.get("todo_threads") or []), pipeline_url=mr.get("pipeline_url"),
                 failed_jobs=lines(f"{j['name']} ({j['stage']}): {j['url']}" for j in mr.get("failed_jobs") or []),
                 goal=goal or None, project=r["project"], iid=mr.get("iid"))
+    retry_note = ws_state.retry_context(card or {}, attempts) if attempts else ""
     for kind in ("conflicts", "ci", "threads", "verify", "review"):
         if on[kind]:
             text, own = prompt_of(repo, kind)
             ok = set(COMMON + KINDS[kind])
             text = re.sub(r"\{(\w+)\}", lambda m, ok=ok: str(vals[m[1]] or "none") if m[1] in ok else m[0], text)  # one pass: a title can't fill in
             text = _strip_ctrl(text)
+            if retry_note and "Prior attempt failed" not in text:
+                text = f"{text}\n\n{retry_note}"
             out.append({"kind": kind, "prompt": text, "own": own, "repo": repo, "n": len(mr.get("todo_threads") or []), "jobs": [j["name"] for j in mr.get("failed_jobs") or []]})
     fix = any(m["kind"] not in ("review", "verify") for m in out)  # conflicts, CI or threads: fix those first
     if not fix and nxt.get("step") == "merge" and (cmd[:1] in (["gh"], ["glab"]) or cmd[2:3] == ["checked-merge"]):
@@ -243,28 +271,7 @@ def moves(r, blk=None):
         out.append({"kind": "ready"})
     if not fix and sm:
         out.append(sm)
-    for m in out:  # auto: what the terminal runs unattended (merge: True, and only on its own: never before a review), once per head commit
-        g = on_auto.get(m["kind"]) if m["kind"] not in ("ready", "signoff") and not (m["kind"] == "merge" and len(out) > 1) \
-            and (mine or m["kind"] not in ("conflicts", "ci", "threads")) else None  # unattended pushes only to your own branch
-        if not (isinstance(g, int) and 0 <= g < max(1, len(AUTO[m["kind"]][1]))):
-            continue
-        if m["kind"] != "merge":  # the run's own gate, then audit.py's: the contracts before it pushes, the outbound scorer before it posts
-            m["sha"], m["auto"] = mr.get("sha"), f"{AUTO_HEAD}{AUTO[m['kind']][1][g][1]} {audit.brief(m['kind'], g)}".rstrip() + f"\n\n{m['prompt']}"
-            continue
-        tag = audit.ident(r, mr)
-        v = audit.cached(r.get("path") or "", mr.get("sha") or "", tag)  # an unattended merge waits on the semantic audit of this head
-        scoped = r.get("project") and mr.get("iid") and r.get("forge") and mr.get("target_branch")
-        valid = audit.fresh(v) and (not scoped or audit.same_target(v, r["project"], mr["iid"], r["forge"], mr["sha"], mr["target_branch"]))
-        if valid and v.get("ok"):
-            m["sha"], m["auto"] = mr.get("sha"), True
-        elif valid:
-            m["audit"] = audit.summary(v)  # held: the user was pinged the failed contracts; the card's Merge is still theirs
-        elif r.get("path") and mr.get("sha"):
-            audit.kick(r["path"], mr["sha"], escalate=True, tag=tag,
-                       spec={"target": mr.get("target_branch"), "goal": audit.goal_of(r, mr), "project": r.get("project"),
-                             "iid": mr.get("iid"), "forge": r.get("forge"), "name": r.get("name"),
-                             "ref": mr.get("ref"), "web_url": mr.get("web_url")})
-            m["audit"] = "auditing"
+    _attach_auto(out, r, mr, mine, on_auto, bool(attempts and attempts.get("stuck")))
     return out
 
 
@@ -604,12 +611,16 @@ AGENT_ADVICE = {"ci_green": "No agent is on it: run Fix CI.", "no_conflicts": "N
                 "threads": "No agent is on it: run Resolve threads.", "freeform": "No agent is running: start one on the goal."}
 
 
-def advice(r):
+def advice(r, attempts=None):
     """One sentence on what to do, when you're the blocker or the step is an agent's and none is on it. None: no rule
     covers it (your own steps, mostly), so `suggest` writes one; "" for pucks that don't get advice at all."""
     nxt, ag = r["next"], r.get("agent") or {}
     if ag.get("state") == "waiting":
         return "Answer it from here, or open the workspace if it needs more than a reply."
+    if attempts and attempts.get("stuck") and ag.get("state") != "working":
+        if local := attempts.get("local"):
+            return f"A prior attempt left local work ({ws_state.local_summary(local)}) without advancing this stage — inspect the workspace or push before retrying."
+        return f"A prior attempt failed without moving this stage ({attempts['reason'].lower()}) — ask Chief or inspect the last run before retrying."
     if nxt["owner"] == "me":
         return _advice_me(r)
     if nxt["owner"] == "agent" and ag.get("state") != "working":  # owner is the scan's; the agent state is live
@@ -734,11 +745,14 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
             # with the agent's state as of now rather than the scan's
             "life": lifestage.now(r.get("life") or lifestage.place(r), r["agent"]["state"], "logged out" in r["next"].get("action", ""), block_of(r, blk)),
         })
-        pucks[-1]["moves"] = moves(r, blk)  # the hex card's smart button, the same as the Basement card's
+        att = ws_state.stage_attempts(card, r, check_local=True)
+        if att:
+            pucks[-1]["attempts"] = att
+        pucks[-1]["moves"] = moves(r, blk, card=card, attempts=att)  # the hex card's smart button, the same as the Basement card's
         pucks[-1]["sig"] = sig(pucks[-1])
         pucks[-1]["built"] = page.get("sig") == pucks[-1]["sig"] and page.get("v") == PAGE_V  # its page layout is current; else the app queues a build
         # the hover card's button, written ahead (the app runs `suggest` for a puck whose state moved); None until then
-        pucks[-1]["advice"] = advice(r)  # None: the suggestion's advice line stands in
+        pucks[-1]["advice"] = advice(r, attempts=att)  # None: the suggestion's advice line stands in
         sg = cached_suggest(r["name"])
         pucks[-1]["suggestion"] = {"label": sg["label"], "prompt": sg["prompt"], "advice": sg.get("advice") or ""} \
             if fresh_suggest(sg, pucks[-1]) and sg.get("prompt") else None
@@ -829,7 +843,9 @@ def trees():
     out, seen = [], set()
     try:  # greenlight's last scan: the MR, CI, threads and "needs you" for the workspaces it tracks (no API calls here)
         raw_rows = json.loads((greenlight.STATE / "last.json").read_text()).get("rows")
-        scan = {r["path"]: r for r in (raw_rows if isinstance(raw_rows, list) else []) if isinstance(r, dict) and isinstance(r.get("path"), str) and r["path"]}
+        valid_rows = [r for r in (raw_rows if isinstance(raw_rows, list) else []) if isinstance(r, dict) and isinstance(r.get("path"), str) and r["path"]]
+        keyed_rows = ws_state.keyed(valid_rows, migrate=False) if all("id" in r and "name" in r for r in valid_rows) else valid_rows
+        scan = {r["path"]: r for r in keyed_rows}
         blk = blocking.cached()
     except (OSError, ValueError, KeyError, AttributeError):
         scan, blk = {}, None
@@ -860,12 +876,16 @@ def trees():
                 _normalize_row(r)
                 out[-1]["puck"] = r.get("name") or out[-1]["name"]  # greenlight's name for it: `suggest` and the dashboard know it by this
                 r["agent"] = {**r["agent"], "state": out[-1]["agent"]}  # the live agent, not the scan's
+                card = ws_state.load(r["card"]) if r.get("card") else ws_state.blank(r.get("name") or out[-1]["name"])
+                att = ws_state.stage_attempts(card, r, check_local=True)
+                if att:
+                    out[-1]["attempts"] = att
                 out[-1]["state"], out[-1]["why"] = state_of(r, blk)
                 _, out[-1]["steps"], out[-1]["step_index"] = progress(r)  # the card's lifecycle checklist
-                out[-1]["step"], out[-1]["owner"], out[-1]["advice"] = r["next"]["step"], r["next"]["owner"], advice(r)  # and what to do, when it's on you
+                out[-1]["step"], out[-1]["owner"], out[-1]["advice"] = r["next"]["step"], r["next"]["owner"], advice(r, attempts=att)  # and what to do, when it's on you
                 if r.get("life"):
                     out[-1]["life"] = r["life"]  # the stage, for the step line
-                if mv := moves(r, blk):
+                if mv := moves(r, blk, card=card, attempts=att):
                     out[-1]["moves"] = mv
                     if any("auto" in m for m in mv):  # auto-run: has greenlight's scan caught up with what's pushed? (the tab's "needs you")
                         try:
@@ -1392,6 +1412,12 @@ def facts(name):
     if not p:
         raise SystemExit(json.dumps({"error": f"no workspace {name}"}))
     f = {"puck": p, "history": history(name), "git": git_facts(p["path"])}
+    try:
+        card = ws_state.load(ws_state.current_key(name))
+        if card.get("failed_approaches"):
+            f["failed_approaches"] = card["failed_approaches"][:5]
+    except (OSError, ValueError, SystemExit):
+        pass
     if p["mr"] and p["mr"].get("iid") and p["mr"].get("state") == "opened":
         f["mr_live"] = mr_facts(p["project"], p["mr"]["iid"], p["mr"].get("forge") or "gitlab")
     if p["mr"] and p["mr"].get("iid"):  # the verify step's receipt, live (the snapshot's is as of the last scan)
@@ -1438,6 +1464,8 @@ def suggest(name, model=None, effort="low"):
     if fresh_suggest(cached, p):
         return cached
     want = p.get("advice") is None  # no rule covers this step: the reply carries the advice line too
+    retry_hint = ("Prior attempt(s) on this stage failed (see puck.attempts and failed_approaches); do not repeat the same approach — "
+                  "diagnose the blocker or suggest a different concrete step. ") if p.get("attempts") else ""
     prompt = (
         f"You are {greenlight.CONFIG['name']}, a developer's agent manager. Write the ONE prompt the developer should send to a fresh coding agent "
         "working in this workspace so it does the next thing toward the workspace goal. Ground it on greenlight's next step "
@@ -1446,6 +1474,7 @@ def suggest(name, model=None, effort="low"):
         "nothing else; be concrete (MR number, failing job, file, thread) using only the facts. "
         "If the next move is the developer's own (a review, an approval, an answer), the prompt prepares it for them "
         "(e.g. summarize the diff and open threads, draft a reply) and must not approve, comment or push. "
+        + retry_hint +
         "Rules: don't suggest merging (greenlight merges). " + "".join(f"{r.rstrip('.')}. " for r in greenlight.CONFIG["suggest_rules"]) +
         "Reply with a 1 to 4 word button label for the step on the first line (imperative, e.g. Fix failing lint job), " +
         ("then a line starting `Advice:` with one sentence telling the developer what to do next themselves (don't restate "
@@ -1504,7 +1533,28 @@ def park(name, on):
     return {"ok": True, "goal": goal}
 
 
-def run(name, prompt, worktree_id=None):
+def _scanned_row_for(*, worktree_id=None, path=None):
+    """Look up a keyed row from last.json by worktree id or path (empty dict if unavailable)."""
+    try:
+        rows = json.loads((greenlight.STATE / "last.json").read_text()).get("rows") or []
+    except (OSError, ValueError):
+        return {}
+    valid = [r for r in rows if isinstance(r, dict) and r.get("id") and r.get("name")]
+    keyed = ws_state.keyed(valid, migrate=False) if valid else []
+    if worktree_id:
+        return next((r for r in keyed if r.get("id") == worktree_id), {})
+    if path:
+        return next((r for r in keyed if r.get("path") == path), {})
+    return {}
+
+
+def _clear_suggest_cache(name):
+    if name:
+        with contextlib.suppress(OSError):
+            (DASH / "suggest" / f"{safe(name)}.json").unlink(missing_ok=True)
+
+
+def run(name, prompt, worktree_id=None, kind="", source="center"):
     """Launch an agent in the workspace with `prompt`. Refuses while its agent is working or waiting on an answer."""
     w, ag = next(((w, ag) for w, ag in live_agents().values() if w["worktreeId"] == worktree_id), (None, None)) if worktree_id else \
         next(((w, ag) for w, ag in live_agents().values() if w["displayName"] == name), (None, None))
@@ -1514,8 +1564,12 @@ def run(name, prompt, worktree_id=None):
         return {"error": "its agent is still working; wait for it to finish"}
     if ag.get("state") == "waiting":
         return {"error": "its agent is waiting on an answer; answer it in its workspace or the chat"}
-    rows = json.loads((greenlight.STATE / "last.json").read_text())["rows"]
-    row = next((r for r in rows if r["id"] == w["worktreeId"]), {})
+    row = _scanned_row_for(worktree_id=w["worktreeId"])
+    card_key = row.get("card") or name
+    if row and "Prior attempt failed" not in prompt:
+        card = ws_state.load(card_key)
+        if note := ws_state.retry_context(card, ws_state.stage_attempts(card, row, check_local=True)):
+            prompt = f"{prompt}\n\n{note}"
     agent = (row.get("next") or {}).get("agent") or greenlight.CONFIG["agents"][0]
     # ponytail: always a new agent tab; reusing the idle one needs greenlight's empty-input-box check first
     order = list(dict.fromkeys([agent, *greenlight.CONFIG["agents"]]))
@@ -1526,12 +1580,53 @@ def run(name, prompt, worktree_id=None):
         except RuntimeError as e:
             if a == order[-1] or not greenlight.LIMIT_RE.search(str(e)):
                 return {"error": str(e)[:300]}
+    if step := (row.get("next") or {}).get("step"):
+        mr_row = row.get("mr") or {}
+        ws_state.record_attempt(card_key, step=step, sig=ws_state.attempt_sig(row), agent=a,
+                                source=source, kind=kind, sha=mr_row.get("sha") or "", mr_iid=mr_row.get("iid"))
+    _clear_suggest_cache(name)
     mr = f"{row['mr'].get('ref') or '!' + str(row['mr']['iid'])} " if row.get("mr") else ""
     hf = greenlight.history_file(name)
     hf.parent.mkdir(parents=True, exist_ok=True)
     with hf.open("a") as h:
         h.write(f"- {time.strftime('%Y-%m-%d %H:%M')} {mr}console → launched {a}: {' '.join(prompt.split())[:300]}\n")
     return {"ok": True, "agent": a}
+
+
+def tree_attempt(path, raw=""):
+    """Record a Basement or auto-run stage attempt against this worktree's unified ws_state card."""
+    try:
+        info = json.loads(raw) if raw and raw.strip() else {}
+    except ValueError:
+        info = {}
+    if not isinstance(info, dict):
+        info = {}
+    row = _scanned_row_for(path=path)
+    if not row:
+        return {"ok": False, "error": "workspace not in latest scan"}
+    step = (row.get("next") or {}).get("step") or ""
+    if not step:
+        return {"ok": False, "error": "no active stage"}
+    mr = row.get("mr") or {}
+    card_key = row.get("card") or row["name"]
+    c = ws_state.record_attempt(
+        card_key, step=step, sig=ws_state.attempt_sig(row),
+        agent=str(info.get("agent") or "agent")[:40],
+        source=str(info.get("source") or "basement")[:24],
+        kind=str(info.get("kind") or "")[:32],
+        sha=mr.get("sha") or "", mr_iid=mr.get("iid"),
+    )
+    _clear_suggest_cache(row.get("name"))
+    return {"ok": True, "attempts": ws_state.stage_attempts(c, row)}
+
+
+def tree_reset_attempts(path):
+    """Clear recorded stage attempts for the workspace at path (Center & Basement escape hatch)."""
+    row = _scanned_row_for(path=path)
+    card_key = row.get("card") or row.get("name") or Path(path).name
+    ws_state.reset_attempts(card_key, step=(row.get("next") or {}).get("step") or None)
+    _clear_suggest_cache(row.get("name") or Path(path).name)
+    return {"ok": True}
 
 
 MENU_RE = re.compile(r"^\s*(?:[❯›●▸]\s*)?(\d)\.\s+(\S.*)$")
@@ -1778,8 +1873,10 @@ def validate(layout):
 
 def sig(p):
     v = (p.get("mr") or {}).get("verify") or {}  # a new verdict redraws the page
+    att = p.get("attempts") or {}
     return hashlib.sha1(json.dumps([p["state"], p["step"], p["owner"], p["agent"]["state"], (p["mr"] or {}).get("state"),
-                                    v.get("verdict"), v.get("stale"), v.get("round")]).encode()).hexdigest()[:12]
+                                    v.get("verdict"), v.get("stale"), v.get("round"),
+                                    att.get("count", 0), bool(att.get("stuck"))]).encode()).hexdigest()[:12]
 
 
 def cached_page(name):
@@ -2610,8 +2707,11 @@ def main():
             oops(a, e)
             print(json.dumps({"name": a[1], "error": str(e)[:200]}))
     elif a[:1] == ["run"] and len(a) > 1 and NAME_RE.match(a[1]):
+        kind = a[a.index("--kind") + 1] if "--kind" in a[:-1] else ""
+        if kind and not re.fullmatch(r"[a-z_]{1,32}", kind):
+            sys.exit("bad --kind")
         prompt = sys.stdin.read().strip()[:8000]
-        print(json.dumps({"name": a[1], **(run(a[1], prompt) if prompt else {"error": "empty prompt"})}))
+        print(json.dumps({"name": a[1], **(run(a[1], prompt, kind=kind) if prompt else {"error": "empty prompt"})}))
     elif a[:1] in (["ask"], ["answer"]) and len(a) > 1 and NAME_RE.match(a[1]):
         opt = _model_opts(a)
         try:
@@ -2672,12 +2772,14 @@ def main():
             oops(a, e)
             out = {"error": str(e)[:300]}
         print(json.dumps({"op": a[1], "name": a[2], **out}))
-    elif a[:1] == ["tree"] and len(a) >= 3 and a[1] in ("info", "rm", "goal", "cfg", "merge", "auto-merge", "ready", "signoff", "new", "diff") and re.fullmatch(r"/[\w./@+-]{1,300}", a[2]) and ".." not in a[2]:
+    elif a[:1] == ["tree"] and len(a) >= 3 and a[1] in ("info", "rm", "goal", "cfg", "merge", "auto-merge", "ready", "signoff", "new", "diff", "attempt", "reset-attempts") and re.fullmatch(r"/[\w./@+-]{1,300}", a[2]) and ".." not in a[2]:
         try:
             op, arg = a[1], a[2]
             out = tree_info(arg) if op == "info" else tree_merge(arg, automatic=op == "auto-merge") if op in ("merge", "auto-merge") else tree_ready(arg) if op == "ready" else tree_signoff(arg) if op == "signoff" else tree_rm(arg, "--force" in a[3:], sys.stdin.read()[:2000]) if op == "rm" \
                 else tree_goal(arg, sys.stdin.read()[:2000]) if op == "goal" else tree_diff(arg, sys.stdin.read(20).strip()) if op == "diff" \
-                else tree_new(arg, json.loads(sys.stdin.read(8193) or "{}")) if op == "new" else tree_cfg(arg, sys.stdin.read(8193))
+                else tree_new(arg, json.loads(sys.stdin.read(8193) or "{}")) if op == "new" \
+                else tree_attempt(arg, sys.stdin.read(2048)) if op == "attempt" \
+                else tree_reset_attempts(arg) if op == "reset-attempts" else tree_cfg(arg, sys.stdin.read(8193))
         except Exception as e:
             oops(a, e)
             out = {"error": str(e)[:300]}

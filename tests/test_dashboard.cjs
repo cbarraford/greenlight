@@ -541,7 +541,7 @@ test("card actions: the hex leaves on the click, comes back when its state moves
   snap.pucks[0] = {...snap.pucks[0], state: "needs", sig: "a3", mr: {...snap.pucks[0].mr, state: "opened"}, moves: [{kind: "ci", jobs: ["lint"], prompt: "fix ci", own: true, repo: "widgets"}]};
   await page.evaluate(s => window.mc.update({...s, ts: Math.floor(Date.now() / 1000)}), snap);
   await card(); await page.click("#hcard .mv .go");
-  assert.deepEqual((await posts(page, "run")).pop(), {cmd: "run", name: "plan-a", prompt: "fix ci"});
+  assert.deepEqual((await posts(page, "run")).pop(), {cmd: "run", name: "plan-a", prompt: "fix ci", kind: "ci"});
   assert.equal(await hex(), false);
   await page.evaluate(() => window.mc.ran({name: "plan-a", error: "the workspace is gone"}));
   assert.equal(await hex(), true, "a failed action left the hex hidden");
@@ -2539,6 +2539,40 @@ test("issue 236: 5s stream updates do not tear down or flicker the answer sheet 
   }));
   assert.equal(pageCheck.same, true, "workspace page answer box should not rebuild on unrelated 5s stream updates");
   assert.equal(pageCheck.hover, true, "workspace page answer option should keep :hover across 5s stream updates");
+});
+
+test("stuck stage escalates smart button to Ask Chief with Retry and Reset in Also", async page => {
+  const stuckPuck = {
+    ...puck("fix-ci", "Fix broken tests", "idle"),
+    state: "needs",
+    step: "ci_green",
+    owner: "agent",
+    advice: "A prior attempt failed without moving this stage (failed on this commit) — ask Chief or inspect the last run before retrying.",
+    mr: {iid: 42, ref: "!42", state: "opened", title: "Fix broken tests", pipeline: "failed", target_branch: "main", sha: "aaaa1111"},
+    moves: [{kind: "ci", repo: "widgets", prompt: "Fix CI\n\nPrior attempt failed on this stage.", jobs: ["unit"]}],
+    attempts: {count: 1, same_sha: 1, stuck: true, step: "ci_green", reason: "Failed on this commit", summary: "pytest still failing", last: {ts: 1700000000, agent: "claude", source: "center", kind: "ci"}},
+  };
+  await page.evaluate(s => window.mc.update(s), {...SNAP, pucks: [stuckPuck]});
+  await page.evaluate(() => { const p = puckOf("fix-ci"), el = document.querySelector('.cell[data-dock="fix-ci"]'); showCard(el, p) });
+  await page.waitForSelector("#hcard .mv.stuck");
+  assert.equal(await page.textContent("#hcard .mv.stuck .go b"), "Ask Chief");
+  assert.match(await page.textContent("#hcard .mv.stuck .go small"), /Fix CI · Failed on this commit/);
+  // Clicking Ask Chief posts askChief with workspace + failure context
+  await page.click("#hcard .mv.stuck .go");
+  const ask = (await posts(page, "askChief")).pop();
+  assert.ok(ask, "clicking Ask Chief sends askChief message");
+  assert.equal(ask.name, "fix-ci");
+  assert.match(ask.shown, /fix-ci.*!42.*stuck/i);
+  assert.match(ask.text, /Failed on this commit/);
+  // Re-open card: Also row has Retry Fix CI (passing kind) and Reset
+  await page.evaluate(() => { const p = puckOf("fix-ci"), el = document.querySelector('.cell[data-dock="fix-ci"]'); showCard(el, p) });
+  await page.waitForSelector("#hcard .also");
+  assert.match(await page.textContent("#hcard .also"), /Retry Fix CI/);
+  assert.match(await page.textContent("#hcard .also"), /Reset/);
+  await page.click("#hcard .also button:has-text('Reset')");
+  const rst = (await posts(page, "resetAttempts")).pop();
+  assert.ok(rst, "clicking Reset sends resetAttempts");
+  assert.equal(rst.name, "fix-ci");
 });
 
 (async () => {

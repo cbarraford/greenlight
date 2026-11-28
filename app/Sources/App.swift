@@ -1090,7 +1090,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             NSLog("greenlight page error: %@", String(describing: b["m"] ?? ""))
             Diag.event("js_error", ["page": "dashboard", "name": b["name"] ?? NSNull(), "line": b["line"] ?? NSNull(), "col": b["col"] ?? NSNull()])
         } else if cmd != "ready" && cmd != "context" { Diag.event("action", ["cmd": cmd]) }  // the command, never its payload
-        if ["run", "merge", "undraft", "signoff", "ask", "answer", "answerPing", "park", "task", "basement", "editPrompt", "steward"].contains(cmd) { greenlight.active() }
+        if ["run", "merge", "undraft", "signoff", "ask", "answer", "answerPing", "park", "task", "basement", "editPrompt", "steward", "askChief", "resetAttempts"].contains(cmd) { greenlight.active() }
         if cmd == "detach", let v = b["view"] as? String { detach(v) }
         if cmd == "unpick" {  // a click on a lit hex clears them in every window (on its chat's)
             if let gone = b["gone"] as? [String] {  // a refresh dropped these: every window already let go of them, so just forget them, or a reload lights them again
@@ -1278,14 +1278,33 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let k = b["kind"] as? String ?? "", kind = RulesStore.kinds.contains { $0.0 == k } ? "/" + k : ""
             greenlight.settingsTab = "Repositories"; greenlight.settingsRepo = r + kind; appSettings()
         }
+        if cmd == "askChief", let text = b["text"] as? String {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                let shown = (b["shown"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(300)) }
+                if l == nil { setChat(hidden: false) }
+                chief.send(String(trimmed.prefix(4000)), shown: shown)
+            }
+        }
+        if cmd == "resetAttempts", let path = b["path"] as? String,
+           path.range(of: #"^/[\w./@+-]{1,300}$"#, options: .regularExpression) != nil, !path.contains("..") {
+            let h = workspaceHost(path: path, fallback: winHost)
+            ssh("\(pyCmd(on: h))/dash.py tree reset-attempts '\(path)'", on: h, onExit: { [weak self] _ in
+                self?.pushTrees()
+            })
+        }
         if cmd == "run", let name = b["name"] as? String {
             let prompt = b["prompt"] as? String ?? ""
             if prompt.isEmpty { return }
             guard isWsName(name) else { from.callJS("window.mc && mc.ran", [["name": name, "error": badNameErr]]); return }
+            let kindArg: String = {
+                guard let k = b["kind"] as? String, k.range(of: #"^[a-z_]{1,32}$"#, options: .regularExpression) != nil else { return "" }
+                return " --kind \(k)"
+            }()
             var out = ""
             let h = workspaceHost(name: name, fallback: winHost)
             greenlight.log(.greenlight, name, .action, "starting an agent: \(prompt)")
-            ssh("\(pyCmd(on: h))/dash.py run '\(name)'", on: h, stdin: prompt, onLine: { out += $0 }, onExit: { code in
+            ssh("\(pyCmd(on: h))/dash.py run '\(name)'\(kindArg)", on: h, stdin: prompt, onLine: { out += $0 }, onExit: { code in
                 chief.acted(name, "start an agent", code, out)
                 let js = safeJSON(out, fallback: ["name": name, "error": "\(hostDisplayName(h)) didn't answer (exit \(code))"])
                 from.evaluateJavaScript("mc.ran(\(js))")
