@@ -1916,7 +1916,10 @@ test("usage meters: at the limit is red; a failed refresh keeps its last windows
   assert.ok(m[1].err, "the failed one shows the alert glyph"); assert.match(m[1].title, /Refresh failed: rate limited.*These are from 20m ago/s);
   assert.ok(m[3].stale); assert.match(m[3].title, /As of 2h ago \(from the last session instead\)/); assert.equal(m[3].text, "10%", "no reset time: no countdown");
   await page.click("#foot .um[data-id=codex]");
+  assert.deepEqual(await page.$$eval("#umpop .urow", rs => rs.map(r => r.dataset.id)), ["codex"], "codex button opens only codex");
   assert.match(await page.textContent(".urow[data-id=codex] .unote"), /Refresh failed: rate limited.*From 20m ago/);
+  await page.click("#foot .um[data-id=pi]");
+  assert.deepEqual(await page.$$eval("#umpop .urow", rs => rs.map(r => r.dataset.id)), ["pi"], "clicking another meter switches the popover to that provider");
   assert.match(await page.textContent(".urow[data-id=pi] .unote"), /As of 2h ago: from the last session instead/);
 });
 
@@ -1933,7 +1936,7 @@ test("usage meters: a window whose reset has passed reads — (no new reading) a
   await page.evaluate(() => { const i = document.createElement("input"); i.id = "elsewhere"; document.body.append(i); i.focus() });
   const taken = await page.evaluate(() => { const e = new KeyboardEvent("keydown", {key: "Escape", bubbles: true, cancelable: true}); document.activeElement.dispatchEvent(e); return e.defaultPrevented });
   assert.equal(taken, false, "Esc in another field is that field's"); assert.ok(await page.$("#umpop"), "and the popover stays");
-  await page.focus("#umpop [data-view=compact]"); await page.keyboard.press("Escape");
+  await page.focus("#umpop"); await page.keyboard.press("Escape");
   assert.equal(await page.$("#umpop"), null); assert.equal(await page.evaluate(() => document.activeElement?.dataset.id), "claude", "focus back on its meter");
   await page.click("#foot .um[data-id=codex]"); await page.click("#umpop .urow[data-id=codex] b"); await page.keyboard.press("Escape");
   assert.equal(await page.$("#umpop"), null, "Esc after a click on its text still closes it");
@@ -1948,23 +1951,19 @@ test("usage meters: a window whose reset has passed reads — (no new reading) a
   await page.evaluate(u => mc.update({ts: Date.now() / 1000, scanned: 1, pucks: [], usage: u}), v);
   const f0 = (await meters(page))[0];
   assert.equal(f0.text, "—"); assert.ok(f0.err); assert.match(f0.title, /5h: reset since, no new reading\nRefresh failed: timeout\. These are from 2h ago/);
-  await page.click("#foot .um[data-id=claude]"); await page.click("#umpop .ut"); await page.evaluate(() => footer());
-  assert.notEqual(await page.evaluate(() => document.activeElement?.dataset.view), "detailed", "a redraw doesn't pull focus onto a tab");
+  await page.click("#foot .um[data-id=claude]"); await page.evaluate(() => footer());
   assert.match(await page.textContent("#umpop .urow[data-id=claude] .unote"), /Refresh failed: timeout\. From 2h ago\./);
-  // Compact mode preserves failed-refresh alert icon and "reset" label; <1m avoids "Resets in now"; missing/zero `at` avoids "From ."
-  await page.click("#umpop .useg [data-view=compact]");
-  assert.ok(await page.$("#umpop .urow.c[data-id=claude] .uerr"), "compact mode shows alert icon on failed refresh with kept windows");
-  assert.equal(await page.textContent("#umpop .urow.c[data-id=claude] .ur"), "reset", "compact mode shows reset when all windows reset");
+  assert.equal(await page.textContent("#umpop .urow[data-id=claude] .uwin .ur"), "reset", "popover shows reset when all windows reset");
   await page.keyboard.press("Escape");
   const w = USAGE(); w[0] = {...w[0], state: "failed", note: "timeout", at: 0, windows: [{label: "5h", pct: 50, resets: NOW_S() + 30}]};
   await page.evaluate(u => mc.update({ts: Date.now() / 1000, scanned: 1, pucks: [], usage: u}), w);
   const fw = (await meters(page))[0];
   assert.equal(fw.text, "50%<1m");
   assert.ok(fw.title.includes("resets in <1m") && !fw.title.includes("in now") && !fw.title.includes("From .") && !fw.title.includes("from ."), fw.title);
-  await page.click("#foot .um[data-id=claude]"); await page.click("#umpop .useg [data-view=detailed]");
+  await page.click("#foot .um[data-id=claude]");
   assert.equal(await page.textContent("#umpop .urow[data-id=claude] .urr"), "Resets in <1m");
   assert.equal(await page.textContent("#umpop .urow[data-id=claude] .unote"), "Refresh failed: timeout");
-  // Fresh state:"ok" rollout fallback still surfaces its note; umTone rounds with umPctText; stale near-limit keeps amber in Compact
+  // Fresh state:"ok" rollout fallback still surfaces its note; umTone rounds with umPctText; stale near-limit keeps amber
   const f = USAGE();
   f[0] = {...f[0], at: NOW_S(), note: "rate limited; from the last session instead", windows: [{label: "5h", pct: 99.6, resets: NOW_S() + 3600}]};
   f[1] = {...f[1], at: NOW_S() - 7200, windows: [{label: "5h", pct: 79.6, resets: NOW_S() + 3600}]};
@@ -1973,39 +1972,50 @@ test("usage meters: a window whose reset has passed reads — (no new reading) a
   assert.equal(mf[0].tone, "full", "99.6 rounds to 100% and uses full tone");
   assert.equal(mf[1].tone, "near", "79.6 rounds to 80% and uses near tone");
   assert.match(mf[0].title, /from the last session instead/, "fresh ok fallback note shows in tooltip");
-  assert.match(await page.textContent("#umpop .urow[data-id=claude] .unote"), /from the last session instead/, "fresh ok fallback note shows in Detailed popover");
-  await page.click("#umpop .useg [data-view=compact]");
-  assert.equal(await page.$eval("#umpop .urow.c[data-id=codex] .upct", e => getComputedStyle(e).color),
-    await page.$eval("#foot .um[data-id=codex] .upct", e => getComputedStyle(e).color), "stale near-limit compact row keeps amber color matching footer");
+  assert.match(await page.textContent("#umpop .urow[data-id=claude] .unote"), /from the last session instead/, "fresh ok fallback note shows in popover");
+  await page.click("#foot .um[data-id=codex]");
+  assert.equal(await page.$eval("#umpop .urow[data-id=codex] .upct", e => getComputedStyle(e).color),
+    await page.$eval("#foot .um[data-id=codex] .upct", e => getComputedStyle(e).color), "stale near-limit row keeps amber color matching footer");
+  await page.keyboard.press("Escape");
 });
 
-test("usage popover: Detailed lists every window with its reset, Compact one line each; it remembers, Escape and a click outside close it", async page => {
+test("usage popover: each meter opens only its own provider, switches on another click, toggles off, and closes on Escape or outside click", async page => {
   await page.evaluate(u => mc.update({ts: Date.now() / 1000, scanned: 1, pucks: [], usage: u}), USAGE());
   assert.equal(await page.$("#umpop"), null);
   await page.click("#foot .um[data-id=claude]");
   assert.equal(await page.getAttribute("#foot .um[data-id=claude]", "aria-expanded"), "true");
   assert.equal(await page.getAttribute("#foot .um[data-id=codex]", "aria-expanded"), "false", "only the meter it opened from");
-  assert.deepEqual(await page.$$eval("#umpop .urow", rs => rs.map(r => r.dataset.id)), ["claude", "codex", "opencode", "pi"]);
+  assert.deepEqual(await page.$$eval("#umpop .urow", rs => rs.map(r => r.dataset.id)), ["claude"]);
   const wins = await page.$$eval("#umpop .urow[data-id=claude] .uwin", ws => ws.map(w => [w.querySelector(".ul").textContent, w.querySelector(".upct").textContent, w.querySelector(".ur").textContent]));
   assert.deepEqual(wins, [["Week", "64%", "in 3d 7h"], ["Fable", "15%", "in 3d 0h"]]);
   assert.equal(await page.textContent("#umpop .urow[data-id=claude] .uplan"), "Claude Max");
-  assert.match(await page.textContent("#umpop .urow[data-id=codex] .urr"), /^Resets in 2h 1\dm$/);
-  assert.equal(await page.$$eval("#umpop .urow[data-id=opencode] .uwin", w => w.length), 0);
-  assert.match(await page.textContent("#umpop .urow[data-id=opencode] .unote"), /^n\/a: OpenCode publishes no usage API/);
-  assert.match(await page.textContent("#umpop .urow[data-id=pi] .unote"), /^Refresh failed: can't reach the usage API$/);
   const box = await page.$eval("#umpop", p => { const r = p.getBoundingClientRect(), f = document.getElementById("foot").getBoundingClientRect(); return {bottom: r.bottom, foot: f.top, left: r.left} });
   assert.ok(box.bottom <= box.foot, "above the footer"); assert.ok(box.left >= 8);
-  await page.click("#umpop .useg [data-view=compact]");
-  assert.equal(await page.$$eval("#umpop .urow.c", r => r.length), 4);
-  assert.deepEqual(await page.$$eval("#umpop .urow.c", rs => rs.map(r => r.querySelector(".upct")?.textContent || r.querySelector(".uw").textContent)), ["64%", "92%", "n/a", "Refresh failed"]);
-  assert.equal(await page.evaluate(() => localStorage.getItem("usageView")), "compact");
-  assert.equal(await page.$eval("#umpop .urow.c[data-id=codex] .upct", e => getComputedStyle(e).color),
-    await page.$eval("#foot .um[data-id=codex] .upct", e => getComputedStyle(e).color), "compact rows take the amber too");
-  await page.focus("#umpop [data-view=detailed]");
-  await page.evaluate(() => mc.update(JSON.parse(JSON.stringify(ui.raw))));
-  assert.equal(await page.evaluate(() => document.activeElement?.dataset.view), "detailed", "an unchanged update keeps the focus in the popover");
-  await page.evaluate(u => mc.update({ts: Date.now() / 1000, scanned: 1, pucks: [], usage: u}), USAGE());  // a fresh snapshot redraws it in place
-  assert.equal(await page.$$eval("#umpop .urow.c", r => r.length), 4);
+  // Clicking another provider switches the popover in place to that provider
+  await page.click("#foot .um[data-id=codex]");
+  assert.equal(await page.getAttribute("#foot .um[data-id=claude]", "aria-expanded"), "false");
+  assert.equal(await page.getAttribute("#foot .um[data-id=codex]", "aria-expanded"), "true");
+  assert.deepEqual(await page.$$eval("#umpop .urow", rs => rs.map(r => r.dataset.id)), ["codex"]);
+  assert.match(await page.textContent("#umpop .urow[data-id=codex] .urr"), /^Resets in 2h 1\dm$/);
+  await page.click("#foot .um[data-id=opencode]");
+  assert.deepEqual(await page.$$eval("#umpop .urow", rs => rs.map(r => r.dataset.id)), ["opencode"]);
+  assert.equal(await page.$$eval("#umpop .urow[data-id=opencode] .uwin", w => w.length), 0);
+  assert.match(await page.textContent("#umpop .urow[data-id=opencode] .unote"), /^n\/a: OpenCode publishes no usage API/);
+  await page.click("#foot .um[data-id=pi]");
+  assert.deepEqual(await page.$$eval("#umpop .urow", rs => rs.map(r => r.dataset.id)), ["pi"]);
+  assert.match(await page.textContent("#umpop .urow[data-id=pi] .unote"), /^Refresh failed: can't reach the usage API$/);
+  // Clicking the active provider again closes it
+  await page.click("#foot .um[data-id=pi]");
+  assert.equal(await page.$("#umpop"), null);
+  assert.equal(await page.getAttribute("#foot .um[data-id=pi]", "aria-expanded"), "false");
+  // Fresh snapshot redraws the open provider in place, and closes if that provider disappears
+  await page.click("#foot .um[data-id=claude]");
+  await page.evaluate(u => mc.update({ts: Date.now() / 1000, scanned: 1, pucks: [], usage: u}), USAGE());
+  assert.deepEqual(await page.$$eval("#umpop .urow", rs => rs.map(r => r.dataset.id)), ["claude"]);
+  await page.evaluate(u => mc.update({ts: Date.now() / 1000, scanned: 1, pucks: [], usage: u}), USAGE().slice(1));
+  assert.equal(await page.$("#umpop"), null, "removing the open provider closes the popover");
+  await page.evaluate(u => mc.update({ts: Date.now() / 1000, scanned: 1, pucks: [], usage: u}), USAGE());
+  await page.click("#foot .um[data-id=claude]");
   await page.keyboard.press("Escape"); assert.equal(await page.$("#umpop"), null);
   assert.equal(await page.getAttribute("#foot .um[data-id=claude]", "aria-expanded"), "false");
   await page.click("#foot .um[data-id=pi]"); await page.mouse.click(600, 300); assert.equal(await page.$("#umpop"), null, "a click outside closes it");

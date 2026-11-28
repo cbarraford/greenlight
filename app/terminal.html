@@ -146,7 +146,7 @@ body.noside:not(.sliding) #side,body.noside:not(.sliding) #sdv{display:none}  /*
 #bfoot{box-sizing:border-box;flex-shrink:0;display:flex;align-items:center;gap:var(--ds-space-12);height:var(--ds-layout-footer-height);padding:0 var(--ds-space-12);background:var(--ds-bg-chrome);border-top:1px solid var(--ds-border-subtle);
   color:var(--ds-fg-muted);font:var(--ds-type-caption);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;-webkit-user-select:none;user-select:none} body.noside:not(.sliding) #bfoot{display:none}
 /* usage-meters:start */
-/* usage meters (issue 193): one per configured agent at the footer's left, and their popover (DESIGN.md §10.11, §10.13) */
+/* usage meters (issue 193): one per configured agent at the footer's left, each opening its own popover (DESIGN.md §10.11, §10.13) */
 .ums{display:inline-flex;align-items:center;gap:var(--ds-space-8);flex-shrink:0}
 .um{display:inline-flex;align-items:center;gap:var(--ds-space-4);height:20px;padding:0 var(--ds-space-4);border:0;border-radius:var(--ds-radius-xs);background:none;color:var(--ds-fg-muted);font:var(--ds-type-caption);font-variant-numeric:tabular-nums;white-space:nowrap;cursor:default}
 .um:hover,.um[aria-expanded="true"]{background:var(--ds-element-hover);color:var(--ds-fg-default)} .um:focus-visible{outline:none;box-shadow:var(--ds-ring)}
@@ -160,15 +160,11 @@ body.noside:not(.sliding) #side,body.noside:not(.sliding) #sdv{display:none}  /*
 .tight .um .uleft,.tighter .um .ubar{display:none}
 .umpop{box-sizing:border-box;position:fixed;z-index:9;width:320px;max-width:calc(100vw - var(--ds-space-16));max-height:calc(100vh - 64px);overflow:auto;display:flex;flex-direction:column;gap:var(--ds-space-12);padding:var(--ds-space-12);
   border-radius:var(--ds-radius-lg);background:var(--ds-bg-raised);color:var(--ds-fg-default);box-shadow:var(--ds-elevation-2);font:var(--ds-type-body);letter-spacing:var(--ds-type-body-track);
-  font-variant-numeric:tabular-nums;animation:umin var(--ds-duration-fast) var(--ds-easing-out);transform-origin:bottom left}
+  font-variant-numeric:tabular-nums;animation:umin var(--ds-duration-fast) var(--ds-easing-out);transform-origin:bottom left;outline:none}
+.umpop:focus-visible{box-shadow:var(--ds-elevation-2),var(--ds-ring)}
 @keyframes umin{from{opacity:0;transform:scale(.96)}}
 @media (prefers-reduced-motion: reduce){.umpop{animation:none}}
-.umpop .uh{display:flex;align-items:center;gap:var(--ds-space-8)} .umpop .ut{flex:1;font:var(--ds-type-strong)}
-.umpop .useg{display:inline-flex;gap:0;padding:var(--ds-space-2);border-radius:var(--ds-radius-sm);background:var(--ds-bg-sunken)}
-.umpop .useg button{height:20px;padding:0 var(--ds-space-8);border:0;border-radius:var(--ds-radius-xs);background:none;color:var(--ds-fg-muted);font:var(--ds-type-label-sm)}
-.umpop .useg button:hover{color:var(--ds-fg-default)} .umpop .useg button[aria-selected="true"]{background:var(--ds-bg-surface);color:var(--ds-fg-default);box-shadow:var(--ds-elevation-1)}
-.umpop .useg button:focus-visible{outline:none;box-shadow:var(--ds-ring)}
-.umpop .urows{display:flex;flex-direction:column;gap:var(--ds-space-12)} .umpop.compact .urows{gap:var(--ds-space-8)}
+.umpop .urows{display:flex;flex-direction:column;gap:var(--ds-space-12)}
 .urow{display:flex;flex-direction:column;gap:var(--ds-space-4)}
 .urow .urh{display:flex;align-items:center;gap:var(--ds-space-8);min-width:0} .urow .urh b{font:var(--ds-type-strong)}
 .urow .uplan{color:var(--ds-fg-muted);font:var(--ds-type-caption);overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .urow .sp{flex:1}
@@ -177,9 +173,6 @@ body.noside:not(.sliding) #side,body.noside:not(.sliding) #sdv{display:none}  /*
 .urow .uwin .ubar{width:100%} .urow .uwin .upct{text-align:right} .urow .uwin .ur{text-align:right}
 .urow .unote{display:flex;gap:var(--ds-space-4);align-items:flex-start;padding-left:var(--ds-space-24);color:var(--ds-fg-muted);font:var(--ds-type-caption)}
 .urow .unote.bad{color:var(--ds-status-crashed-fg)} .urow .unote .dsi{flex-shrink:0;margin-top:1px}
-.urow.c{display:grid;grid-template-columns:16px 1fr 40px 36px 56px;align-items:center;gap:var(--ds-space-8);font:var(--ds-type-caption)}
-.urow.c b{font:var(--ds-type-label);overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .urow.c .ubar{width:100%} .urow.c .upct{text-align:right} .urow.c .ur{display:inline-flex;align-items:center;justify-content:flex-end;gap:var(--ds-space-4)}
-.urow.c .uw{grid-column:3 / span 3;text-align:right;color:var(--ds-fg-faint)} .urow.c[data-state="failed"] .uw{color:var(--ds-status-crashed-fg)}
 .umpop .ufoot{color:var(--ds-fg-faint);font:var(--ds-type-caption)}
 /* usage-meters:end */
 #bfoot .live{display:inline-flex;align-items:center;gap:6px} #bfoot .live::before{content:"";width:6px;height:6px;border-radius:var(--r-full);background:var(--ds-accent-solid)}
@@ -1583,8 +1576,8 @@ $("tree").addEventListener("keydown", e => {
 });
 // usage-meters:start
 // usage meters (issue 193): each configured agent's plan usage (usage.py, through the snapshot or dash.py trees). The footer shows one
-// meter per agent, in config `agents` order: its mark, a bar, % used and the tightest window's reset; a click opens every window.
-const UM = {list: [], pop: null, at: "", hint: "", view: (() => { try { return localStorage.getItem("usageView") === "compact" ? "compact" : "detailed" } catch { return "detailed" } })()};
+// meter per agent, in config `agents` order: its mark, a bar, % used and the tightest window's reset; clicking a meter opens that provider's windows.
+const UM = {list: [], pop: null, at: "", hint: ""};
 const UM_STALE = 600;  // seconds: older windows say how old they are
 function umEl(tag, cls, ...kids){ const e = document.createElement(tag); if (cls) e.className = cls; for (const k of kids) if (k != null && k !== false) e.append(k); return e }
 const umMark = id => ({claude: "claude", codex: "openai", agy: "agy", gemini: "agy"}[id] || "terminal");
@@ -1639,7 +1632,7 @@ function umMeter(p){
 function umMeters(list){  // the footer's meters, or null when no agent reports
   UM.list = Array.isArray(list) ? list.filter(p => p && p.id && ["ok", "failed", "na"].includes(p.state)) : [];
   if (!UM.list.length) { umClose(); return null }
-  if (UM.pop) umFill(UM.pop);  // the countdowns move on; umFill keeps the focus where it was
+  if (UM.pop) umFill(UM.pop);  // the countdowns move on; closes if this provider disappeared
   const s = umEl("span", "ums"); s.setAttribute("role", "group"); s.setAttribute("aria-label", "Plan usage");
   s.append(...UM.list.map(umMeter)); return s;
 }
@@ -1654,17 +1647,7 @@ function umNote(p, w){
 }
 function umRow(p){
   const w = umTight(p), r = umEl("div", "urow"); r.dataset.id = p.id; r.dataset.state = p.state;
-  if (UM.view === "compact") {
-    r.classList.add("c"); r.title = umSays(p);
-    if (p.state !== "failed" && umStale(p)) r.classList.add("stale");
-    r.append(dsIcon(umMark(p.id), 14, {cls: "umk"}), umEl("b", "", p.name));
-    if (w && p.state !== "na") {
-      const pct = umPct(w);
-      r.append(umBar(pct ?? 0), umEl("span", "upct", umPctText(pct)),
-        umEl("span", "ur", pct == null ? "reset" : umIn(w.resets), p.state === "failed" ? dsIcon("alert", 12, {cls: "uerr"}) : null));
-    } else r.append(umEl("span", "uw", p.state === "failed" ? "Refresh failed" : "n/a"));
-    return r;
-  }
+  if (p.state !== "failed" && umStale(p)) r.classList.add("stale");
   const wLeft = w && p.state !== "na" ? umIn(w.resets) : "";
   r.append(umEl("div", "urh", dsIcon(umMark(p.id), 16, {cls: "umk"}), umEl("b", "", p.name), p.plan ? umEl("span", "uplan", p.plan) : null, umEl("span", "sp"),
     wLeft ? umEl("span", "urr", `Resets in ${wLeft}`) : null));
@@ -1675,24 +1658,18 @@ function umRow(p){
   const n = umNote(p, w); if (n) r.append(n);
   return r;
 }
-function umFill(pop, focusView){
-  const had = focusView || (pop.contains(document.activeElement) && document.activeElement.dataset.view);  // focus on a tab stays on it across the rebuild (and follows clicks in WKWebView)
-  pop.classList.toggle("compact", UM.view === "compact"); pop.replaceChildren();
-  const seg = umEl("div", "useg"); seg.setAttribute("role", "tablist"); seg.setAttribute("aria-label", "Detail");
-  for (const [k, label] of [["detailed", "Detailed"], ["compact", "Compact"]]) {
-    const s = umEl("button", "", label); s.type = "button"; s.dataset.view = k; s.setAttribute("role", "tab"); s.setAttribute("aria-selected", String(UM.view === k));
-    s.addEventListener("click", () => { UM.view = k; try { localStorage.setItem("usageView", k) } catch {} umFill(pop, k) });
-    seg.append(s);
-  }
-  pop.append(umEl("div", "uh", umEl("span", "ut", "Plan usage"), seg), umEl("div", "urows", ...UM.list.map(umRow)),
-    umEl("div", "ufoot", "Every configured agent, in dispatch order. Refreshes every minute" + (UM.hint ? `; ${UM.hint}` : ".")));
-  if (had) pop.querySelector(`.useg [data-view="${had}"]`)?.focus({preventScroll: true});
+function umFill(pop){
+  const p = UM.list.find(x => x.id === UM.at);
+  if (!p) return umClose();
+  pop.setAttribute("aria-label", `${p.name} plan usage`);
+  pop.replaceChildren(umEl("div", "urows", umRow(p)),
+    umEl("div", "ufoot", "Refreshes every minute" + (UM.hint ? `; ${UM.hint}` : ".")));
 }
 const umFind = id => [...document.querySelectorAll(".um")].find(x => x.dataset.id === id);
 const umFocusId = f => f.contains(document.activeElement) && document.activeElement.classList.contains("um") ? document.activeElement.dataset.id : null;
 const umRestoreFocus = (f, id) => { if (id) [...f.querySelectorAll(".um")].find(x => x.dataset.id === id)?.focus({preventScroll: true}) };
 function umSync(){ document.querySelectorAll(".um").forEach(b => b.setAttribute("aria-expanded", String(!!UM.pop && UM.at === b.dataset.id))) }
-function umClose(){ if (!UM.pop) return; UM.pop.remove(); UM.pop = null; umSync() }
+function umClose(){ if (!UM.pop) return; UM.pop.remove(); UM.pop = null; UM.at = ""; umSync() }
 function umPlace(){
   if (!UM.pop) return;
   const anchor = umFind(UM.at) || document.querySelector(".um");
@@ -1703,10 +1680,15 @@ function umPlace(){
   UM.pop.style.bottom = Math.max(8, innerHeight - r.top + 8) + "px";
 }
 function umToggle(anchor){
-  if (UM.pop) return umClose();
-  UM.at = anchor.dataset.id; const pop = UM.pop = umEl("div", "umpop"); pop.id = "umpop"; pop.setAttribute("role", "dialog"); pop.setAttribute("aria-label", "Plan usage");
-  umFill(pop); document.body.append(pop); umPlace();
-  umSync(); pop.querySelector(".useg [aria-selected=true]")?.focus({preventScroll: true});
+  const id = anchor.dataset.id;
+  if (UM.pop && UM.at === id) return umClose();
+  UM.at = id;
+  if (!UM.pop) {
+    const pop = UM.pop = umEl("div", "umpop"); pop.id = "umpop"; pop.tabIndex = -1; pop.setAttribute("role", "dialog");
+    document.body.append(pop);
+  }
+  umFill(UM.pop); if (!UM.pop) return;
+  umPlace(); umSync(); UM.pop.focus({preventScroll: true});
 }
 addEventListener("pointerdown", e => { if (UM.pop && !e.target?.closest?.("#umpop, .um")) umClose() }, true);
 // Esc closes it only from inside it or its meter: a terminal or find bar elsewhere keeps its own Esc
