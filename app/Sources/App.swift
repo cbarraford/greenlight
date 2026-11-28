@@ -912,6 +912,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
               let js = String(data: clean, encoding: .utf8) else { return }
         indexSnapshotHosts(obj, fallbackHost: host)
         dashSnapObj = obj
+        greenlight.updateUsageCaps(obj["usage"] as? [[String: Any]])
         for w in webs where readyDash.contains(ObjectIdentifier(w)) {
             w.callJS("window.mc && mc.update", [obj])
         }
@@ -998,7 +999,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                   name.range(of: #"^[\w.@+/-]{1,200}$"#, options: .regularExpression) != nil else { continue }
             building.insert(name); tried[name] = sig
             let h = workspaceHost(name: name, path: p["path"] as? String, fallback: host)
-            ssh("\(pyCmd(on: h))/dash.py page '\(name)' --model \(shellQuote(greenlight.designModel)) --effort \(shellQuote(greenlight.designEffort)) >/dev/null", on: h, onExit: { [weak self] _ in
+            let fbs = fallbackCLIArgs(greenlight.activeDesignFallbacks, explicit: greenlight.designFallbacks != nil)
+            ssh("\(pyCmd(on: h))/dash.py page '\(name)' --model \(shellQuote(greenlight.designModel)) --effort \(shellQuote(greenlight.designEffort))\(fbs) >/dev/null", on: h, onExit: { [weak self] _ in
                 self?.building.remove(name); self?.pushBuilds()
             })
         }
@@ -1029,7 +1031,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         suggesting.insert(name)
         var out = ""
         let h = workspaceHost(name: name)
-        ssh("\(pyCmd(on: h))/dash.py suggest '\(name)' --model \(shellQuote(greenlight.nextModel)) --effort \(shellQuote(greenlight.nextEffort))", on: h, onLine: { out += $0 }, onExit: { [weak self] code in
+        let fbs = fallbackCLIArgs(greenlight.activeNextFallbacks, explicit: greenlight.nextFallbacks != nil)
+        ssh("\(pyCmd(on: h))/dash.py suggest '\(name)' --model \(shellQuote(greenlight.nextModel)) --effort \(shellQuote(greenlight.nextEffort))\(fbs)", on: h, onLine: { out += $0 }, onExit: { [weak self] code in
             self?.suggesting.remove(name)
             let js = safeJSON(out, fallback: ["name": name, "error": "\(hostDisplayName(h)) didn't answer (exit \(code))"])
             self?.broadcast("window.mc && mc.suggest(\(js))")
@@ -1155,7 +1158,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let fresh = b["fresh"] as? Bool == true ? " --fresh" : ""
             var out = ""
             let h = workspaceHost(name: name, fallback: winHost)
-            ssh("\(pyCmd(on: h))/dash.py page '\(name)'\(fresh) --model \(shellQuote(greenlight.designModel)) --effort \(shellQuote(greenlight.designEffort))", on: h, onLine: { out += $0 }, onExit: { code in
+            let fbs = fallbackCLIArgs(greenlight.activeDesignFallbacks, explicit: greenlight.designFallbacks != nil)
+            ssh("\(pyCmd(on: h))/dash.py page '\(name)'\(fresh) --model \(shellQuote(greenlight.designModel)) --effort \(shellQuote(greenlight.designEffort))\(fbs)", on: h, onLine: { out += $0 }, onExit: { code in
                 let js = safeJSON(out, fallback: ["name": name, "error": "couldn't load this page from \(hostDisplayName(h)) (exit \(code))"])
                 from.evaluateJavaScript("mc.page(\(js))")
             })
@@ -1209,8 +1213,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             }
             let h = workspaceHost(name: name, fallback: winHost), pyH = pyCmd(on: h)
             let chat = b["chat"] as? Bool == true  // "Chat about this": talk the question over, don't answer it
+            let designFbs = fallbackCLIArgs(greenlight.activeDesignFallbacks, explicit: greenlight.designFallbacks != nil)
             let remote = cmd == "answer" ? "\(pyH)/dash.py answer '\(name)'\(chat ? " --chat" : "")"
-                : "\(pyH)/dash.py ask '\(name)' --model \(shellQuote(greenlight.designModel)) --effort \(shellQuote(greenlight.designEffort))"
+                : "\(pyH)/dash.py ask '\(name)' --model \(shellQuote(greenlight.designModel)) --effort \(shellQuote(greenlight.designEffort))\(designFbs)"
             var out = ""
             if cmd == "answer" { greenlight.log(.greenlight, name, .action, "\(chat ? "chatting with" : "answering") its agent: \(text)") }
             ssh(remote, on: h, stdin: text, onLine: { out += $0 }, onExit: { code in
@@ -2047,42 +2052,84 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         syncOrbs()
     }
     /// A 2–4 word tab name from a tab's recent output: headless LLM call on this Mac (Settings → Terminal's model & effort); "" when it fails.
-    func aiTabName(_ text: String, model: String, effort: String = "low", done: @escaping (String) -> Void) {
+    func aiTabName(_ text: String, model: String, effort: String = "low", fallbacks: [ModelFallback] = [], done: @escaping (String) -> Void) {
         claudeP("Name this terminal tab in 2 to 4 words, from what is going on in it (the project, task or tool). "
-            + "Reply with only the name: no quotes, no punctuation at the end.\n\n" + String(text.suffix(6000)), model: model, effort: effort) { out in
+            + "Reply with only the name: no quotes, no punctuation at the end.\n\n" + String(text.suffix(6000)), model: model, effort: effort, fallbacks: fallbacks) { out in
             done(String(String(out.split(separator: "\n").first ?? "").trimmingCharacters(in: CharacterSet(charactersIn: "\"'`*. ").union(.whitespaces)).prefix(40)))
         }
     }
-    /// Headless LLM call (Claude, Codex, or agy): its stdout reply, "" when it fails.
-    func claudeP(_ prompt: String, model: String, effort: String = "low", done: @escaping (String) -> Void) {
-        let inv = llmInvocation(prompt, model: model, effort: effort)
-        let finish: (String) -> String = { inv.harness == "agy" ? parseAgyStreamResult($0) : $0 }
-        if !devSsh(host).isEmpty {  // a dev copy asks the host's CLI: one here would connect in the copy's name
-            var out = ""
-            ssh("exec $SHELL -lc " + shellQuote(inv.shell), stdin: inv.stdin,
-                onLine: { out += $0 + "\n" }, onExit: { done($0 == 0 ? finish(out) : "") })
-            return
+    /// Headless LLM call (Claude, Codex, or agy) with proactive/reactive per-provider fallback: its stdout reply, "" when all fail.
+    func claudeP(_ prompt: String, model: String, effort: String = "low", fallbacks: [ModelFallback] = [], done: @escaping (String) -> Void) {
+        var seen = Set<String>()
+        var chain = [(model: String, effort: String)]()
+        for (idx, item) in ([(model, effort)] + fallbacks.map({ ($0.model, $0.effort.isEmpty ? effort : $0.effort) })).enumerated() {
+            let h = harnessOf(item.0)
+            let effective = writerHarnesses.contains(h) ? h : (idx == 0 ? "claude" : "")
+            if !effective.isEmpty && seen.insert(effective).inserted { chain.append(item) }
         }
-        DispatchQueue.global().async {
-            let p = Process(), inPipe = Pipe(), out = Pipe()
-            p.executableURL = URL(fileURLWithPath: inv.bin)
-            p.arguments = inv.args
-            p.currentDirectoryURL = FileManager.default.temporaryDirectory
-            var env = ProcessInfo.processInfo.environment
-            env["PATH"] = "\(NSHomeDirectory())/.local/bin:/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin")
-            p.environment = env
-            p.standardInput = inPipe; p.standardOutput = out; p.standardError = FileHandle.nullDevice
-            var text = ""
-            if (try? p.run()) != nil {
-                DispatchQueue.global(qos: .userInitiated).async {
-                    try? inPipe.fileHandleForWriting.write(contentsOf: Data(inv.stdin.utf8))
-                    try? inPipe.fileHandleForWriting.close()
+        let ready = chain.filter { !greenlight.isLocallyCapped(harnessOf($0.model)) }
+        let capped = chain.filter { greenlight.isLocallyCapped(harnessOf($0.model)) }
+        let ordered = ready + capped
+        func attempt(_ idx: Int) {
+            guard idx < ordered.count else { done(""); return }
+            let pick = ordered[idx]
+            let inv = llmInvocation(prompt, model: pick.model, effort: pick.effort)
+            let finish: (String) -> String = { inv.harness == "agy" ? parseAgyStreamResult($0) : $0 }
+            let handle: (Int32, String, String, Bool) -> Void = { [weak self] code, rawOut, rawErr, missing in
+                let text = code == 0 ? finish(rawOut) : ""
+                if !text.isEmpty {
+                    self?.greenlight.clearLocalLimit(inv.harness)
+                    done(text)
+                    return
                 }
-                let d = out.fileHandleForReading.readDataToEndOfFile(); p.waitUntilExit()
-                if p.terminationStatus == 0 { text = finish(String(decoding: d, as: UTF8.self)) }
+                let combined = rawErr + "\n" + rawOut
+                let retryable = missing || isLimitOrAuthErrorText(combined)
+                if isLimitOrAuthErrorText(combined) { self?.greenlight.recordLocalLimit(inv.harness) }
+                if retryable && idx + 1 < ordered.count { attempt(idx + 1) } else { done("") }
             }
-            DispatchQueue.main.async { done(text) }
+            if !devSsh(host).isEmpty {  // a dev copy asks the host's CLI: one here would connect in the copy's name
+                var out = ""
+                ssh("exec $SHELL -lc " + shellQuote(inv.shell + " 2>&1"), stdin: inv.stdin,
+                    onLine: { out += $0 + "\n" }, onExit: { handle($0, out, "", $0 == 127) })
+                return
+            }
+            DispatchQueue.global().async {
+                let p = Process(), inPipe = Pipe(), out = Pipe(), err = Pipe()
+                p.executableURL = URL(fileURLWithPath: inv.bin)
+                p.arguments = inv.args
+                p.currentDirectoryURL = FileManager.default.temporaryDirectory
+                var env = ProcessInfo.processInfo.environment
+                env["PATH"] = "\(NSHomeDirectory())/.local/bin:/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin")
+                p.environment = env
+                p.standardInput = inPipe; p.standardOutput = out; p.standardError = err
+                final class DataBuf { var d = Data() }
+                let ioQ = DispatchQueue(label: "greenlight.claudep.io")
+                let outBuf = DataBuf(), errBuf = DataBuf()
+                let outReader = PipeReader(out.fileHandleForReading, on: ioQ) { outBuf.d.append($0) }
+                let errReader = PipeReader(err.fileHandleForReading, on: ioQ) { errBuf.d.append($0) }
+                var rawOut = "", rawErr = "", rc: Int32 = -1, missing = false
+                if (try? p.run()) != nil {
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        try? inPipe.fileHandleForWriting.write(contentsOf: Data(inv.stdin.utf8))
+                        try? inPipe.fileHandleForWriting.close()
+                    }
+                    p.waitUntilExit()
+                    let deadline = DispatchTime.now() + 0.5
+                    outReader.finish(until: deadline)
+                    errReader.finish(until: deadline)
+                    rc = p.terminationStatus
+                    rawOut = String(decoding: outBuf.d, as: UTF8.self)
+                    rawErr = String(decoding: errBuf.d, as: UTF8.self)
+                } else {
+                    outReader.cancel()
+                    errReader.cancel()
+                    missing = true
+                }
+                let finalRc = rc, finalOut = rawOut, finalErr = rawErr, finalMissing = missing
+                DispatchQueue.main.async { handle(finalRc, finalOut, finalErr, finalMissing) }
+            }
         }
+        attempt(0)
     }
     /// Each pane is a tmux session on its own socket, so quitting the app only detaches: relaunch reattaches, and
     /// after a reboot `new-session -A` starts it fresh in the workspace. Options go inline: no config on either host.
@@ -2269,7 +2316,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         case "look":  // Customize look: the page wrote the whole prompt; the answer goes back raw, the page checks every value
             guard let text = b["text"] as? String, text.count <= 8000 else { return }
             // ponytail: Sonnet for looks (Haiku's palettes clashed); a Settings picker if you want to choose
-            claudeP(text, model: "claude-sonnet-5-5") { [weak web] out in web?.evaluateJavaScript("term.looked(\(js(String(out.prefix(4000)))))") }
+            let lookFallbacks = resolvedModelFallbacks(saved: greenlight.modelFallbacks, primaryModel: "claude-sonnet-5-5", rawOptions: greenlight.availableModels, tier: .capable, allowedHarnesses: writerHarnesses)
+            claudeP(text, model: "claude-sonnet-5-5", fallbacks: lookFallbacks) { [weak web] out in web?.callJS("term.looked", [String(out.prefix(4000))]) }
         case "band":  // the tab strip's computed color, so the title band matches it
             let c = b["color"] as? String ?? "", k = c.hasPrefix("color(") ? 1.0 : 255  // WebKit computes color-mix() as color(srgb r g b), 0–1
             let n = c.split(whereSeparator: { !"0123456789.".contains($0) }).compactMap { Double($0) }
@@ -2335,7 +2383,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             let tab = b["tab"] as? Int ?? 0, auto = b["auto"] as? Bool ?? false
             let reply: (String) -> Void = { [weak web] n in web?.evaluateJavaScript("term.named(\(tab), \(js(n)))") }
             if auto && !greenlight.termAutoName { return reply("") }  // still answer: the page counts auto runs in flight
-            aiTabName(b["text"] as? String ?? "", model: greenlight.termNameModel, effort: greenlight.termNameEffort, done: reply)
+            aiTabName(b["text"] as? String ?? "", model: greenlight.termNameModel, effort: greenlight.termNameEffort, fallbacks: greenlight.activeTermNameFallbacks, done: reply)
         case "badge":  // agents waiting on you, per window: the Dock icon shows the sum
             termBadges[wid] = max(0, b["n"] as? Int ?? 0)
             let n = termBadges.values.reduce(0, +); NSApp.dockTile.badgeLabel = n > 0 ? "\(n)" : nil

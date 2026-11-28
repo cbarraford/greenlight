@@ -90,12 +90,15 @@ def test_model_selector_swift_contracts():
     # All 4 Settings model selectors use the shared component (Chat model, Naming model, Workspace pages, Next-step suggestions)
     selector_calls = re.findall(r"ModelSelector\([^)]*title:\s*\"([^\"]+)\"", views_src)
     assert selector_calls == ["Chat model", "Naming model", "Workspace pages", "Next-step suggestions"], selector_calls
-    # Every icon returned by ModelManufacturer.icon and modelIcon(for:harness:) exists in brand/icons
+    fallback_calls = re.findall(r"ModelSelector\([^)]*fallbacks:\s*\$c\.(\w+)", views_src)
+    assert fallback_calls == ["modelFallbacks", "termNameFallbacks", "designFallbacks", "nextFallbacks"], fallback_calls
+    # Every icon returned by ModelManufacturer.icon, modelIcon(for:harness:), and harnessIcon exists in brand/icons
     available_icons, errs = icons.load(ROOT)
     assert errs == []
     m_mfg = re.search(r"enum ModelManufacturer.*?^\}", config_src, re.S | re.M)
     m_ico = re.search(r"func modelIcon\(.*?^\}", config_src, re.S | re.M)
-    assert m_mfg and m_ico
-    referenced = set(re.findall(r'return\s+"([a-z0-9-]+)"', m_mfg.group(0) + "\n" + m_ico.group(0)))
+    m_har = re.search(r"func harnessIcon\(.*?^\}", config_src, re.S | re.M)
+    assert m_mfg and m_ico and m_har
+    referenced = set(re.findall(r'return\s+"([a-z0-9-]+)"', m_mfg.group(0) + "\n" + m_ico.group(0) + "\n" + m_har.group(0)))
     assert referenced and referenced <= set(available_icons), f"unknown icons: {referenced - set(available_icons)}"
 

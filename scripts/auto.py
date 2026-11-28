@@ -128,8 +128,10 @@ def own_model(a, engine):
 def agent(a, engine, log):
     """(text, exit code, tokens): the run's step titles, plain lines and reply, and its diag token fields."""
     own = engine == provider(a)  # a model name only means something to its own harness
+    use_model = own_model(a, engine) if own else (a.get("_fallback_model") or False)
+    use_effort = a.get("effort") if own else (a.get("_fallback_effort") or False)
     try:  # stream JSON, as chat does: the same parsers then give the reply and its tokens
-        cmd, text = harness.argv(engine, a["prompt"], model=own and own_model(a, engine), effort=own and a.get("effort"), stream=True)
+        cmd, text = harness.argv(engine, a["prompt"], model=use_model, effort=use_effort, stream=True)
         env = {**os.environ, "GREENLIGHT_REQUEST": a["prompt"]}  # a read-only automation can't create workspaces (greenlight.read_only)
         p = subprocess.run(cmd, input=text, cwd=os.path.expanduser(a.get("cwd") or "~"), text=True, env=env,
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=int(a.get("timeout") or 120) * 60)
@@ -252,6 +254,29 @@ def kill_process_tree(root, nonce=None):
     marker.unlink(missing_ok=True)
 
 
+def _auto_candidates(a):
+    """Ordered [(engine, model, effort)] for an automation run, honoring proactive cap/cooldown status."""
+    lead = provider(a)
+    raw_model = a.get("model")
+    if raw_model and harness.harness_of(raw_model) not in (lead, None):
+        primary_spec = f"{lead}:{raw_model}"
+    else:
+        primary_spec = raw_model or lead
+    chain = harness.fallback_chain(primary_spec, a.get("effort"), default=lead, slot="auto")
+    # Preserve CONFIG["agents"] order even when harness.installed() is not mocked in tests (skip pi without bypass).
+    seen = {h for h, _, _ in chain}
+    for raw_h in CONFIG["agents"]:
+        fh = harness.canonical(raw_h)
+        if fh in harness.H and fh not in seen and (fh != "pi" or harness.conf("pi").get("bypass") is True):
+            dm, de = harness.default_model_for(fh, "auto")
+            seen.add(fh)
+            chain.append((fh, dm, de))
+    ordered, skipped = harness.order_by_availability(chain)
+    if ordered and ordered[0][0] != chain[0][0]:
+        harness._emit_fallback(chain[0][0], ordered[0][0], ordered[0][1], skipped.get(chain[0][0], "usage_cap"))
+    return ordered
+
+
 def execute(name):
     """One run, start to finish: precheck, agent (the next of config agents on a limit), log, record."""
     valid_name(name)
@@ -287,12 +312,32 @@ def execute(name):
                     out, code = orchestrator(a, log)
                     rec |= {"status": "ok" if code == 0 else "failed", "engine": "orchestrator", "summary": out.strip()[-300:]}
                 if "status" not in rec:
-                    for engine in dict.fromkeys([provider(a), *CONFIG["agents"]]):
-                        out, code, tokens = agent(a, engine, log)
-                        if not (code and LIMIT_RE.search(out)):
+                    engine, used_model, out, code, tokens = provider(a), None, "", 1, {}
+                    candidates = _auto_candidates(a)
+                    for idx, (cand_engine, cand_model, cand_effort) in enumerate(candidates):
+                        engine, used_model = cand_engine, cand_model
+                        cand_a = a if cand_engine == provider(a) or not (cand_model or cand_effort) else {
+                            **a, "_fallback_model": cand_model, "_fallback_effort": cand_effort,
+                        }
+                        out, code, tokens = agent(cand_a, cand_engine, log)
+                        if code == 0:
+                            harness.clear_limit(cand_engine)
                             break
+                        tail = out[-1500:]
+                        if LIMIT_RE.search(out) or harness.is_limit_error(tail):
+                            harness.record_limit(cand_engine, tail, model=cand_model)
+                            if idx + 1 < len(candidates):
+                                harness._emit_fallback(cand_engine, candidates[idx + 1][0], candidates[idx + 1][1], "rate_limit")
+                            continue
+                        if (code == 127 or harness.is_unavailable_error(tail)) and idx + 1 < len(candidates):
+                            reason = "missing" if code == 127 else "auth"
+                            harness._emit_fallback(cand_engine, candidates[idx + 1][0], candidates[idx + 1][1], reason)
+                            continue
+                        break
                     rec |= {"status": "ok" if code == 0 else "failed", "engine": engine, "summary": out.strip()[-300:], **tokens}
-                    if engine == provider(a) and a.get("model"):
+                    if used_model:
+                        rec["model"] = a["model"] if engine == provider(a) and a.get("model") else used_model
+                    elif engine == provider(a) and a.get("model"):
                         rec["model"] = a["model"]
             rec["secs"] = int(time.time() - start)
             diag.event("automation", name_h=diag.h(name), status=rec["status"], engine=rec.get("engine"), model=rec.get("model"),

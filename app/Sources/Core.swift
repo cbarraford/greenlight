@@ -58,7 +58,7 @@ final class Core: ObservableObject {
             m[keyPath: p].dropFirst().sink { [weak self] v in guard let self, !self.mirroring else { return }; self.mirroring = true; self[keyPath: k] = v; self.mirroring = false }.store(in: &subs)
             self[keyPath: p].dropFirst().sink { [weak self, weak m] v in guard let self, !self.mirroring else { return }; self.mirroring = true; m?[keyPath: k] = v; self.mirroring = false }.store(in: &subs)
         }
-        both(\.model, \.$model); both(\.effort, \.$effort); both(\.name, \.$name); both(\.verbose, \.$verbose)
+        both(\.model, \.$model); both(\.effort, \.$effort); both(\.modelFallbacks, \.$modelFallbacks); both(\.name, \.$name); both(\.verbose, \.$verbose)
         both(\.liveLine, \.$liveLine); both(\.vim, \.$vim); both(\.vimStart, \.$vimStart); both(\.look, \.$look); both(\.sent, \.$sent)
         $settingsOpen.filter { $0 }.sink { [weak self, weak m] _ in m?.settingsOpen = true; DispatchQueue.main.async { self?.settingsOpen = false } }.store(in: &subs)
     }
@@ -169,6 +169,10 @@ final class Core: ObservableObject {
     @Published var model = savedModel("model", fallback: "claude-opus-5-5") {
         didSet {
             ud.set(model, forKey: "model")
+            if let updated = updatingFallbacksAfterPrimaryChange(oldPrimary: oldValue, oldEffort: effort, newPrimary: model, saved: modelFallbacks),
+               updated != modelFallbacks {
+                modelFallbacks = updated
+            }
             if harnessOf(model) != harnessOf(oldValue) {
                 msgs.append(Msg(.note, isClaude ? "Back to the Claude conversation." : "\(modelName) keeps its own conversation, separate from Claude's."))
                 context = 0; window = 0; run?.meterStale = true  // the meter was the other harness's: tokens only until this one reports
@@ -176,20 +180,79 @@ final class Core: ObservableObject {
         }
     }
     @Published var effort = ud.string(forKey: "effort") ?? "medium" { didSet { ud.set(effort, forKey: "effort") } }
+    @Published var modelFallbacks: [ModelFallback]? = savedModelFallbacks("modelFallbacks") {
+        didSet { persistModelFallbacks(modelFallbacks, forKey: "modelFallbacks") }
+    }
     // The agent that designs dashboard pages and puck widgets: a Claude model, or a Gemini one through agy.
-    @Published var designModel = savedModel("designModel", fallback: "claude-haiku-5-5") { didSet { ud.set(designModel, forKey: "designModel") } }
+    @Published var designModel = savedModel("designModel", fallback: "claude-haiku-5-5") {
+        didSet {
+            ud.set(designModel, forKey: "designModel")
+            if let updated = updatingFallbacksAfterPrimaryChange(oldPrimary: oldValue, oldEffort: designEffort, newPrimary: designModel, saved: designFallbacks),
+               updated != designFallbacks {
+                designFallbacks = updated
+            }
+        }
+    }
     @Published var designEffort = ud.string(forKey: "designEffort") ?? "low" { didSet { ud.set(designEffort, forKey: "designEffort") } }
+    @Published var designFallbacks: [ModelFallback]? = savedModelFallbacks("designFallbacks") {
+        didSet { persistModelFallbacks(designFallbacks, forKey: "designFallbacks") }
+    }
     /// The terminal's tab names: written by this model once a tab's output settles, unless you named it.
-    @Published var termNameModel = savedModel("termNameModel", fallback: "claude-haiku-5-5") { didSet { ud.set(termNameModel, forKey: "termNameModel") } }
+    @Published var termNameModel = savedModel("termNameModel", fallback: "claude-haiku-5-5") {
+        didSet {
+            ud.set(termNameModel, forKey: "termNameModel")
+            if let updated = updatingFallbacksAfterPrimaryChange(oldPrimary: oldValue, oldEffort: termNameEffort, newPrimary: termNameModel, saved: termNameFallbacks),
+               updated != termNameFallbacks {
+                termNameFallbacks = updated
+            }
+        }
+    }
     @Published var termNameEffort = ud.string(forKey: "termNameEffort") ?? "low" { didSet { ud.set(termNameEffort, forKey: "termNameEffort") } }
+    @Published var termNameFallbacks: [ModelFallback]? = savedModelFallbacks("termNameFallbacks") {
+        didSet { persistModelFallbacks(termNameFallbacks, forKey: "termNameFallbacks") }
+    }
     /// Starred model + effort pairs, shared by every Settings model selector.
     @Published var modelFavorites = savedModelFavorites() {
         didSet { if let data = try? JSONEncoder().encode(modelFavorites) { ud.set(data, forKey: "modelFavorites") } }
     }
     @Published var termAutoName = ud.object(forKey: "termAutoName") as? Bool ?? true { didSet { ud.set(termAutoName, forKey: "termAutoName") } }
     // The agent that writes the hover card's next step (dash.py suggest), ahead of time for every puck whose state moved.
-    @Published var nextModel = savedModel("nextModel", fallback: "claude-haiku-5-5") { didSet { ud.set(nextModel, forKey: "nextModel") } }
+    @Published var nextModel = savedModel("nextModel", fallback: "claude-haiku-5-5") {
+        didSet {
+            ud.set(nextModel, forKey: "nextModel")
+            if let updated = updatingFallbacksAfterPrimaryChange(oldPrimary: oldValue, oldEffort: nextEffort, newPrimary: nextModel, saved: nextFallbacks),
+               updated != nextFallbacks {
+                nextFallbacks = updated
+            }
+        }
+    }
     @Published var nextEffort = ud.string(forKey: "nextEffort") ?? "low" { didSet { ud.set(nextEffort, forKey: "nextEffort") } }
+    @Published var nextFallbacks: [ModelFallback]? = savedModelFallbacks("nextFallbacks") {
+        didSet { persistModelFallbacks(nextFallbacks, forKey: "nextFallbacks") }
+    }
+    /// Resolved per-provider fallback chains for each of the four Settings model selectors.
+    var activeChatFallbacks: [ModelFallback] {
+        resolvedModelFallbacks(saved: modelFallbacks, primaryModel: model, rawOptions: availableModels, tier: .capable)
+    }
+    var activeDesignFallbacks: [ModelFallback] {
+        resolvedModelFallbacks(saved: designFallbacks, primaryModel: designModel, rawOptions: availableModels, tier: .fast, allowedHarnesses: writerHarnesses)
+    }
+    var activeNextFallbacks: [ModelFallback] {
+        resolvedModelFallbacks(saved: nextFallbacks, primaryModel: nextModel, rawOptions: availableModels, tier: .fast, allowedHarnesses: writerHarnesses)
+    }
+    var activeTermNameFallbacks: [ModelFallback] {
+        resolvedModelFallbacks(saved: termNameFallbacks, primaryModel: termNameModel, rawOptions: availableModels, tier: .fast, allowedHarnesses: writerHarnesses)
+    }
+    /// Providers currently flagged at 100% in usage.py's snapshot or cooling down after a local limit error (for claudeP).
+    var usageCappedHarnesses = Set<String>()
+    var localLimitUntil = [String: Date]()
+    func updateUsageCaps(_ usage: [[String: Any]]?) { usageCappedHarnesses = cappedHarnessesFromUsage(usage) }
+    func isLocallyCapped(_ harness: String, now: Date = Date()) -> Bool {
+        if let until = localLimitUntil[harness], until > now { return true }
+        return usageCappedHarnesses.contains(harness)
+    }
+    func recordLocalLimit(_ harness: String, now: Date = Date()) { localLimitUntil[harness] = now.addingTimeInterval(300) }
+    func clearLocalLimit(_ harness: String) { localLimitUntil.removeValue(forKey: harness) }
     @Published var designParallel = ud.object(forKey: "designParallel") as? Int ?? 3 { didSet { ud.set(designParallel, forKey: "designParallel") } }
     @Published var context = 0 { didSet { ud.set(context, forKey: meterKeys.context) } }  // init reads this chat's
     @Published var window = 0 { didSet { ud.set(window, forKey: meterKeys.window) } }  // 0: unknown, the meter shows tokens only
@@ -859,7 +922,8 @@ final class Core: ObservableObject {
     var scope: () -> String? = { nil }
     var chatSend: String {
         let only = scope().map { " --only \(shellQuote($0))" } ?? ""
-        return "\(chief) send --model \(shellQuote(model)) --effort \(shellQuote(effort)) --name \(shellQuote(name))" + only + (verbose ? " --verbose" : "")
+        let fbs = fallbackCLIArgs(activeChatFallbacks, explicit: modelFallbacks != nil)
+        return "\(chief) send --model \(shellQuote(model)) --effort \(shellQuote(effort))\(fbs) --name \(shellQuote(name))" + only + (verbose ? " --verbose" : "")
     }
     var pucks: [[String: Any]] = [], picks = 0  // the latest snapshot's workspaces; picks: the newest highlight asked for
     @Published var agents: [Agent] = []  // the agents in your workspaces: the activity feed is live while one works
@@ -1074,6 +1138,22 @@ final class Core: ObservableObject {
             guard let id = j["id"] as? String else { break }
             r.turnId = id
             savePending(r, id)
+        case "fallback":
+            let fromH = j["from"] as? String ?? ""
+            let engine = j["engine"] as? String ?? "claude"
+            let rawModel = j["model"] as? String
+            let concrete = (rawModel != nil && rawModel != "default") ? rawModel : nil
+            let fullModel = concrete.map { harnessOf($0) == engine ? $0 : "\(engine):\($0)" } ?? engine
+            let shown = availableModels.first { $0.1 == fullModel || $0.1 == concrete }?.0
+                ?? models.first { $0.1 == fullModel || $0.1 == concrete }?.0 ?? harnessDisplayName(engine)
+            r.model = fullModel
+            r.meterStale = true
+            r.fellBack = true
+            let why = (j["reason"] as? String) == "auth" || (j["reason"] as? String) == "missing" || (j["reason"] as? String) == "unavailable"
+                ? "is unavailable" : "reached its usage limit"
+            let note = "\(harnessDisplayName(fromH)) \(why); using \(shown)"
+            if !r.stopping { r.status = note }
+            log(.chief, name, .status, note)
         case "start":
             loadModels()
             let engine = j["engine"] as? String ?? "claude"
@@ -1082,7 +1162,11 @@ final class Core: ObservableObject {
             let fallbackName = engine == "agy" ? "Antigravity" : engine.capitalized
             let shown = availableModels.first { $0.1 == selected || $0.1 == "\(engine):\(selected ?? "")" }?.0
                 ?? models.first { $0.1 == selected }?.0 ?? fallbackName
-            r.status = "Starting \(shown)"
+            if r.fellBack {
+                r.fellBack = false
+            } else {
+                r.status = "Starting \(shown)"
+            }
             log(.chief, name, .status, "started on \(r.runHost): \(j["engine"] as? String ?? "claude") \(j["model"] as? String ?? "")")
         case "status":
             if !r.stopping { r.status = j["text"] as? String ?? r.status; r.thinking = j["thinking"] as? Bool ?? false; voice.status(byline(r, now: Date(), lead: true)) }

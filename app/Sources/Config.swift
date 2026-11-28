@@ -950,6 +950,197 @@ func currentModelEffort(for choice: ModelChoice, modelId: String, storedEffort: 
     return nearestEffort(storedEffort, in: choice.supportedEfforts)
 }
 
+/// Model capability tier used to pick sensible default fallback models for each configured provider.
+enum ModelTier: Sendable {
+    case capable
+    case fast
+}
+
+/// One per-provider (per-harness) fallback model + effort entry, used when the primary hits a 5-hour or weekly cap.
+struct ModelFallback: Codable, Equatable, Hashable, Sendable, Identifiable {
+    var id: String { harness }
+    let harness: String
+    var model: String
+    var effort: String
+}
+
+let harnessFallbackOrder = ["claude", "agy", "codex", "gemini", "opencode", "pi"]
+
+/// Human-readable name for a harness/account provider.
+func harnessDisplayName(_ harness: String) -> String {
+    switch harness {
+    case "claude": return "Claude Code"
+    case "codex": return "Codex"
+    case "agy": return "Antigravity"
+    case "gemini": return "Gemini CLI"
+    case "opencode": return "OpenCode"
+    case "pi": return "Pi"
+    default: return harness.capitalized
+    }
+}
+
+/// DS icon name for a harness/account provider (every name exists in `brand/icons`).
+func harnessIcon(_ harness: String) -> String {
+    switch harness {
+    case "claude": return "claude"
+    case "codex": return "openai"
+    case "agy", "gemini": return "agy"
+    default: return "terminal"
+    }
+}
+
+/// Configured harnesses present in `rawOptions` passing `keep`, in canonical fallback order.
+func configuredHarnesses(in rawOptions: [(String, String)], where keep: (String) -> Bool = { _ in true }) -> [String] {
+    var present = Set<String>()
+    var extra = [String]()
+    for (_, id) in rawOptions where keep(id) {
+        let h = harnessOf(id)
+        if knownHarnesses.contains(h) && present.insert(h).inserted && !harnessFallbackOrder.contains(h) {
+            extra.append(h)
+        }
+    }
+    return harnessFallbackOrder.filter { present.contains($0) } + extra
+}
+
+/// Collapsed, cost-ranked model choices offered by a single harness (for per-provider fallback pickers).
+func harnessModelChoices(for harness: String, in rawOptions: [(String, String)], current: String = "") -> [ModelChoice] {
+    let groups = buildModelCatalog(from: rawOptions, current: harnessOf(current) == harness ? current : "", where: { harnessOf($0) == harness })
+    let flat = groups.flatMap(\.choices)
+    return flat.enumerated().sorted { a, b in
+        let (ra, rb) = (modelCostRank(a.element.id), modelCostRank(b.element.id))
+        return ra != rb ? ra < rb : a.offset < b.offset
+    }.map(\.element)
+}
+
+/// Picks a sensible default fallback model + effort for `harness` matching `tier` (capable for Chat, fast for Pages/Suggestions/Naming).
+func defaultFallbackChoice(for harness: String, in rawOptions: [(String, String)], tier: ModelTier) -> ModelFallback? {
+    let choices = harnessModelChoices(for: harness, in: rawOptions)
+    guard !choices.isEmpty else { return nil }
+    let concrete = choices.filter { !knownHarnesses.contains($0.id) }
+    let pool = concrete.isEmpty ? choices : concrete
+    let picked: ModelChoice
+    let desiredEffort: String
+    switch tier {
+    case .capable:
+        picked = pool[0]
+        desiredEffort = "medium"
+    case .fast:
+        picked = pool.last ?? choices[0]
+        desiredEffort = "low"
+    }
+    let resolved = picked.resolve(desiredEffort: desiredEffort)
+    return ModelFallback(harness: harness, model: resolved.modelId, effort: picked.supportedEfforts.isEmpty ? "" : resolved.effort)
+}
+
+/// Reads saved per-provider fallbacks from `ud` (`nil` means unset: use automatic per-provider defaults).
+func savedModelFallbacks(_ key: String) -> [ModelFallback]? {
+    guard let data = ud.data(forKey: key), let list = try? JSONDecoder().decode([ModelFallback].self, from: data) else { return nil }
+    return list.filter { !$0.harness.isEmpty && !$0.model.isEmpty }
+}
+
+/// Persists optional per-provider fallbacks to `ud` (`nil` clears back to automatic defaults).
+func persistModelFallbacks(_ fallbacks: [ModelFallback]?, forKey key: String) {
+    if let fallbacks, let data = try? JSONEncoder().encode(fallbacks) {
+        ud.set(data, forKey: key)
+    } else {
+        ud.removeObject(forKey: key)
+    }
+}
+
+/// Active ordered fallback chain (at most one per other configured provider) for a primary model selection.
+func resolvedModelFallbacks(
+    saved: [ModelFallback]?,
+    primaryModel: String,
+    rawOptions: [(String, String)],
+    tier: ModelTier,
+    allowedHarnesses: Set<String>? = nil
+) -> [ModelFallback] {
+    let primaryHarness = harnessOf(primaryModel)
+    let keep: (String) -> Bool = { id in
+        guard let allowed = allowedHarnesses else { return true }
+        return allowed.contains(harnessOf(id))
+    }
+    let others = configuredHarnesses(in: rawOptions, where: keep).filter { $0 != primaryHarness }
+    guard let saved else {
+        return others.compactMap { defaultFallbackChoice(for: $0, in: rawOptions, tier: tier) }
+    }
+    var seen = Set<String>()
+    var out = [ModelFallback]()
+    for fb in saved where fb.harness != primaryHarness && !fb.model.isEmpty {
+        if let allowed = allowedHarnesses, !allowed.contains(fb.harness) { continue }
+        guard seen.insert(fb.harness).inserted else { continue }
+        out.append(fb)
+    }
+    return out
+}
+
+/// When the user changes the primary model to a different provider, keep their previous primary saved as that provider's fallback
+/// (unless they explicitly cleared all fallbacks).
+func updatingFallbacksAfterPrimaryChange(
+    oldPrimary: String,
+    oldEffort: String,
+    newPrimary: String,
+    saved: [ModelFallback]?
+) -> [ModelFallback]? {
+    guard var list = saved, !list.isEmpty else { return saved }
+    let oldH = harnessOf(oldPrimary), newH = harnessOf(newPrimary)
+    guard oldH != newH, knownHarnesses.contains(oldH), !oldPrimary.isEmpty else { return list }
+    if !list.contains(where: { $0.harness == oldH }) {
+        list.insert(ModelFallback(harness: oldH, model: oldPrimary, effort: modelSupportsEffort(oldPrimary) ? oldEffort : ""), at: 0)
+    }
+    return list
+}
+
+/// Formats customized fallback entries into repeatable CLI `--fallback MODEL[@EFFORT]` flags.
+/// When `explicit` is false (Settings left on Automatic), emits "" so the backend honors `config.json` and installed harnesses.
+func fallbackCLIArgs(_ fallbacks: [ModelFallback], explicit: Bool = false) -> String {
+    guard explicit else { return "" }
+    if fallbacks.isEmpty { return " --no-fallback" }
+    return fallbacks.map { fb in
+        let spec = fb.effort.isEmpty ? fb.model : "\(fb.model)@\(fb.effort)"
+        return " --fallback \(shellQuote(spec))"
+    }.joined()
+}
+
+/// Harnesses whose shared 5h/Week/Day quota window in the latest usage snapshot is at 100% and hasn't reset yet.
+/// Ignores model-specific pools (e.g. Claude's Opus pool, or Antigravity's Claude/GPT-only window) so other models on that harness stay usable.
+func cappedHarnessesFromUsage(_ usage: [[String: Any]]?, now: TimeInterval = Date().timeIntervalSince1970) -> Set<String> {
+    guard let usage else { return [] }
+    let shared = Set(["5h", "week", "day", "limit"])
+    let familyWords = Set(["claude", "gpt", "gemini", "opus", "sonnet", "fable", "haiku"])
+    var capped = Set<String>()
+    for entry in usage {
+        guard let id = entry["id"] as? String, knownHarnesses.contains(id),
+              let windows = entry["windows"] as? [[String: Any]] else { continue }
+        let note = (entry["note"] as? String ?? "").lowercased()
+        let at = (entry["at"] as? NSNumber)?.doubleValue
+        let fresh = at.map { (now - $0) < 900 } ?? false
+        for w in windows {
+            guard let pct = (w["pct"] as? NSNumber)?.doubleValue, pct >= 99.5 else { continue }
+            let low = (w["label"] as? String ?? "").trimmingCharacters(in: .whitespaces).lowercased()
+            let tokens = Set(low.split { !$0.isLetter && !$0.isNumber }.map(String.init))
+            let isShared = !tokens.isDisjoint(with: shared)
+            let scopedToSubset = id == "agy" && (!tokens.isDisjoint(with: familyWords)
+                || ((note.contains("claude") || note.contains("gpt")) && !note.contains("gemini")))
+            let applies = id == "codex" || id == "opencode" || (isShared && !scopedToSubset)
+            guard applies else { continue }
+            if let resets = (w["resets"] as? NSNumber)?.doubleValue {
+                if resets > now { capped.insert(id) }
+            } else if fresh {
+                capped.insert(id)
+            }
+        }
+    }
+    return capped
+}
+
+/// True when CLI output/stderr indicates a rate/quota cap or auth error that should trigger fallback to the next provider.
+func isLimitOrAuthErrorText(_ text: String) -> Bool {
+    guard !text.isEmpty else { return false }
+    let pattern = #"(?:usage limit|limit reached|5-hour limit|weekly limit|out of (?:extra )?usage|exceeded your current quota|insufficient_quota|exhausted your daily quota|quota will reset after|rate.?limit(?:_error|\s+(?:exceeded|reached|hit))|(?:http(?:/[\d.]+)?|status|error|code)[:\s]+429\b|\b429\s+too many requests|\btoo many requests\b|hit your (?:5-?hour|weekly|daily|usage|rate)?\s*limit|overloaded_error|capacity exhausted|not logged in|login expired|invalid api key|authentication_error)"#
+    return text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+}
+
 // MARK: Settings: repo lifecycles, instructions, memory
 
 /// One lifecycle stage as dash.py's lifecycle-get gives it: a built-in check, or the user's own (done: "signoff" | "label=x" | "check=x").
