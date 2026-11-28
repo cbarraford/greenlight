@@ -153,7 +153,7 @@ func actedLine(_ who: String, _ what: String, _ why: String?, _ o: [String: Any]
 let sidebarOps = ["info", "rm", "goal", "cfg", "merge", "ready", "signoff", "new", "diff", "attempt", "reset-attempts"]
 /// The buttons Chief hears about (Core.acted), by dash.py's op: the popover's and the sidebar's say the same.
 let actedVerb = ["merge": "merge", "ready": "mark ready", "signoff": "sign off", "rm": "delete the workspace", "new": "new workspace", "goal": "set the goal",
-                 "cfg": "save the repo's .greenlight.json"]
+                 "cfg": "save the repo's .greenlight.json", "attempt": "record a stage attempt", "reset-attempts": "reset stage attempts"]
 
 /// The watch's news split by the window you're in (focusScope's JSON, the same rule as dash.py's board): `ask` is about its
 /// worktrees or repos, `hold` is another project's and waits until you're in a window that shows it. nil scope: every project's.

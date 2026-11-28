@@ -541,7 +541,7 @@ test("card actions: the hex leaves on the click, comes back when its state moves
   snap.pucks[0] = {...snap.pucks[0], state: "needs", sig: "a3", mr: {...snap.pucks[0].mr, state: "opened"}, moves: [{kind: "ci", jobs: ["lint"], prompt: "fix ci", own: true, repo: "widgets"}]};
   await page.evaluate(s => window.mc.update({...s, ts: Math.floor(Date.now() / 1000)}), snap);
   await card(); await page.click("#hcard .mv .go");
-  assert.deepEqual((await posts(page, "run")).pop(), {cmd: "run", name: "plan-a", prompt: "fix ci"});
+  assert.deepEqual((await posts(page, "run")).pop(), {cmd: "run", name: "plan-a", prompt: "fix ci", kind: "ci"});
   assert.equal(await hex(), false);
   await page.evaluate(() => window.mc.ran({name: "plan-a", error: "the workspace is gone"}));
   assert.equal(await hex(), true, "a failed action left the hex hidden");
@@ -2559,7 +2559,7 @@ test("stuck stage escalates smart button to Ask Chief with Retry and Reset in Al
   assert.match(await page.textContent("#hcard .mv.stuck .go small"), /Fix CI · Failed on this commit/);
   // Clicking Ask Chief posts askChief with workspace + failure context
   await page.click("#hcard .mv.stuck .go");
-  const ask = (await page.evaluate(() => window._sent.filter(m => m.cmd === "askChief"))).pop();
+  const ask = (await posts(page, "askChief")).pop();
   assert.ok(ask, "clicking Ask Chief sends askChief message");
   assert.equal(ask.name, "fix-ci");
   assert.match(ask.shown, /fix-ci.*!42.*stuck/i);
@@ -2570,7 +2570,7 @@ test("stuck stage escalates smart button to Ask Chief with Retry and Reset in Al
   assert.match(await page.textContent("#hcard .also"), /Retry Fix CI/);
   assert.match(await page.textContent("#hcard .also"), /Reset/);
   await page.click("#hcard .also button:has-text('Reset')");
-  const rst = (await page.evaluate(() => window._sent.filter(m => m.cmd === "resetAttempts"))).pop();
+  const rst = (await posts(page, "resetAttempts")).pop();
   assert.ok(rst, "clicking Reset sends resetAttempts");
   assert.equal(rst.name, "fix-ci");
 });

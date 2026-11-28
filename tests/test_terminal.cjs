@@ -1616,10 +1616,12 @@ test("stuck stage in Basement escalates smart button to Inspect workspace, with 
   const stuckTrees = {
     trees: TREES.trees.map(w => w.path === "/w/fix-login" ? {
       ...w,
+      agent: "none",
       state: "needs",
       step: "ci_green",
       owner: "agent",
       advice: "A prior attempt failed without moving this stage.",
+      mr: {ref: "!42", state: "opened", pipeline: "failed", target_branch: "main"},
       moves: [{kind: "ci", repo: "widgets", prompt: "Fix CI\n\nPrior attempt failed on this stage.", jobs: ["unit"]}],
       attempts: {count: 1, same_sha: 1, stuck: true, step: "ci_green", reason: "Failed on this commit", last: {ts: 1700000000, agent: "claude", source: "basement", kind: "ci"}},
     } : w),
