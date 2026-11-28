@@ -1667,10 +1667,10 @@ function renderOverview(main){
   const all = shown(), SHELF = ["quiet", "done"];
   main.classList.add("ov");
   const strip = shows("agents") ? main.appendChild(agentsStrip(true)) : null, cards = strip && strip.querySelector(".acards"), CARDS = 240;  // §10.7: the board sizes as if the cards stood at most this tall
-  if (cards && cards.offsetHeight > CARDS) main.style.overflowY = "scroll";  // the page will scroll: reserve a classic scrollbar now, so W0 and the shelf's chips measure the width that remains
+  if (cards && cards.offsetHeight > CARDS) main.style.overflowY = "scroll";  // the page will scroll: reserve a classic scrollbar now, so W0 and the shelf's chips measure the width that remains (spares the second layout at the end)
   const cw = main.clientWidth;
   const pucks = all.filter(p => !SHELF.includes(p.state)), shelf = all.filter(p => SHELF.includes(p.state));  // nothing to do here: they wait on the shelf
-  const stacks = stackUp(pucks), W0 = main.clientWidth - (parseFloat(getComputedStyle(main).paddingRight) || 0);  // the dock's gutter
+  const stacks = stackUp(pucks), W0 = cw - (parseFloat(getComputedStyle(main).paddingRight) || 0);  // the dock's gutter
   const st = stacks.find(p => p.members && p.name === ui.drill);  // inside a stack: only its hexes, breadcrumbs back out
   if (!st) ui.drill = null;
   const items = st ? st.members : stacks;

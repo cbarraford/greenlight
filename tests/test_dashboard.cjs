@@ -2745,20 +2745,37 @@ test("Agents view: copy session ID and launch new terminal window connected to t
   assert.equal(afterScroll, beforeScroll, "clicking Copy must not reset the page's scroll");
 });
 
-test("classic scrollbars: a tall Agents strip or a board at its floor never scrolls the page sideways", async () => {
+test("classic scrollbars: a tall Agents strip, a board at its floor or a honeycomb past the page never scrolls it sideways", async () => {
   if (ENGINE !== "chromium") return;  // Playwright hides Chromium's scrollbars; this run shows them, as macOS does with a mouse attached
   const b = await chromium.launch({executablePath: browserPath(), ignoreDefaultArgs: ["--hide-scrollbars"]});
   try {
-    for (const [n, height] of [[10, 900], [2, 480], [3, 420]]) {  // cards past 240; the board's 260 floor in a short window; a honeycomb past it
-      const p = await b.newPage({viewport: {width: 1300, height}});
-      await p.addInitScript(() => { window.webkit = {messageHandlers: {mc: {postMessage: () => {}}}} });
+    const CASES = [
+      {why: "cards past 240 reserve the bar up front", n: 10, height: 900, agent: "working", sameStep: true, hexes: 1, pastFloor: true, early: true},
+      {why: "the board at its 260 floor in a short window", n: 2, height: 480, agent: "working", sameStep: true, hexes: 2, pastFloor: false, early: false},
+      {why: "60 lone hexes (distinct steps: none stack) outgrow the page", n: 60, height: 600, agent: "idle", sameStep: false, hexes: 60, pastFloor: true, early: false},
+    ];
+    for (const c of CASES) {
+      const p = await b.newPage({viewport: {width: 1300, height: c.height}}), errs = [];
+      p.on("pageerror", e => errs.push(e.message));
+      await p.addInitScript(() => {
+        window.webkit = {messageHandlers: {mc: {postMessage: () => {}}}};
+        const rc = Element.prototype.replaceChildren; window.__layouts = 0;  // each clear of #main is one layout pass
+        Element.prototype.replaceChildren = function(...a){ if (this.id === "main") window.__layouts++; return rc.apply(this, a) };
+      });
       await p.goto(PAGE);
-      const pucks = Array.from({length: n}, (_, k) => ({...puck(`c-${k}`, `Task ${k}`, "working"), path: `/w/c-${k}`}));
+      await p.evaluate(() => { window.__layouts = 0 });
+      const pucks = Array.from({length: c.n}, (_, k) => ({...puck(`c-${k}`, `Task ${k}`, c.agent), ...(c.sameStep ? {} : {step: `s-${k}`})}));
       await p.evaluate(s => window.mc.update(s), {...SNAP, pucks});
-      const g = await p.evaluate(() => { const m = document.getElementById("main"); return {sw: m.scrollWidth, cw: m.clientWidth, sh: m.scrollHeight, ch: m.clientHeight, bar: m.offsetWidth - m.clientWidth} });
-      assert.ok(g.sh > g.ch, `${n} agents at ${height}px tall should scroll the page down (${g.sh} <= ${g.ch})`);
+      const g = await p.evaluate(() => { const m = document.getElementById("main"); return {sw: m.scrollWidth, cw: m.clientWidth, sh: m.scrollHeight, ch: m.clientHeight, bar: m.offsetWidth - m.clientWidth,
+        hexes: m.querySelectorAll(".fieldwrap > .cell, .fieldwrap > .fan").length, board: m.querySelector(".fieldwrap")?.offsetHeight ?? 0, layouts: window.__layouts, cards: m.querySelector(".acards")?.offsetHeight || 0} });
+      assert.deepEqual(errs, [], `${c.why}: page errors: ` + errs.join("; "));
+      assert.equal(g.hexes, c.hexes, `${c.why}: ${c.n} workspaces should lay out as ${c.hexes} hex(es)`);
+      assert.ok(c.pastFloor ? g.board > 260 : g.board === 260, `${c.why}: the board should ${c.pastFloor ? "be past" : "sit at"} its 260 floor (${g.board})`);
+      assert.equal(g.cards > 240, c.early, `${c.why}: cards ${g.cards}px should ${c.early ? "" : "not "}take the up-front reservation`);
+      assert.equal(g.layouts, c.early ? 1 : 2, `${c.why}: ${c.early ? "the up-front reservation spares" : "the overflow takes"} a second layout pass (${g.layouts})`);
+      assert.ok(g.sh > g.ch, `${c.why}: the page should scroll down (${g.sh} <= ${g.ch})`);
       assert.ok(g.bar > 0, "this run should draw classic scrollbars");
-      assert.ok(g.sw <= g.cw + 1, `${n} agents at ${height}px tall: the page scrolls sideways (${g.sw} > ${g.cw})`);
+      assert.ok(g.sw <= g.cw + 1, `${c.why}: the page scrolls sideways (${g.sw} > ${g.cw})`);
       await p.close();
     }
   } finally { await b.close() }
