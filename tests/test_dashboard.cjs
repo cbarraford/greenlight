@@ -1524,7 +1524,7 @@ test("All output, pane log: real short output, errors, replies and program outpu
     L("f.g0:0", "• Working (3s • esc to interrupt)"), L("f.g0:1", "• 3"), L("e.g0:0", "⏺ 3"), L("e.g0:1", "  test_a, test_b and test_c."), L("e.g0:2", "✶ Fixing 3 failed tests… (1s · esc to interrupt)"), L("e.g0:3", "F"), L("e.g0:6", "✶ 20"), L("e.g0:8", "✶ Fixing 3 failed tests…"), L("e.g0:7", "✶ Fixing 3 failed tests… (2s · esc to interrupt)"), L("e.g0:9", "⏺ I'll add a test…"),
     L("e.g0:4", "✻ Running the tests… (esc to interrupt · ctrl+t to show todos)"), L("e.g0:5", "✻ Running the tests… (13s · esc to interrupt · ctrl+t to show todos)")]});
   const hidden = await page.$$eval("#aout-list > .aoe.line[hidden]", es => es.map(e => e.dataset.id));
-  assert.deepEqual(hidden, ["a.g0:4", "a.g0:23", "a.g0:24", "a.g0:25", ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(i => `d.g0:${i}`), "e.g0:2", "e.g0:3", "e.g0:6", "e.g0:8", "e.g0:7", "e.g0:4"],
+  assert.deepEqual(hidden, ["a.g0:4", "a.g0:23", "a.g0:24", "a.g0:25", ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(i => `d.g0:${i}`), "e.g0:2", "e.g0:3", "e.g0:6", "e.g0:8", "e.g0:4"],
     "only the blank row and the spinner's redraws go (Codex's too, and a real Claude Code run down to its last line): short results, quoted spinner text, another session's line, errors, a short reply, a build's progress and a results table stay");
   assert.equal(await page.$eval("#aout-list [data-id='a.g0:26']", e => e.dataset.k), "status", "Codex's spinner is a status line, not the agent talking");
   assert.equal(await page.$eval("#aout-list [data-id='f.g0:1']", e => e.dataset.k), "said", "and its one-number answer after it is the agent talking");
