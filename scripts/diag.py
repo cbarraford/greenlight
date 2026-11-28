@@ -39,6 +39,11 @@ import traceback
 from pathlib import Path
 from typing import Any
 
+try:
+    import bins
+except ImportError:  # diag.py runs alone too: update.py smoke-tests a new version with just it
+    bins = None  # type: ignore[assignment]
+
 HERE = Path(__file__).resolve().parent
 MAX = 5 << 20  # ponytail: size rotation, no compression; enough for a local trail
 KEEP = 3
@@ -268,6 +273,8 @@ def install(comp):
     global _comp
     _comp = comp
     os.environ.setdefault("GREENLIGHT_RUN", secrets.token_hex(4))  # children inherit it: one run id across processes
+    if bins:
+        bins.ensure_path()  # ssh, launchd and systemd start us without the profile's PATH (~/.local/bin's wt, claude, …)
     prev = sys.excepthook
 
     def hook(t, e, tb):
@@ -405,6 +412,12 @@ def crashes(after, n=5):
     return out
 
 
+def _cli(name):
+    """Whether the CLI runs here as greenlight would find it (bins.find: overrides, PATH, ~/.local/bin and the like)."""
+    p = bins.find(name, env="WORKTRUNK_BIN" if name == "wt" else None) if bins else shutil.which(name)
+    return bool(p) and (os.access(p, os.X_OK) if os.sep in p else bool(shutil.which(p)))
+
+
 def _doctor_ade(add):
     try:
         import ade
@@ -413,9 +426,8 @@ def _doctor_ade(add):
         if not ade.config_ok():  # config.json's "ade" names no backend: ignored, the user's to fix
             add("ade_config", False, state="invalid")
         if n == "native":  # its agents run in tmux, its workspaces are Worktrunk's
-            wt_bin = os.environ.get("WORKTRUNK_BIN") or "wt"
-            for label, cmd_name in (("tmux", "tmux"), ("git", "git"), ("worktrunk", wt_bin)):
-                found = bool(shutil.which(cmd_name))
+            for label, cmd_name in (("tmux", "tmux"), ("git", "git"), ("worktrunk", "wt")):
+                found = _cli(cmd_name)
                 add(label, found, state=None if found else "missing")
     except RuntimeError:
         add("ade", False, state="invalid")
@@ -431,11 +443,11 @@ def doctor(quick=False):
     def add(check, ok, **kw):
         out.append(clean({"check": check, "ok": ok, **kw}))
     for tool in () if quick else ("glab", "gh"):
-        if not shutil.which(tool):
+        if not (exe := bins.find(tool) if bins else shutil.which(tool)):
             add(f"{tool}_auth", None, state="missing")
             continue
         try:
-            p = subprocess.run([tool, "auth", "status"], capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL)
+            p = subprocess.run([exe, "auth", "status"], capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL)
             add(f"{tool}_auth", p.returncode == 0, rc=p.returncode, msg_class=classify(p.stderr + p.stdout) if p.returncode else None)
         except (OSError, subprocess.SubprocessError) as e:
             add(f"{tool}_auth", False, **{k: v for k, v in failure(e).items() if k != "ok"})
@@ -445,7 +457,7 @@ def doctor(quick=False):
         agents = ["claude"]
     for a in agents if isinstance(agents, list) else []:
         if a in ("claude", "codex", "opencode", "pi", "gemini", "agy"):
-            add(f"agent_{a}", bool(shutil.which(a)))
+            add(f"agent_{a}", _cli(a))
     with contextlib.suppress(OSError):
         free = shutil.disk_usage(home() if home().exists() else Path.home()).free / 1e9
         add("disk", free > 1, free_gb=round(free, 1))
@@ -532,12 +544,11 @@ def ade_name():
 def summary(after, events=None):
     events = read(after) if events is None else events
     now = time.time()
-    wt_bin = os.environ.get("WORKTRUNK_BIN") or "wt"
     return {
         "version": version(),
         "env": {"os": platform.system(), "os_release": platform.release(), "python": platform.python_version(),
                 "ade": ade_name(),
-                "clis": {c: bool(shutil.which(wt_bin if c == "wt" else c))
+                "clis": {c: _cli(c)
                          for c in ("glab", "gh", "wt", "claude", "codex", "opencode", "pi", "gemini", "agy")}},
         "config": config_shape(),
         "events": len(events),

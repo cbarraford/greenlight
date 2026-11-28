@@ -326,6 +326,29 @@ def test_cli_ade_native_end_to_end(home, repo):
     assert subprocess.run(["git", "-C", str(repo), "show-ref", "--verify", "--quiet", "refs/heads/feat-y"]).returncode == 0
 
 
+def test_cli_ade_native_finds_wt_off_a_bare_path(home, repo):
+    """The app's backend runs over ssh/launchd with a PATH that lacks ~/.local/bin: wt installed there still works."""
+    local_bin = home / ".local" / "bin"
+    local_bin.mkdir(parents=True)
+    _make_fake_wt(home).rename(local_bin / "wt")
+    env = {"GREENLIGHT_HOME": str(home), "GREENLIGHT_ADE": "native", "GREENLIGHT_TMUX_SOCKET": "gl-test-none",
+           "GREENLIGHT_ME": "tester", "PATH": "/usr/bin:/bin", "HOME": str(home)}  # no WORKTRUNK_BIN, no ~/.local/bin
+    (home / "imported.json").write_text("{}")
+    run = lambda *a: subprocess.run([sys.executable, "scripts/greenlight.py", *a], capture_output=True, text=True, env=env, timeout=60)
+    assert run("repos", "add", str(repo)).returncode == 0
+    made = run("ade", "worktree", "create", "--repo", str(repo), "--name", "feat-z", "--comment", "Goal Z", "--change", "test")
+    assert made.returncode == 0, made.stderr
+    path = json.loads(made.stdout)["worktree"]["path"]
+    assert json.loads(run("ade", "worktree", "rm", "--worktree", f"id:{path}").stdout) == {"removed": path}
+
+    (local_bin / "wt").rename(home / "elsewhere-wt")  # off every searched folder: config.json's bins.wt names it
+    failed = run("ade", "worktree", "create", "--repo", str(repo), "--name", "feat-q", "--change", "test")
+    assert failed.returncode != 0 and "Worktrunk (`wt`) is required" in failed.stderr + failed.stdout
+    (home / "config.json").write_text(json.dumps({"bins": {"wt": str(home / "elsewhere-wt")}}))
+    made = run("ade", "worktree", "create", "--repo", str(repo), "--name", "feat-q", "--change", "test")
+    assert made.returncode == 0, made.stderr
+
+
 def test_dash_backend_order(home, monkeypatch):
     import dash
     assert dash.ades() == ("native",)

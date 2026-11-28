@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 import ade_common
+import bins
 import diag
 import greenlight
 from greenlight import CONFIG
@@ -103,9 +104,9 @@ def conf(name):
 
 
 def binary(name):
-    # ponytail: systemd/launchd PATHs miss the per-user install dirs, so look there too
-    return conf(name).get("bin") or shutil.which(name) or next(
-        (p for p in (os.path.expanduser(f"~/.local/bin/{name}"), os.path.expanduser(f"~/.{name}/bin/{name}")) if os.path.exists(p)), name)
+    # systemd/launchd/ssh PATHs miss the per-user install dirs: bins looks in ~/.local/bin and the like, then ~/.<name>/bin
+    return conf(name).get("bin") or bins.find(name) or next(
+        (p for p in (os.path.expanduser(f"~/.{name}/bin/{name}"),) if os.path.exists(p)), name)
 
 
 def permissions(name):

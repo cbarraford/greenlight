@@ -549,7 +549,9 @@ WTS = [wt("ws-linked", "Merge MR for #14", linked=17),
        wt("ws-linked-obj", "Merge MR for #39", linked={"number": 39, "url": "https://github.com/octo/greenlight/pull/39"}), wt("ws-branch", "Merge MR for #21"),
        wt("ws-issue", "Merge MR for #20", branch="renamed"), wt("ws-old", "Merge MR for #9"),
        wt("ws-none", "Merge MR for #30"),
-       {"worktreeId": "gl", "displayName": "gl", "path": "/x", "repoId": "other", "branch": "refs/heads/x", "comment": "y", "agents": []}]
+       {"worktreeId": "gl", "displayName": "gl", "path": "/x", "repoId": "other", "branch": "refs/heads/x", "comment": "y", "agents": []},
+       {**wt("gh-main", ""), "branch": "refs/heads/main", "isMainWorktree": True},
+       wt("voice-echo", "Rebase it - merge conflicts with base", branch="main")]  # a copy of the base branch: no lifecycle
 FULL = [{"id": "gh", "repoId": "gh", "projectId": "github:octo/greenlight"},
         {"id": "other", "repoId": "other", "projectId": "repo:e749bc1b"}]
 def fake_orca(*a):
@@ -587,7 +589,8 @@ with mock.patch.object(greenlight, "orca", side_effect=fake_orca), mock.patch.ob
     WTS[2]["comment"] = "Merge MR for #21"
     greenlight.backfills_update(lambda d: d.pop("ws-branch", None))
 by = {r["name"]: r for r in res["rows"]}
-assert res["skipped"] == 1 and set(by) == {"ws-linked", "ws-linked-obj", "ws-branch", "ws-issue", "ws-old", "ws-none"}
+assert not greenlight.on_base(WTS[-2], greenlight.base_branches(WTS)) and greenlight.on_base(WTS[-1], greenlight.base_branches(WTS))
+assert res["skipped"] == 3 and set(by) == {"ws-linked", "ws-linked-obj", "ws-branch", "ws-issue", "ws-old", "ws-none"}
 assert {n: r["mr"] and r["mr"]["ref"] for n, r in by.items()} == {"ws-linked": "#17", "ws-linked-obj": "#39", "ws-branch": "#22", "ws-issue": "#23",
                                                                    "ws-old": "#9", "ws-none": None}
 assert by["ws-issue"]["mr"]["threads"] == 2 and by["ws-issue"]["mr"]["todo_threads"] == [f'{greenlight.BOT}: "Critical: leak"']  # the bot's finding, not my answered one

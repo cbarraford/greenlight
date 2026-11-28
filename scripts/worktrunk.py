@@ -7,6 +7,8 @@ import json
 import os
 import subprocess
 
+import bins
+
 
 _VALUE_FLAGS = frozenset({"-C", "--config", "--config-set"})
 _SHORTCUTS = frozenset({"@", "^", "-"})
@@ -34,16 +36,22 @@ def _valid_ref(ref):
     return not any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in ref)
 
 
+def binary_path():
+    """wt's absolute path (WORKTRUNK_BIN, config.json's bins.wt, PATH, then ~/.local/bin and the like), else "wt"."""
+    return bins.find("wt", env="WORKTRUNK_BIN") or "wt"
+
+
 def run(repo, *args, timeout=120):
     """Run Worktrunk in a known repo, with no shell or interactive prompt."""
     if not isinstance(repo, str) or not repo or repo.startswith("-"):
         raise RuntimeError("wt: invalid repo path")
-    binary = os.environ.get("WORKTRUNK_BIN") or "wt"
+    binary = binary_path()
     label = _label(args)
     try:
         p = subprocess.run([binary, "-C", repo, *args], capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError:
-        raise RuntimeError("Worktrunk (`wt`) is required to create and remove workspaces") from None
+        raise RuntimeError(f"Worktrunk (`wt`) is required to create and remove workspaces: not found on PATH or in "
+                           f"{bins.searched()} (set WORKTRUNK_BIN, or bins.wt in config.json, to its path)") from None
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"{label} timed out") from None
     if p.returncode:

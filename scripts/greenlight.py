@@ -67,6 +67,7 @@ DEFAULTS = {
     "me": None,                       # your GitLab/GitHub username; None = ask glab (else gh) once, cached in me.json
     "review_bot": None,               # a bot the `review_bot` step assigns as assignee + reviewer; None skips the step
     "agents": ["claude", "codex"],    # dispatch order: on a usage limit greenlight moves to the next one (claude|codex|opencode|pi|gemini|agy)
+    "bins": {},                       # CLI paths when they're off the PATH greenlight runs with, e.g. {"wt": "~/bin/wt"}; see bins.py
     "harnesses": {},                  # per agent: {"bypass": true} for full access, {"bin": path}, {"model": id} its default model; see harness.py
     "model_fallbacks": {},            # per slot (chat/page/suggest/auto/decide) or per harness fallback model+effort specs; see harness.py
     "llm_harness": "claude",          # runs the dashboard's own LLM calls (design, suggestions)
@@ -190,6 +191,17 @@ def primary_agent(agents):
     agent outside Greenlight (external.py) shows only when none of its own is active there."""
     return max(agents or [{}], key=lambda a: (a.get("state") in ("working", "waiting"), not a.get("external"),
                                              a.get("updatedAt") or a.get("stateStartedAt") or 0))
+
+
+def base_branches(wts):
+    """{repoId: branch} of each repo's main checkout: a second worktree on that branch is a copy of the base, not a workspace."""
+    return {w.get("repoId"): w.get("branch") for w in wts if w.get("isMainWorktree") and w.get("branch")}
+
+
+def on_base(w, bases):
+    """A non-main worktree checked out on its repo's base branch (a Claude subagent's checkout of main, say): no MR can come
+    from it and there's nothing to rebase, so it gets no lifecycle."""
+    return not w.get("isMainWorktree") and bool(w.get("branch")) and bases.get(w.get("repoId")) == w["branch"]
 
 
 ORCA_AGENTS = {"agy": "antigravity"}  # greenlight's harness names that Orca knows by another id
@@ -1655,11 +1667,11 @@ def scan(save=True, _backfill_retries=0):
             raise OSError("goal backfill changed repeatedly during scan")
         return scan(save=save, _backfill_retries=_backfill_retries + 1)
     superseded_backfills = {}
-    rows, skipped = [], 0
+    rows, skipped, bases = [], 0, base_branches(wts)
     for w in wts:
         branch = (w.get("branch") or "").removeprefix("refs/heads/")
-        if w.get("isMainWorktree") or not branch or w["repoId"] not in projects:
-            skipped += 1  # main checkouts, detached HEADs (cache trees), repos on neither GitLab nor GitHub
+        if w.get("isMainWorktree") or not branch or w["repoId"] not in projects or on_base(w, bases):
+            skipped += 1  # main checkouts, detached HEADs (cache trees), repos on neither GitLab nor GitHub, base-branch copies
             continue
         forge, project = projects[w["repoId"]]
         ag = primary_agent(w.get("agents"))

@@ -142,6 +142,7 @@ def test_doctor_checks_and_auto_timer(diag_env, monkeypatch):
 
     orig_which = shutil.which  # hide a host-installed codex in /usr/bin so agent_codex sees none
     monkeypatch.setattr(shutil, "which", lambda c, *a, **k: None if c == "codex" else orig_which(c, *a, **k))
+    monkeypatch.setattr(diag.bins, "DIRS", ())  # nor one in ~/.local/bin, where bins.find looks next
     d = {c["check"]: c for c in diag.doctor()["checks"]}
     assert d["glab_auth"] == {"check": "glab_auth", "ok": False, "rc": 1, "msg_class": "auth"}, d
     assert d["gh_auth"]["ok"] and d["agent_codex"]["ok"] is False and d["disk"]["ok"] and d["home_writable"]["ok"], d
