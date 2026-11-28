@@ -514,9 +514,13 @@ test("a restored kept pane closed before the first trees keeps its agent", async
   const b = page.context().browser(), fresh = await b.newPage({viewport: {width: 1200, height: 800}, colorScheme: "dark"});
   await fresh.addInitScript(() => { window.__posts = []; window.webkit = {messageHandlers: {term: {postMessage: m => window.__posts.push(JSON.parse(JSON.stringify(m)))}}} });
   await fresh.goto(page.url()); await fresh.waitForFunction(() => window.term);
-  await fresh.evaluate(() => term.restore({cur: 0, tabs: [{ws: "/w/review", tree: {s: "mc-1a2b3c4d", keep: true}}]}));
+  await fresh.evaluate(() => term.restore({cur: 0, tabs: [{ws: "/w/review", tree: {s: "mc-1a2b3c4d", keep: true}}, {ws: "/mac/app", tree: {s: "mc-5e6f7a8b", keep: true}}]}));
   await fresh.evaluate(() => closeTab(cur));
   assert.equal((await posts(fresh, "close")).pop().keep, true);
+  // trees came, but without its worktree (that host's fetch failed): still unknown, kept
+  await fresh.evaluate(t => term.workspaces(t), TREES);
+  await fresh.evaluate(() => closeTab(latestTab(t => t.ws === "/mac/app")));
+  assert.equal((await posts(fresh, "close")).pop().keep, true, "its host's trees missing: kept");
   await fresh.close();
 });
 test("a click in the page (sidebar, palette, card) on a worktree with a live agent still shows your own tab", async page => {

@@ -759,7 +759,8 @@ function drag(e, dv, down){
 // (trees' resume.session); once it has quit, or the workspace is deleted (end), the session goes as any tab's does
 // or while that can't be told (no trees yet, tmux didn't answer): a leftover shell beats a killed agent
 // (trees' agentSessions: every session of ours with an agent's command running, by what runs, not a title a quit one leaves)
-const keeps = (p, end) => !end && !!p.keep && (!treesIn || !tmuxOk || hostsPending
+// trees without its worktree: its host's (a failed fetch) is unknown too
+const keeps = (p, end) => !end && !!p.keep && (!treesIn || !tmuxOk || hostsPending || !trees.some(w => w.path === p.tab.ws)
   || trees.some(w => w.resume?.session === p.session || w.agentSessions?.includes(p.session)));
 function kill(p, end){ clearTimeout(p.scanT); clearTimeout(p.endT); clearTimeout(p.askT); clearTimeout(p.lnkT); pinged.delete(p.id); post({cmd: "close", id: p.id, session: p.session, ws: p.tab.ws, ...keeps(p, end) ? {keep: true} : {}}); panes.delete(p.id); p.t.dispose && p.t.dispose() }
 function closePane(p){
@@ -2678,7 +2679,7 @@ window.term = {
   projects: o => { projects = Array.isArray(o) ? o.filter(p => p && typeof p.id === "string" && p.id && Array.isArray(p.repos) && Array.isArray(p.dirs)) : [];
     merge(); setTitle(); render(); if (!$("pal").hidden) palRender() },
   // the window is closing for good: every pane's tmux session, for the app to end; nothing is saved after
-  closeAll: () => { restored = false; clearTimeout(saveT); clearTimeout(focusWsT); focusWsT = 0; lastFocusWs = null; const out = [...panes.values()].map(p => ({session: p.session, ws: p.tab.ws, ...keeps(p) ? {keep: true} : {}}));
+  closeAll: () => { restored = false; clearTimeout(saveT); clearTimeout(waitT); waitT = 0; waitTrees.length = 0; focusWait = false; clearTimeout(focusWsT); focusWsT = 0; lastFocusWs = null; const out = [...panes.values()].map(p => ({session: p.session, ws: p.tab.ws, ...keeps(p) ? {keep: true} : {}}));
     panes.forEach(p => { clearTimeout(p.scanT); clearTimeout(p.endT); clearTimeout(p.askT); clearTimeout(p.lnkT); p.t.dispose?.() }); panes.clear(); pinged.clear(); lastPanes = null;
     tabs.forEach(t => { clearTimeout(t.quiet); clearTimeout(t.retry); t.r.remove() }); tabs.length = 0; cur = null; lastScrollTab = lastScrollWs = null; return out },
   workspaces: o => { basementFoot(o?.usage); trees = o?.trees || []; if (Array.isArray(o?.agents) && o.agents[0]) defAgent = normAgent(o.agents[0]); treesIn = true; tmuxOk = o?.tmuxOk !== false; hostsPending = o?.hostsPending === true; refreshing(false);
