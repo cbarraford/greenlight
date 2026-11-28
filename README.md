@@ -82,6 +82,7 @@ State and config live in `$GREENLIGHT_HOME` (default `~/.greenlight`). `config.j
 | `me` | asked from `glab`/`gh` once | your forge username |
 | `review_bot` | `null` | a bot the `review_bot` lifecycle step assigns; `null` skips the step |
 | `agents` | `["claude", "codex"]` | dispatch order; on a usage limit Greenlight moves to the next |
+| `bins` | `{}` | paths for CLIs the backend can't find on its PATH, e.g. `{"wt": "~/bin/wt"}`; it already looks in `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `~/.cargo/bin` |
 | `harnesses` | `{}` | per agent: `{"bypass": true}` for full access, `{"bin": "/path"}` |
 | `llm_harness` | `"claude"` | runs the dashboard's own LLM calls (page design, suggestions) |
 | `merge_method` | `"merge"` | `merge`, `squash` or `rebase` |
@@ -180,7 +181,7 @@ can't run, nothing is exported. `diag.py bundle` writes the same data to a file 
 | `scripts/release.py` | builds and signs releases for the `stable` and `main` channels: version, backend tarball, notes, the signed feed (see `docs/RELEASING.md`) |
 | `scripts/decide.py` | System One: quick calibrated decisions (Jev, Haiku, or none) |
 | `scripts/ade.py` | the native workspace contract and import adapter registry |
-| `scripts/ade_basement.py`, `scripts/worktrunk.py` | Worktrunk worktrees, `tmux -L greenlight` agents, repos.json and goals.json |
+| `scripts/ade_basement.py`, `scripts/worktrunk.py`, `scripts/bins.py` | Worktrunk worktrees, `tmux -L greenlight` agents, repos.json and goals.json |
 | `scripts/ade_orca.py`, `ade_cmux.py`, `ade_herdr.py`, `ade_t3.py` | legacy adapters used by the read-only Orca, cmux, herdr and T3 importers |
 | `scripts/importers.py` | read-only one-shot imports of another ADE's repos and goals |
 | `scripts/external.py` | coding agents running outside Greenlight's tmux, by worktree (passive coexistence) |

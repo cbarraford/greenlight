@@ -67,6 +67,7 @@ DEFAULTS = {
     "me": None,                       # your GitLab/GitHub username; None = ask glab (else gh) once, cached in me.json
     "review_bot": None,               # a bot the `review_bot` step assigns as assignee + reviewer; None skips the step
     "agents": ["claude", "codex"],    # dispatch order: on a usage limit greenlight moves to the next one (claude|codex|opencode|pi|gemini|agy)
+    "bins": {},                       # CLI paths when they're off the PATH greenlight runs with, e.g. {"wt": "~/bin/wt"}; see bins.py
     "harnesses": {},                  # per agent: {"bypass": true} for full access, {"bin": path}, {"model": id} its default model; see harness.py
     "model_fallbacks": {},            # per slot (chat/page/suggest/auto/decide) or per harness fallback model+effort specs; see harness.py
     "llm_harness": "claude",          # runs the dashboard's own LLM calls (design, suggestions)

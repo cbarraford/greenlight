@@ -16,6 +16,15 @@ LIST_FLAGS = [
 ]
 
 
+@pytest.fixture(autouse=True)
+def no_host_wt(request, monkeypatch):
+    """These tests pin the argv to a bare "wt": hide the host's own Worktrunk (~/.local/bin/wt) from bins.find."""
+    if request.node.name == "test_real_worktrunk_end_to_end":
+        return
+    real = shutil.which
+    monkeypatch.setattr(worktrunk.bins, "DIRS", ())
+    monkeypatch.setattr(worktrunk.bins.shutil, "which", lambda n, *a, **k: None if n == "wt" else real(n, *a, **k))
+
 def test_create_resolves_worktrunk_path_from_json_stdout(monkeypatch):
     monkeypatch.delenv("WORKTRUNK_BIN", raising=False)
     calls = []
