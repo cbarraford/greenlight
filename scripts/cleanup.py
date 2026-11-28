@@ -256,8 +256,9 @@ def evaluate(wt, repo, busy):
 
     if git(path, "status", "--porcelain", "--untracked-files=normal"):
         return "skip", f"{reason}, but has uncommitted/untracked changes"
-    # proof of a prompt (`asking`, from the screen): a bare "waiting" may be stale, or a question at the end of a reply
-    if any(a.get("state") == "waiting" and a.get("asking") for a in wt.get("agents") or []):
+    # the native engine proves a prompt (`asking`, from the screen): its bare "waiting" may be a question at the end of a
+    # reply. Another ADE's "waiting" is its own prompt signal: kept.
+    if any(a.get("state") == "waiting" and (a.get("asking") or not ade.is_native()) for a in wt.get("agents") or []):
         return "skip", f"{reason}, but its agent is stopped on a prompt waiting for you"  # quiet, so the busy check misses it
     if any(i in busy for i in wt.get("ids") or [wt["id"]]):
         return "skip", f"{reason}, but a terminal was active in the last {ACTIVE_MINUTES}m"

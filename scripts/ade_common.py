@@ -162,7 +162,8 @@ PROMPTS = (  # a narrow pane wraps the question: its second half is listed too
 PROMPT_RES = [(h, k, re.compile(r"^\s*[^\w\s]{0,3}\s*" + rx, re.I)) for h, k, rx in PROMPTS]
 PROMPT_SPAN, PROMPT_TAIL = 15, 3
 OPTION_RE = re.compile(r"^\s*(?:[❯›●▸>]\s*)?\d+\.\s+\S")
-OUTPUT_RE = re.compile(r"^\s*[•●⏺└⎿]\s")  # an agent's output bullet: newer than a prompt above it, so that one was answered
+# output that only comes after a prompt was answered (a tool ran, an approval was noted); not a dialog's own `• Edited …`
+OUTPUT_RE = re.compile(r"^\s*(?:[•●⏺]\s+(?:Ran|Running|Read|Explored|Called)\b|⏺\s+\w+\(|✔\s+You approved)")
 CMD_RE = re.compile(r"^\s*\$\s+(\S.*)$|^\s*(?:Bash|Shell|Run)\((.+)\)\s*$")
 RULE_RE = re.compile(r"[\s╌┄┈─━═\-]+")
 CMD_HEAD_RE = re.compile(r"^\s*(?:Requesting permission for:?|Bash command|Command)\s*$", re.I)
@@ -184,7 +185,8 @@ def _prompt_rows(lines):
 
 def _prompt_cmd(rows, top, i, last, agent):
     """The command the prompt at rows[i] (its dialog from rows[top]) asks to run: in the dialog (codex `$ …`, the row after
-    agy's header), or for Claude the row after the `Bash command` header above it (past its description and ╌ rule),
+    agy's header), else the row after the header above it (Claude's `Bash command`, past its description and ╌ rule; agy's
+    `Command`),
     stopping at older options."""
     for j in range(top, last):
         if OPTION_RE.match(rows[j]):
@@ -193,12 +195,13 @@ def _prompt_cmd(rows, top, i, last, agent):
             return (m[1] or m[2]).strip()
         if CMD_HEAD_RE.match(rows[j]) and j + 1 < last and not OPTION_RE.match(rows[j + 1]) and not any(rx.search(rows[j + 1]) for _, _, rx in PROMPT_RES):
             return rows[j + 1].strip()
-    if agent != "claude":
+    head = {"claude": r"\s*Bash command\s*", "agy": r"\s*(?:Command|Requesting permission for:?)\s*"}.get(agent)
+    if not head:
         return ""
     for j in range(i - 1, max(-1, i - 25), -1):
-        if OPTION_RE.match(rows[j]):
-            return ""  # an older dialog's options: its command isn't this one's
-        if re.fullmatch(r"\s*Bash command\s*", rows[j], re.I):
+        if OPTION_RE.match(rows[j]) or OUTPUT_RE.match(rows[j]):
+            return ""  # an older dialog's options, or output: its command isn't this one's
+        if re.fullmatch(head, rows[j], re.I):
             k = next((k + 1 for k in range(j + 1, min(j + 4, i)) if RULE_RE.fullmatch(rows[k])), j + 1)
             return rows[k].strip() if k < i else ""
     return ""

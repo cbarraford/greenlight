@@ -146,6 +146,12 @@ def test_review_findings():
     edit = CODEX_RUN + ["• Ran make lint", "  └ ok", "Would you like to make the following edits?", "  foo.py +2 -1",
                         "› 1. Yes", "  2. No", "  Press enter to confirm or esc to cancel"]
     assert ade_common.prompt_ask(edit) == {"agent": "codex", "kind": "edit", "text": "Would you like to make the following edits?", "cmd": ""}
+    codex_edit = ["  Would you like to make the following edits?", "  Reason: fix lint", "• Edited scripts/foo.py (+2 -1)", "    12 -x",
+                  "    12 +y", "  └ b.py (+2 -0)", "› 1. Yes, proceed (y)", "  2. No, and tell Codex (esc)", "  Press enter to confirm or esc to cancel"]
+    assert ade_common.prompt_ask(codex_edit)["kind"] == "edit"  # the dialog's own diff summary isn't newer output
+    assert ade_common.prompt_ask(["Do you want to proceed?", "● 1. Yes", "  2. No"])["kind"] == "permission"
+    agy_bare = ["Command", "git status --short", "Run this command?", "> 1. Yes, run command", "  4. No, cancel"]
+    assert ade_common.prompt_ask(agy_bare)["cmd"] == "git status --short"
     claude_edit = ["⏺ I ran:", "  $ npm test", "Edit file", " foo.py", "Do you want to make this edit to foo.py?", "❯ 1. Yes", "  2. No"]
     assert ade_common.prompt_ask(claude_edit)["cmd"] == ""
     # opencode's bare ┃ composer under a numbered list ending in a question: an idle reply, not a prompt
@@ -220,6 +226,8 @@ def test_cleanup_keeps_a_workspace_whose_agent_waits_on_a_prompt():
         assert cleanup.evaluate({**wt, "agents": [{"state": "done", "agentType": "codex"}]}, rp, set())[0] == "candidate"
         # a bare "waiting" (Orca's stale alert, a question at the end of a reply) is no proof of a prompt
         assert cleanup.evaluate({**wt, "agents": [{"state": "waiting", "agentType": "codex"}]}, rp, set())[0] == "candidate"
+        with mock.patch.object(cleanup.ade, "is_native", return_value=False):  # another ADE's own prompt signal: kept
+            assert cleanup.evaluate({**wt, "agents": [{"state": "waiting", "agentType": "codex"}]}, rp, set())[0] == "skip"
     # twin entries for one path: the prompted agent on either one counts
     twins = cleanup.dedupe([{**wt, "id": "a", "agents": []}, {**wt, "id": "b"}])
     assert len(twins) == 1 and twins[0]["agents"][0]["asking"]["cmd"] == "make lint"
