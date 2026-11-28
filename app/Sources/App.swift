@@ -1174,7 +1174,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                                      settingsHost.topAnchor.constraint(equalTo: box.topAnchor), settingsHost.bottomAnchor.constraint(equalTo: box.bottomAnchor)])
         w.contentView = box; w.minSize = NSSize(width: 620, height: 460)
         w.center(); w.setFrameAutosaveName("settings")
-        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { [weak self] _ in self?.greenlight.settingsOpen = false }
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            self.greenlight.settingsOpen = false
+            self.cancelShortcutCapture()
+        }
         return w
     }()
     lazy var inboxHost: NSHostingView<InboxOverlay> = { let h = NSHostingView(rootView: InboxOverlay(c: greenlight)); h.sizingOptions = []; return h }()
@@ -1262,7 +1266,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         guard let w = viewWindows.removeValue(forKey: v) else { return }
         if let web = w.contentView as? WKWebView {
             let id = ObjectIdentifier(web)
-            readyDash.remove(id); waitingDash.remove(id)
+            readyDash.remove(id); waitingDash.remove(id); paintedWebs.remove(id)
             web.configuration.userContentController.removeScriptMessageHandler(forName: "mc")  // it retains self
         }
         detached.removeAll { $0 == v }
@@ -1313,7 +1317,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         w.title = greenlight.name
         w.backgroundColor = dsDynamic(DS.Palette.bgCanvas)  // §10.1: the canvas, never black
         w.titleVisibility = .hidden  // the floor bar says Center; the title stays for the Window menu and Mission Control
-        w.isReleasedWhenClosed = false  // the close button hides it; the menubar star, Dock or ⌃⌥M bring it back
+        w.isReleasedWhenClosed = false  // the close button hides it; the menubar icon, Dock or ⌃⌥M bring it back
         w.minSize = centerMinSize
         w.animationBehavior = greenlight.rideTime > 0 ? .default : .none
         l1Floor.at = "greenlight"; syncL1()
@@ -1337,7 +1341,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         settingsSub = greenlight.$settingsOpen.receive(on: RunLoop.main).sink { [weak self] open in
             guard let self else { return }
             if open { (self.hintCore ?? self.greenlight).hint = ""; self.presentWindow(self.settingsWindow); self.settingsWindow.makeFirstResponder(nil) }  // AppKit focuses the search field otherwise  // the gear's hover-exit never comes
-            else if self.settingsWindow.isVisible { self.settingsWindow.orderOut(nil) }
+            else {
+                self.cancelShortcutCapture()
+                if self.settingsWindow.isVisible { self.settingsWindow.orderOut(nil) }
+            }
         }
         split.isVertical = true
         split.dividerStyle = .thin
@@ -1730,7 +1737,6 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                 openSessionWindow(path: path, resume: clean, only: l.map(\.only) ?? sharedOnly, from: from.window)
             }
         }
-        if cmd == "showChat", l == nil { setChat(hidden: false) }  // a second window's chat is always in its pane
         if cmd == "settings" { appSettings() }  // the top bar's gear: its own window, to the front
         if cmd == "inbox" { greenlight.settingsOpen = false; if l != nil { show(); greenlight.inboxOpen = true } else { greenlight.inboxOpen.toggle() } }  // one inbox, the main window's
         // An answer from a lifted workspace's page: the same as answering that question in the bell.
@@ -2114,13 +2120,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if !chatShown { setChat(hidden: false) }
         greenlight.voice.toggleMic()
     }
-    /// The menu items aimed at the app: only the mic's depends on state (off while voice mode is; its title says what it does now).
     /// The appearance choices: (stored value, menu and picker title).
     static let appearances = [("auto", "System"), ("light", "Light"), ("dark", "Dark")]
     @objc func appAppearanceMenu(_ item: NSMenuItem) {
         guard Self.appearances.indices.contains(item.tag) else { return }
         greenlight.restyle { ud.set(Self.appearances[item.tag].0, forKey: "appearance") }; tick()
     }
+    /// Validates app menu items (full screen, appearance checkmarks, and voice-mode mic mute).
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(toggleFullScreen(_:)) {
             let w = fsShare.map { NSApp.keyWindow === $0.guest ? $0.host : NSApp.keyWindow } ?? NSApp.keyWindow
@@ -2243,7 +2249,6 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     /// A pick as the windows show it, against the listed projects: nil (all) until listed, and for a pick none of whose
     /// projects is still there. The pick itself stays as saved, so a project that comes back (its host's trees) is shown again.
     func live(_ only: [String]?) -> [String]? { projList.isEmpty ? nil : livePick(only, known: projList.compactMap { $0["id"] as? String }) }
-    var l1Picked: [[String: Any]] { picked(l1Only) }
     func picked(_ only: [String]?) -> [[String: Any]] { (only ?? []).compactMap { id in projList.first { $0["id"] as? String == id } } }
     /// The picked projects' "paths" or "repos"; nil: every project. Sorted: the tick compares it.
     func sel(_ only: [String]?, _ k: String) -> [String]? { only == nil ? nil : Array(Set(picked(only).flatMap { $0[k] as? [String] ?? [] })).sorted() }
@@ -2411,7 +2416,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         let l = makeL1(id, only: only, from: from)
         saveL1s()
         revealOnPaint(l.w, l.web)
-        l.w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        presentWindow(l.w)
     }
     func reopenL1s() {
         guard !selftest else { return }  // not your windows and their chat-<n>
@@ -2432,7 +2437,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             ssh("\(l.c.chief(on: host)) stop; \(l.c.chief(on: host)) new; cd \(shellPath(greenlightHome)) && rm -rf chat-\(l.id)", on: host)
         }
         [l.c.transcriptFile, l.c.questionsURL].forEach { try? FileManager.default.removeItem(at: $0) }
-        [l.c.meterKeys.context, l.c.meterKeys.window].forEach { ud.removeObject(forKey: $0) }  // no stale defaults (ids aren't reused)
+        [l.c.meterKeys.context, l.c.meterKeys.window, l.c.pendingKey, l.c.lostKey].forEach { ud.removeObject(forKey: $0) }  // no stale defaults (ids aren't reused)
         let wid = ObjectIdentifier(l.web); readyDash.remove(wid); waitingDash.remove(wid); paintedWebs.remove(wid)  // a freed view's id comes back
         l.web.configuration.userContentController.removeScriptMessageHandler(forName: "mc")  // it retains self
         if hintCore === l.c { hintCore = nil; showTab("") }  // closed mid-hover: its hover-exit won't come
@@ -2544,7 +2549,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         let w = makeTermWindow(nid, only: only)
         if let f = from?.frame { w.setFrameTopLeftPoint(NSPoint(x: f.minX + 30, y: f.maxY - 30)) }
         if let web = w.contentView as? WKWebView { revealOnPaint(w, web) }
-        w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        presentWindow(w)
     }
     var pendingTermLaunch = [Int: (path: String, resume: [String: String])]()  // new Terminal windows opened directly on a workspace + session command
     /// Open a brand-new Terminal window in `path` and run the validated agent-session resume command in it.
@@ -2583,6 +2588,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             for k in Set(Array(self.ptys.keys) + self.termBridge.paneIds(prefix: "\(wid):")) where k.hasPrefix("\(wid):") { self.stopPty(k); self.ptySession[k] = nil }
             self.dropShare(w)
             self.paintedWebs.remove(ObjectIdentifier(web)); self.termWins[wid] = nil; self.pendingTermLaunch[wid] = nil; self.floors[wid] = nil; self.floorGo[ObjectIdentifier(w)] = nil; self.termBadges[wid] = nil
+            let n = self.termBadges.values.reduce(0, +); NSApp.dockTile.badgeLabel = n > 0 ? "\(n)" : nil
             ud.set((ud.array(forKey: "termWindows") as? [[String: Any]] ?? []).filter { $0["id"] as? Int != wid }, forKey: "termWindows")
             try? FileManager.default.removeItem(at: self.termState(wid))
             web.configuration.userContentController.removeScriptMessageHandler(forName: "term")  // it holds the app, not the page, but the page would linger
@@ -3478,7 +3484,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
     }
     func applicationDidBecomeActive(_ n: Notification) { if chatShown { greenlight.missed = 0 }; if window.isVisible { greenlight.unread = 0; tick(); raiseOrbs() } }
 
-    /// Menubar icon: outline star idle, filled star + elapsed while working, outline + count for unread pings.
+    /// Periodic UI sync and menubar icon update: idle mark when quiet, lit mark + elapsed while working, idle + count for unread pings.
     func tick() {
         if hintStale { (hintCore ?? greenlight).hint = "" }  // a window hidden or moved mid-hover: drop the hint
         if greenlight.prompting, tab.isVisible != NSApp.isActive { NSApp.isActive ? tab.orderFront(nil) : tab.orderOut(nil) }  // the prompt waits with the recorder
@@ -3526,7 +3532,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         guard let b = item?.button else { return }
         // Touch the status item only on change: any menubar update keeps a full-screen window's title bar pinned down.
         let working = greenlight.run != nil
-        let title = (devName.map { " " + ($0.count > 18 ? String($0.prefix(17)) + "…" : $0) } ?? "")  // a copy's item is named: the stars are all alike
+        let title = (devName.map { " " + ($0.count > 18 ? String($0.prefix(17)) + "…" : $0) } ?? "")  // a copy's item is named: the marks are all alike
             + (greenlight.run.map { " " + fmt(Date().timeIntervalSince($0.start)) } ?? (greenlight.unread > 0 ? " \(greenlight.unread)" : ""))
         let key = "\(working)"
         if key != starKey {
@@ -3640,6 +3646,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         recordShortcut()
         greenlight.hint = Core.keyPrompt  // after keying is on: showTab centres it on the window
     }
+    func cancelShortcutCapture() {
+        if let c = capture { NSEvent.removeMonitor(c); capture = nil }
+        if greenlight.keying { greenlight.keying = false }
+        if greenlight.hint == Core.keyPrompt { greenlight.hint = "" }
+    }
     /// Settings' Change…: the recorder shows in place of the keys there, not in the chat's hint.
     func recordShortcut() {
         guard capture == nil else { return }
@@ -3658,8 +3669,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
             }
             greenlight.hint = ""
             greenlight.keying = false
-            NSEvent.removeMonitor(capture!)
-            capture = nil
+            if let c = capture { NSEvent.removeMonitor(c); capture = nil }
             return nil
         }
     }
@@ -3695,7 +3705,6 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
                             GetApplicationEventTarget(), 0, &voiceRef)
     }
 
-    /// Opening the app again (Dock, Spotlight, Finder, `open`) shows the window.
     func applicationWillTerminate(_ n: Notification) {
         dropShare()  // a guest's autosaved frame: the floors' own, not the screen's
         Core.quitting = true  // the chats' ssh processes end below; their turns go on and are followed at the next launch
@@ -3714,6 +3723,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         if let suite = uitestSuiteName, uitestSuiteKept == nil { dropDomain(suite) }  // a kept one is the test's to remove
         try? FileManager.default.removeItem(atPath: Diag.marker)  // a clean quit: no prev_crash next launch
     }  // port tunnels die with the app
+    /// Opening the app again (Dock, Spotlight, Finder, `open`) shows the window.
     func applicationShouldHandleReopen(_ s: NSApplication, hasVisibleWindows: Bool) -> Bool { upstairs ? show() : basement(); return false }
 
     /// Greenlight Center, straight up (a page link, Settings, a notification): the Basement steps aside, no ride.
@@ -3729,7 +3739,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         placeChat()
     }
 
-    /// The star and ⌃⌥M: hide the window when it's in front, else bring it up.
+    /// The menubar icon and ⌃⌥M: hide the window when it's in front, else bring it up.
     func toggle() {
         if NSApp.isActive && (upstairs ? window.isKeyWindow || chatWindow.isKeyWindow : termWindow.isKeyWindow) { hideLevel(orbHost) }
         else if upstairs { show() } else { basement() }

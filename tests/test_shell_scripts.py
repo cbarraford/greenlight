@@ -78,3 +78,35 @@ def test_pre_commit_hook_blocks_bad_staged_python(tmp_path):
     git("add", "bad.py")
     r_ok = subprocess.run(["bash", str(ROOT / ".githooks/pre-commit")], cwd=repo, capture_output=True, text=True, env=git_env)
     assert r_ok.returncode == 0, r_ok.stdout + r_ok.stderr
+
+    # BUG-INFRA-15: pre-commit also shellchecks staged .githooks/* files
+    (repo / ".githooks").mkdir()
+    (repo / ".githooks" / "sample-hook").write_text('#!/usr/bin/env bash\necho "$unassigned_hook_var"\n')
+    git("add", ".githooks/sample-hook")
+    r_hook_bad = subprocess.run(["bash", str(ROOT / ".githooks/pre-commit")], cwd=repo, capture_output=True, text=True, env=git_env)
+    assert r_hook_bad.returncode != 0, "pre-commit should shellcheck staged .githooks/* scripts"
+    (repo / ".githooks" / "sample-hook").write_text('#!/usr/bin/env bash\nset -euo pipefail\necho "ok"\n')
+    git("add", ".githooks/sample-hook")
+    r_hook_ok = subprocess.run(["bash", str(ROOT / ".githooks/pre-commit")], cwd=repo, capture_output=True, text=True, env=git_env)
+    assert r_hook_ok.returncode == 0, r_hook_ok.stdout + r_hook_ok.stderr
+
+
+def test_release_sh_resolves_relative_backend_and_out_before_cd(tmp_path):
+    # BUG-INFRA-3: passing relative backend/out paths from another cwd must not fail `[ -f "$backend" ]`
+    rel_dir = tmp_path / "dist"
+    rel_dir.mkdir()
+    (rel_dir / "backend.tar.gz").write_bytes(b"placeholder")
+    # Put a failing swiftc shim on PATH so release.sh stops right after path checks and mkdir -p "$out"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "swiftc").write_text("#!/usr/bin/env bash\necho swiftc-stub-stop >&2\nexit 42\n")
+    (fake_bin / "swiftc").chmod(0o755)
+    env = {**os.environ, "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}"}
+    r = subprocess.run(
+        ["bash", str(ROOT / "app/release.sh"), "1.0.0", "1.0.0", "1", "dist/backend.tar.gz", "dist/out"],
+        cwd=tmp_path, capture_output=True, text=True, env=env,
+    )
+    assert "no backend at" not in r.stderr, r.stderr
+    assert (tmp_path / "dist" / "out").is_dir()
+    assert not (ROOT / "app" / "dist").exists()
+

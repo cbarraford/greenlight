@@ -344,8 +344,11 @@ def haiku(state, qs, c):
         return agent_answer(h, model, text, schema, qs, keys, c)
     cmd = [harness.binary("claude"), "-p", "--model", api_model, "--output-format", "json", "--json-schema", json.dumps(schema),
            "--tools", "", "--no-session-persistence", "--append-system-prompt", HAIKU_SYSTEM]
+    cli_timeout = max(c["timeout"], 60)
+    if c.get("_deadline") is not None:
+        cli_timeout = min(cli_timeout, max(c["_deadline"], 1.0))
     try:
-        p = subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=max(c["timeout"], 60), cwd=str(HOME) if HOME.is_dir() else None)
+        p = subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=cli_timeout, cwd=str(HOME) if HOME.is_dir() else None)
     except FileNotFoundError:
         return agent_answer(h, model, text, schema, qs, keys, c, exclude=("claude",))
     except (OSError, subprocess.SubprocessError) as e:

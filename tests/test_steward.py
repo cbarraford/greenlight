@@ -21,20 +21,6 @@ import orchestrate  # noqa: E402
 import ws_state  # noqa: E402
 
 
-@pytest.fixture
-def gl_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "gl_home"
-    home.mkdir()
-    monkeypatch.setenv("GREENLIGHT_HOME", str(home))
-    monkeypatch.setattr(greenlight, "STATE", home)
-    monkeypatch.setattr(greenlight, "CONFIG", dict(greenlight.DEFAULTS))
-    monkeypatch.setattr(ws_state, "STATE", home)
-    monkeypatch.setattr(ws_state, "DIR", home / "state")
-    monkeypatch.setattr(orchestrate, "LOG", home / "log.jsonl")
-    monkeypatch.setattr(dash, "DASH", home / "dash")
-    return home
-
-
 def _make_row(
     iid: int,
     *,

@@ -186,8 +186,6 @@ ul.board li{padding:var(--ds-space-8) 0;border-top:1px solid var(--line);display
   font:var(--ds-type-caption);font-family:var(--font);color:var(--dim);font-variant-numeric:tabular-nums;background:var(--bg);padding-left:var(--ds-space-8)}
 #hist[hidden]{display:none}
 body.status #hist{bottom:calc(var(--ds-space-32) + var(--ds-space-12))}
-body.hist #s:not(.frame){padding-bottom:calc(var(--ds-space-24) + var(--ds-space-32))}
-body.status.hist #s:not(.frame){padding-bottom:calc(var(--ds-space-24) + var(--ds-space-64))}
 #hist button{display:inline-flex;align-items:center;justify-content:center;width:var(--ds-layout-control-height-sm);height:var(--ds-layout-control-height-sm);
   padding:0;border:0;border-radius:var(--ds-radius-sm);background:none;color:var(--dim)}
 #hist button:hover:not(:disabled){background:var(--ds-element-rest);color:var(--text)}
@@ -800,7 +798,7 @@ const fx = (() => {
   }
   const canAmbient = el => on() && !isCanvas() && (vState === "listen" || vState === "speak") && contentFloor(el) < h - 24;
   const land = () => { if (born) { born.classList.remove("born"); animEl(born, "emerge"); born = null; } };
-  function clearOut(){ mode = "off"; vis = 0; aimAt = null; g.clearRect(0, 0, w, h); delete document.body.dataset.fx; }
+  function clearOut(){ if (raf) { cancelAnimationFrame(raf); raf = 0; } mode = "off"; vis = 0; aimAt = null; g.clearRect(0, 0, w, h); delete document.body.dataset.fx; }
   function frame(now){
     raf = 0;
     if (mode !== "off" && !on()) return stop();
@@ -841,6 +839,7 @@ const fx = (() => {
   }
   function stop(keepAmbient = false){
     land();
+    if (!on()) { clearOut(); return; }
     if (mode === "reveal" || mode === "scatter") vis = 0;
     if (keepAmbient) {
       const cur = document.getElementById("s");
@@ -1014,7 +1013,6 @@ window.stage = {
     }
     if (line != null) stage.status(line);
   },
-  // Haiku's (or the local fallback's) drawing: {eyebrow, title, kind, stat, items:[{label, detail}]}; text only, never markup.
   // A card: a native template or the list shapes. The same kind and title as the card up (the snapshot moved) changes in place.
   spec(o){
     o = o && typeof o === "object" ? o : {};
@@ -1116,7 +1114,11 @@ window.stage = {
       ghost.leave(cur, "fwd");
       next.classList.remove("born");
       animEl(next, next.classList.contains("thinking") ? "" : "slide-fwd");
-      cur.replaceWith(next); liveEl = null; histUI();
+      cur.replaceWith(next); liveEl = null;
+      freeze(next);
+      next.querySelectorAll(".chip").forEach(c => Object.hasOwn(REFS, c.dataset.ref) ? c.replaceWith(chipFor(c.dataset.ref, REFS[c.dataset.ref])) : c.remove());
+      next.normalize(); chipify([...next.children]);
+      histUI();
       if (next.classList.contains("thinking")) fx.think(); else fx.ambient(next);
     }
   },
@@ -1161,10 +1163,10 @@ window.stage = {
   // Live voice state and audio energy (listen | speak | think | muted | off, 0..1) for the subtle reactive field.
   voice(state, energy){ fx.voice(state, energy); },
   // Chief's own page (a ```stage block): sandboxed, so it can't run scripts, reach the app or load anything.
-  html(str){
+  html(body){
     const f = $("iframe"); f.setAttribute("sandbox", "");
     f.srcdoc = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">`
-      + `<style>:root{${vars()}}body{margin:0;padding:24px;background:var(--bg);color:var(--text);font:var(--ds-type-body-copy)}</style>` + str;
+      + `<style>:root{${vars()}}body{margin:0;padding:24px;background:var(--bg);color:var(--text);font:var(--ds-type-body-copy)}</style>` + str(body);
     show(f, "frame");
   },
 };

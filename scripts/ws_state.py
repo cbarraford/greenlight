@@ -468,7 +468,10 @@ def _observe_steward(c, row, old_mr, new_mr, sha, target):
 
 
 def git(p, *args):
-    r = subprocess.run(["git", "-C", p, *args], capture_output=True, text=True, errors="backslashreplace", timeout=30)
+    try:
+        r = subprocess.run(["git", "-C", p, *args], capture_output=True, text=True, errors="backslashreplace", timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
     return r.stdout if r.returncode == 0 else None
 
 
@@ -547,7 +550,7 @@ def contract(row):
     return f"{goal or mr.get('title') or ''} — done when {ref} {verb} through {name}" + (f" ({', '.join(steps)})" if steps else "")
 
 
-def answered(recs, row, key, since=0, allow_untagged=True):
+def answered(recs, row, since=0, allow_untagged=True):
     """The user's answers about this workspace, newest first: 'question → answer'."""
     out = []
     for r in recs:
@@ -771,7 +774,7 @@ def observe(row, contract=None, recs=None):
         c["derived_risks"] = risks(row)
         c["open_risks"] = merge(c["derived_risks"], c["noted_risks"])
         ours = c["decisions_made"]  # preserve answers already attached to this worktree's card during migration
-        c["decisions_made"] = merge(answered(decision_records() if recs is None else recs, row, key,
+        c["decisions_made"] = merge(answered(decision_records() if recs is None else recs, row,
                                                c.get("goal_started_at", 0) if not (row.get("mr") or {}).get("iid") else 0,
                                                not bool(c.get("goal_archive") or c.get("mr_goal_archive"))),
                                     ours, c.get("noted_decisions", []))
@@ -1049,16 +1052,16 @@ def local_work(path, mr_sha=""):
     dirty = len([ln for ln in (st or "").splitlines() if ln.strip()]) if st is not None else 0
     ahead = 0
     if mr_sha:
-        head = git(path, "rev-parse", "HEAD") or ""
+        head = (git(path, "rev-parse", "HEAD") or "").strip()
         if head and head != mr_sha:
-            cnt = git(path, "rev-list", "--count", f"{mr_sha}..HEAD")
+            cnt = (git(path, "rev-list", "--count", f"{mr_sha}..HEAD") or "").strip()
             if cnt and cnt.isdigit():
                 ahead = int(cnt)
             else:
-                up = git(path, "rev-list", "--count", "@{u}..HEAD")
+                up = (git(path, "rev-list", "--count", "@{u}..HEAD") or "").strip()
                 ahead = int(up) if up and up.isdigit() else 1
     else:
-        up = git(path, "rev-list", "--count", "@{u}..HEAD")
+        up = (git(path, "rev-list", "--count", "@{u}..HEAD") or "").strip()
         if up and up.isdigit():
             ahead = int(up)
     return {"dirty": dirty, "ahead": ahead} if (dirty or ahead) else {}
@@ -1114,7 +1117,7 @@ def reset_attempts(card_key, *, step=None):
         return c
 
 
-def _matching_attempts(card, row, step, mr_iid, cur_sig):
+def _matching_attempts(card, step, mr_iid, cur_sig):
     out = []
     for d in card.get("dispatches") or []:
         if d.get("pending") or d.get("agent") == "launch pending":
@@ -1146,7 +1149,7 @@ def stage_attempts(card, row, *, check_local=False):
     mr = row.get("mr") or {}
     mr_iid, sha = mr.get("iid"), mr.get("sha") or ""
     cur_sig = attempt_sig(row, sha)
-    matching = _matching_attempts(card, row, step, mr_iid, cur_sig)
+    matching = _matching_attempts(card, step, mr_iid, cur_sig)
     ag_state = (row.get("agent") or {}).get("state") or "none"
     failed = matching[1:] if ag_state in ("working", "waiting") else matching
     if not failed:
@@ -1192,16 +1195,16 @@ def retry_context(card, attempts):
 # ---- CLI
 
 
-def current_key(name, allow_ambiguous=False):
+def current_key(name):
     """A manual show/brief by display name follows the current scan, not a replaced worktree's old card."""
     try:
         rows = json.loads((STATE / "last.json").read_text())["rows"]
     except (OSError, ValueError, KeyError):
         return name
-    matches = [r for r in rows if r["name"] == name]
+    matches = [r for r in keyed([dict(r) for r in rows], migrate=False) if r["name"] == name]
     if len(matches) > 1:
         raise SystemExit(f"{name!r} is ambiguous; use the exact card key from a dispatch brief")
-    return keyed(matches)[0]["card"] if matches else name
+    return matches[0]["card"] if matches else name
 
 
 def observe_all(scan=None):

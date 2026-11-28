@@ -1,29 +1,24 @@
 """Read-only T3 Code import source for importers.py (no longer a live GREENLIGHT_ADE=t3 backend).
 
 Live workspace operations use Worktrunk and ade_basement.py (`GREENLIGHT_ADE=native`).
-A workspace is a T3 project (one git worktree each); its threads are both its agents and its "terminals", so a
-terminal handle is a thread id. Goals live in ~/.greenlight/goals.json (T3 has no project description). Needs the
-T3 Code server running (the desktop app, or `t3 serve`).
+A workspace is a T3 project (one git worktree each); its threads are its agents. Goals live in
+~/.greenlight/goals.json (T3 has no project description). Needs the T3 Code server running
+(the desktop app, or `t3 serve`).
 """
 import json
 import os
 import shutil
 import sqlite3
 import subprocess
-import sys
-import time
 from datetime import datetime
 from pathlib import Path
 
-import ade
-import ade_common
-from ade_common import git_info, goals, worktree_add, worktree_remove, repo_list
+from ade_common import git_info, goals, repo_list
 
 HOME = Path(os.environ.get("T3CODE_HOME") or Path.home() / ".t3")
 T3 = shutil.which("t3") or str(HOME / "bin" / "t3")
 NAME = "t3"
-PROVIDERS = {"claude": "claudeAgent"}  # greenlight's agent name -> T3 provider id, where they differ
-AGENTS = {v: k for k, v in PROVIDERS.items()}
+AGENTS = {"claudeAgent": "claude"}  # T3 provider id -> greenlight's agent name, where they differ
 WORKING = {"running", "starting"}
 
 
@@ -73,58 +68,5 @@ def worktrees():
     return out
 
 
-def terminals():
-    now = int(time.time() * 1000)
-    return [{"handle": t["threadId"], "worktreeId": pid, "agentIdentity": AGENTS.get(t.get("providerInstanceId"), t.get("providerInstanceId")),
-             "lastOutputAt": now if t["status"] in WORKING else ms(t["updatedAt"])}
-            for pid, _, _ in projects() for t in threads(pid)]
-
-
-def read(handle, limit):
-    shown = json.loads(t3("thread", "show", handle, "--json", "--messages", "20"))
-    lines = [ln for m in shown["messages"] for ln in f"{'❯' if m['role'] == 'user' else '⏺'} {m['text']}".splitlines()]
-    # ponytail: T3's composer isn't readable from the CLI, so an unsent draft there is invisible to greenlight
-    return {"terminal": {"handle": handle, "tail": lines[-int(limit):], "draft": ""}}
-
-
-def launch(pid, agent, prompt):
-    provider = PROVIDERS.get(agent, agent)
-    manifest = json.loads((HOME / "userdata" / "model-manifest.json").read_text())["manifest"]
-    model = manifest["currentModels"][provider][0]  # ponytail: T3's first current model; add a knob if it's the wrong pick
-    r = json.loads(t3("thread", "start", pid, "-", "--provider", provider, "--model", model, "--json",
-                      stdin=prompt or "Stand by for instructions."))
-    return {"terminal": {"handle": r["threadId"]}}
-
-
-def create(repo, name, base=None, comment="", agent=None, prompt=""):
-    repo = next((w["repoId"] for w in worktrees() if repo in (w["repoId"], w["repo"])), repo)
-    path = worktree_add(repo, name, base)
-    pid = t3("project", "add", "--title", name, path).split()[2]  # "Added project <id> (<title>) at <path>."
-    if comment:
-        ade_common.set_goal(path, comment)
-    if agent:
-        launch(pid, agent, prompt)
-    return {"worktree": {"id": pid, "path": path}}
-
-
-def send(handle, text, enter):  # a thread takes whole messages; a busy one queues it as its next turn
-    t3("thread", "send", handle, "-", stdin=text)
-
-
-def set_goal(worktree_id, goal):  # T3 has no project description: goals.json, by the project's root
-    ade_common.set_goal(next(r for p, _, r in projects() if p == worktree_id), goal)
-
-
-def remove(worktree_id, force=False):
-    ws = next(w for w in worktrees() if w["id"] == worktree_id)
-    worktree_remove(ws)  # first: git refuses a dirty tree, and then the project stays
-    t3("project", "remove", "--force", worktree_id)  # --force: drop its threads too, as Orca drops terminals
-    ade_common.set_goal(ws["path"], "")
-
-
 def repos():
     return repo_list(worktrees())
-
-
-def call(*args):
-    return ade.dispatch(sys.modules[__name__], *args)

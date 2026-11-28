@@ -24,6 +24,7 @@ The provider (default: the harness --model names, see harness.py, else config ag
 Model and effort apply to the provider only. Permissions follow harness.py: safe unless that harness has bypass set.
 An --orchestrator automation ("kind": "orchestrator") runs orchestrate.py tick instead of an agent; its prompt is optional.
 """
+import contextlib
 import fcntl
 import json
 import os
@@ -58,8 +59,14 @@ def load():
     return json.loads(FILE.read_text()) if FILE.exists() else {}
 
 
+def _ensure_private_dir(path):
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with contextlib.suppress(OSError):
+        os.chmod(path, 0o700)
+
+
 def save(autos):
-    STATE.mkdir(exist_ok=True)
+    _ensure_private_dir(STATE)
     tmp = FILE.with_suffix(f".{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
     tmp.write_text(json.dumps(autos, indent=2))
     tmp.replace(FILE)
@@ -281,7 +288,8 @@ def execute(name):
     """One run, start to finish: precheck, agent (the next of config agents on a limit), log, record."""
     valid_name(name)
     a = load()[name]
-    DIR.mkdir(parents=True, exist_ok=True)
+    _ensure_private_dir(STATE)
+    _ensure_private_dir(DIR)
     lock_file = DIR / f"{name}.lock"
     pid_file = DIR / f"{name}.pid"
     with lock_file.open("a+") as lf:
@@ -293,9 +301,10 @@ def execute(name):
         try:
             start = time.time()
             logf = DIR / name / f"{time.strftime('%Y%m%d-%H%M%S')}.log"
-            logf.parent.mkdir(exist_ok=True)
+            _ensure_private_dir(logf.parent)
             rec = {"name": name, "ts": int(start), "log": str(logf)}
-            with logf.open("w") as log:
+            fd = os.open(logf, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as log:
                 if a.get("precheck"):
                     # shell on purpose: prechecks are the owner's own commands (`a || b`), like Orca's
                     try:
@@ -355,7 +364,8 @@ def spawn(name):
     valid_name(name)
     if alive(name):
         return print(f"{name}: still running, skipped")
-    DIR.mkdir(parents=True, exist_ok=True)
+    _ensure_private_dir(STATE)
+    _ensure_private_dir(DIR)
     with (DIR / "errors.log").open("a") as err:  # a crash before the run log exists lands here
         subprocess.Popen([sys.executable, __file__, "exec", name], start_new_session=True,
                          stdout=subprocess.DEVNULL, stderr=err)
@@ -365,7 +375,8 @@ def spawn(name):
 def tick(now=None):
     t = time.localtime(now)
     try:
-        DIR.mkdir(parents=True, exist_ok=True)
+        _ensure_private_dir(STATE)
+        _ensure_private_dir(DIR)
         (DIR / "last_tick").touch()  # diag.py doctor: a timer that stopped firing shows as a stale file
     except OSError:
         pass  # a heartbeat never stops the tick
@@ -409,7 +420,7 @@ PLIST = """<?xml version="1.0" encoding="UTF-8"?>
 def main():
     args = sys.argv[1:]
     cmd, name = (args or ["list"])[0], (args[1] if len(args) > 1 else None)
-    opt = lambda k: args[args.index(f"--{k}") + 1] if f"--{k}" in args else None
+    opt = lambda k: args[i + 1] if f"--{k}" in args and (i := args.index(f"--{k}")) + 1 < len(args) else None
     autos = load()
     if cmd == "list":
         for n, a in autos.items():
@@ -448,7 +459,12 @@ def main():
         execute(name)
     elif cmd == "runs":
         f = DIR / "runs.jsonl"
-        rows = [json.loads(l) for l in f.read_text().splitlines()] if f.exists() else []
+        rows = []
+        if f.exists():
+            for line in f.read_text().splitlines():
+                if line.strip():
+                    with contextlib.suppress(ValueError):
+                        rows.append(json.loads(line))
         for r in [r for r in rows if not name or r["name"] == name][-20:]:
             print(f"{time.strftime('%m-%d %H:%M', time.localtime(r['ts']))} {r['name']:24} {r['status']:8}"
                   f" {r.get('engine', ''):6} {r['secs']}s  {r['summary'][-80:]!r}")

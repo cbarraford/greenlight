@@ -148,9 +148,7 @@ def _members_ok(tf: tarfile.TarFile, dest: Path) -> None:
         parts = Path(m.name).parts
         if not m.name or m.name.startswith("/") or ".." in parts:
             raise UpdateError("unsafe_archive", m.name)
-        if m.isdev() or m.isfifo() or m.islnk():
-            raise UpdateError("unsafe_archive", m.name)
-        if m.issym() and not (dest / m.name).parent.joinpath(m.linkname).resolve().is_relative_to(dest):
+        if m.isdev() or m.isfifo() or m.islnk() or m.issym():
             raise UpdateError("unsafe_archive", m.name)
         total += m.size if m.isfile() else 0
         if total > MAX_EXTRACT_BYTES:
@@ -163,9 +161,12 @@ def _unpack(src: Path, dest: Path) -> None:
         shutil.copytree(src, dest, symlinks=True, ignore=lambda d, names: [n for n in names if n in SKIP])
         return
     dest.mkdir(parents=True)
-    with tarfile.open(src, "r:*") as tf:
-        _members_ok(tf, dest.resolve())
-        tf.extractall(dest, filter="data")  # noqa: S202 - members checked above
+    try:
+        with tarfile.open(src, "r:*") as tf:
+            _members_ok(tf, dest.resolve())
+            tf.extractall(dest, filter="data")  # noqa: S202 - members checked above
+    except (tarfile.TarError, EOFError):
+        raise UpdateError("bad_archive") from None
     kids = [p for p in dest.iterdir()]
     if len(kids) == 1 and kids[0].is_dir() and not (dest / "SKILL.md").exists():  # a single top folder: lift it
         for p in kids[0].iterdir():
@@ -193,12 +194,15 @@ def install(src: Path, version: str | None = None) -> dict[str, Any]:
         missing = [f for f in ESSENTIAL if not (root / f).is_file()]
         if missing:
             raise UpdateError("incomplete", ",".join(missing))
+        ver_file = root / "VERSION"
+        if ver_file.is_symlink():
+            raise UpdateError("unsafe_archive", "VERSION")
         ver = version
-        if not ver and (root / "VERSION").is_file():
-            ver = (root / "VERSION").read_text().strip()
+        if not ver and ver_file.is_file():
+            ver = ver_file.read_text().strip()
         if not ver or not VERSION_RE.fullmatch(ver):
             raise UpdateError("bad_version")
-        (root / "VERSION").write_text(ver + "\n")
+        ver_file.write_text(ver + "\n")
         _link_memory(root)
         dest = versions_dir() / ver
         if dest.exists():
@@ -337,7 +341,10 @@ def reschedule() -> str:
         text = unit.read_text(errors="replace")
         if str(target) in text or (str(code_dir()) not in text and str(skill_path()) not in text):
             continue  # already through current, or not ours to move (a git checkout's own unit)
-        p = subprocess.run([sys.executable, str(target), "install"], capture_output=True, text=True, timeout=60)
+        try:
+            p = subprocess.run([sys.executable, str(target), "install"], capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.SubprocessError):
+            return "failed"
         return "reinstalled" if p.returncode == 0 else "failed"
     return "unchanged"
 

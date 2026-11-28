@@ -36,7 +36,6 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import ade  # noqa: E402
 import blocking  # noqa: E402
 import diag  # noqa: E402
 import greenlight  # noqa: E402
@@ -71,8 +70,16 @@ def save(f, data):
     os.replace(tmp, f)
 
 
-def orca_ade():
-    return ade.is_orca()
+_BAD_BRANCH_RE = re.compile(r"[\x00-\x20\x7f~^:?*\[\\]|\.\.|@\{|//")
+
+
+def _valid_branch(branch):
+    """True when `branch` is a safe git branch name (no leading `-`, control/whitespace, `..`, or invalid ref chars)."""
+    if not isinstance(branch, str) or not branch or branch.startswith(("-", "/", ".")) or branch.endswith(("/", ".")):
+        return False
+    if branch == "@" or _BAD_BRANCH_RE.search(branch):
+        return False
+    return all(part and not part.startswith(".") and not part.endswith(".lock") for part in branch.split("/"))
 
 
 # --- project mapping ---------------------------------------------------------------------------
@@ -317,16 +324,19 @@ def plan(rows=None, rows_ts=None, cap=CAP, now=None):
                         busy_cache[repo["path"]] = checked_out(repo["path"])
                     busy = busy_cache[repo["path"]]
                     want_b = f"mr-{c['iid']}" if c["role"] == "review" else c["source_branch"]
-                    hit = want_b if want_b and want_b in busy else None
-                    if hit:
-                        verdict, reason = "busy", f"{hit} is checked out in {busy[hit]}"
-                    elif len(create) >= cap:
-                        verdict, reason = "deferred", f"over the {cap}-per-run cap: next run"
+                    if c["role"] == "author" and not _valid_branch(want_b):
+                        verdict, reason = "skip", "invalid source branch name"
                     else:
-                        verdict, reason = "create", f"{c['role']} MR with no workspace" + (
-                            f" (I'm blocking it: {c['block']})" if c.get("block") else "")
-                        c["name"] = ws_name(c)
-                        create.append(c)
+                        hit = want_b if want_b and want_b in busy else None
+                        if hit:
+                            verdict, reason = "busy", f"{hit} is checked out in {busy[hit]}"
+                        elif len(create) >= cap:
+                            verdict, reason = "deferred", f"over the {cap}-per-run cap: next run"
+                        else:
+                            verdict, reason = "create", f"{c['role']} MR with no workspace" + (
+                                f" (I'm blocking it: {c['block']})" if c.get("block") else "")
+                            c["name"] = ws_name(c)
+                            create.append(c)
         c.update(verdict=verdict, reason=reason)
         items.append(c)
 
@@ -358,9 +368,8 @@ def ws_name(c):
 def create_args(c, base, name=None):
     name = name or ws_name(c)
     goal = f"{'Merge' if c['role'] == 'author' else 'Review'} {greenlight.ref(c['forge'], c['iid'])}: {c['title']}"
-    repo = f"id:{c['repo']['id']}" if orca_ade() else c["repo"]["id"]
-    return ["worktree", "create", "--name", name, "--repo", repo, "--base-branch", base,
-            *([{"github": "--pr"}.get(c["forge"], "--gitlab-mr"), str(c["iid"])] if orca_ade() else []), "--comment", goal, "--setup", "skip"]
+    repo = c["repo"]["id"]
+    return ["worktree", "create", "--name", name, "--repo", repo, "--base-branch", base, "--comment", goal, "--setup", "skip"]
 
 
 def _ref_sha(path, branch):
@@ -396,6 +405,10 @@ def _prepare_branch(path, want, base):
 
 def ensure_branch(path, want, upstream=None):
     """Put the new worktree on local branch `want` (Orca may pick `<name>-2`), tracking upstream."""
+    if not _valid_branch(want):
+        raise ValueError(f"invalid branch name: {want!r}")
+    if upstream is not None and not _valid_branch(upstream):
+        raise ValueError(f"invalid upstream branch name: {upstream!r}")
     cur = git(path, "symbolic-ref", "--short", "-q", "HEAD", check=False)
     if cur != want:
         exists = git(path, "rev-parse", "--verify", "-q", f"refs/heads/{want}", check=False)
@@ -416,18 +429,17 @@ def ensure_branch(path, want, upstream=None):
 def create(c):
     path = c["repo"]["path"]
     if c["role"] == "author":
-        git(path, "fetch", "origin", c["source_branch"])
-        base, want, upstream = f"origin/{c['source_branch']}", c["source_branch"], c["source_branch"]
+        sb = c.get("source_branch")
+        if not _valid_branch(sb):
+            raise ValueError(f"invalid source branch name: {sb!r}")
+        git(path, "fetch", "origin", "--", f"refs/heads/{sb}")
+        base, want, upstream = f"origin/{sb}", sb, sb
     else:
         want, upstream = f"mr-{c['iid']}", None
         head = f"refs/pull/{c['iid']}/head" if c["forge"] == "github" else f"refs/merge-requests/{c['iid']}/head"
-        if orca_ade():  # Orca bases the worktree on the local branch, then names its own (fixed below)
-            git(path, "fetch", "origin", f"+{head}:{want}")
-            base = want
-        else:  # native/Worktrunk creates the branch at base: handle any preserved local ref safely first
-            git(path, "fetch", "origin", head)
-            base = c["sha"]
-    create_name, restore_sha = (want, None) if orca_ade() else _prepare_branch(path, want, base)
+        git(path, "fetch", "origin", head)
+        base = git(path, "rev-parse", "FETCH_HEAD")
+    create_name, restore_sha = _prepare_branch(path, want, base)
     try:
         res = greenlight.orca(*create_args(c, base, name=create_name))
     except Exception:
@@ -441,8 +453,11 @@ def create(c):
 
 
 def log(entry):
-    LOG.parent.mkdir(parents=True, exist_ok=True)
-    with LOG.open("a") as f:
+    LOG.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with contextlib.suppress(OSError):
+        os.chmod(LOG.parent, 0o700)
+    fd = os.open(LOG, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(fd, "a") as f:
         f.write(json.dumps({"ts": int(time.time()), **entry}) + "\n")
     diag.event("adopt", did=str(entry.get("did") or "").replace(" ", "_"), ws_h=diag.h(entry.get("ws")), mr_h=diag.h(entry.get("mr")),
                role=entry.get("role"), msg_class=diag.classify(str(entry["error"])) if entry.get("error") else None)

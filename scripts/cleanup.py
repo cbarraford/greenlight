@@ -30,6 +30,7 @@ Stdlib only. Needs `glab` (gitlab.com) and `gh` (github.com) authenticated.
 """
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -342,8 +343,11 @@ def scan():
 
 
 def log(entry):
-    LOG.parent.mkdir(parents=True, exist_ok=True)
-    with LOG.open("a") as f:
+    LOG.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with contextlib.suppress(OSError):
+        os.chmod(LOG.parent, 0o700)
+    fd = os.open(LOG, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(fd, "a") as f:
         f.write(json.dumps({"ts": int(time.time()), **entry}) + "\n")
     diag.event("cleanup", ws_h=diag.h(entry.get("name")), ok=entry.get("removed"),  # not reason: it's text with names in it
                msg_class=diag.classify(str(entry["error"])) if entry.get("error") else None)
@@ -371,10 +375,10 @@ def main():
             try:
                 # Re-verify worktree state immediately before deletion to close the scan→apply TOCTOU window.
                 if os.path.isdir(r["path"]):
-                    cur_tip = git(r["path"], "rev-parse", "HEAD", check=False)
+                    cur_tip = git(r["path"], "rev-parse", "HEAD")
                     if r.get("tip") and cur_tip and cur_tip != r["tip"]:
                         raise RuntimeError("HEAD changed since scan")
-                    if git(r["path"], "status", "--porcelain", "--untracked-files=normal", check=False):
+                    if git(r["path"], "status", "--porcelain", "--untracked-files=normal"):
                         raise RuntimeError("uncommitted/untracked changes appeared since scan")
                     cutoff = time.time() * 1000 - ACTIVE_MINUTES * 60_000
                     live_busy = {t["worktreeId"] for t in orca("terminal", "list", "--limit", "10000")["terminals"]

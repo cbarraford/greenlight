@@ -131,7 +131,7 @@ def argv(name, text, model=None, effort=None, sid=None, system=None, stream=Fals
             "claude": ["--tools", "", "--no-session-persistence"],
             "codex": ["-c", "sandbox_mode=read-only"],
             "opencode": [],
-            "gemini": ["--approval-mode", "default", "--skip-trust"],
+            "gemini": ["--approval-mode", "default"],
             "agy": [],
             "pi": None,
         }[name]
@@ -683,6 +683,9 @@ def _emit_fallback(from_h: str, to_h: str, to_model: str | None, reason: str) ->
     diag.event("model_fallback", harness=from_h, to=to_h, model=tok_model if diag.token(tok_model) else "custom", reason=reason)
 
 
+_TOOLLESS_ISOLATE_CWD = frozenset({"opencode", "gemini", "agy"})
+
+
 def ask(prompt, model=None, effort=None, default="claude", timeout=180, cwd=None, fallbacks=None, slot=None, exclude=()):
     """One toolless headless answer from whichever harness runs `model` (no model: `default` with its cheap default).
     Proactively skips providers known to be at their 5h/weekly cap or in cooldown, and falls back across configured
@@ -703,8 +706,10 @@ def ask(prompt, model=None, effort=None, default="claude", timeout=180, cwd=None
                     _emit_fallback(h, ordered[idx + 1][0], ordered[idx + 1][1], "unavailable")
                     continue
                 raise
+            # Harnesses without a native tool-disable flag always run in an isolated empty tempdir.
+            run_cwd = empty if h in _TOOLLESS_ISOLATE_CWD else (cwd or empty)
             try:
-                p = subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=timeout, cwd=cwd or empty)
+                p = subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=timeout, cwd=run_cwd)
             except FileNotFoundError:
                 if has_next:
                     _emit_fallback(h, ordered[idx + 1][0], ordered[idx + 1][1], "missing")

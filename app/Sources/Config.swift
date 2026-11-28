@@ -1,4 +1,4 @@
-// Greenlight: menubar chat with greenlight (on this Mac or an ssh host), live activity while it works, replyable notifications.
+// Greenlight: dashboard, terminal, chat, and voice app (on this Mac or an ssh host), with live activity and replyable notifications.
 // Chat: `chat.py send|compact|new|stop` streams JSON events (see chat.py's Norm).
 // Pings: greenlight appends JSON lines to <greenlightHome>/outbox.jsonl (`greenlight.py ping`); we tail it.
 // Where greenlight runs: Settings › Hosts (or `defaults write <bundle id> <key> <value>`), read at launch:
@@ -75,7 +75,6 @@ func shellPath(_ p: String) -> String {
 
 let py = "GREENLIGHT_HOME=\(shellPath(greenlightHome)) GREENLIGHT_TMUX_SOCKET=\(shellQuote(tmuxSocketName)) python3 \(shellPath(greenlightCode))/scripts"  // + "/greenlight.py ..."
 let selftest = CommandLine.arguments.contains("--selftest") || CommandLine.arguments.contains("--attachtest") || unittest  // scratch chat session + transcript, see selfTest()
-let chatCmd = (selftest ? "CHAT_DIR=\(shellPath(greenlightHome))/chat-test " : "") + "\(py)/chat.py"
 
 /// Per-repository host configuration (`host=server|mac|auto`, default `server`) and its resolved target.
 struct RepoHostInfo: Equatable {
@@ -123,7 +122,7 @@ func localBackendPrefix(server: String = host, serverCode: String = greenlightCo
     gl_t=$(mktemp -d "$gl_d.XXXXXX") && \(ssh) | tar -xzf - -C "$gl_t" && [ -f "$gl_t/scripts/chat.py" ] && \
     { rmdir "$gl_d" 2>/dev/null; [ -e "$gl_d" ] || mv "$gl_t" "$gl_d"; }; rm -rf "$gl_t"; rmdir "$gl_d.installing"; \
     else gl_n=0; while [ -d "$gl_d.installing" ] && [ $gl_n -lt 120 ]; do sleep 1; gl_n=$((gl_n+1)); done; fi; \
-    [ -f "$gl_d/scripts/chat.py" ] || { echo "greenlight: couldn't copy greenlight from \(server) to $gl_d" >&2; exit \(localBackendMissing); }; fi;\u{20}
+    [ -f "$gl_d/scripts/chat.py" ] || { printf '%s%s\\n' \(shellQuote("greenlight: couldn't copy greenlight from \(server) to ")) "$gl_d" >&2; exit \(localBackendMissing); }; fi;\u{20}
     """
 }
 
@@ -442,7 +441,6 @@ struct Theme {
         (self.name, self.bg, self.fg, self.accent, self.bubble) = (name, hex(bg), hex(fg), hex(accent), hex(bubble))
     }
     func blend(_ f: CGFloat) -> NSColor { bg.blended(withFraction: f, of: fg) ?? fg }
-    func mix(_ f: CGFloat) -> Color { Color(nsColor: blend(f)) }
     var dark: Bool { (bg.usingColorSpace(.sRGB)?.brightnessComponent ?? 0) < 0.5 }
 }
 
@@ -540,9 +538,6 @@ var sub: Color { Color(DS.Palette.fgMuted, dark: isDark) }
 var faint: Color { Color(DS.Palette.fgFaint, dark: isDark) }
 var bubble: Color { Color(DS.Palette.elementRest, dark: isDark) }
 
-/// `.system(size:)` at the chosen size; `design: .monospaced` uses the code font. Interface chrome stays in the system font.
-/// The box an icon gets beside text of `pt` points (brand/DESIGN.md §9): about a quarter more than the type size, as SF Symbols
-/// sit. It follows Settings › Text size like sys(), unless `scaled` is false.
 /// Greenlight's mark (brand/icon/mark*.svg, bundled by build.sh) as template images: lit (blades and light), the blades
 /// alone (idle), or the light alone (to colour it separately, as the orb does). Never coloured in the menu bar.
 enum GreenlightMark {
@@ -557,8 +552,11 @@ enum GreenlightMark {
     }
 }
 
+/// The box an icon gets beside text of `pt` points (brand/DESIGN.md §9): about a quarter more than the type size, as SF Symbols
+/// sit. It follows Settings › Text size like sys(), unless `scaled` is false.
 func iconSize(_ pt: CGFloat, scaled: Bool = true) -> CGFloat { (pt * (scaled ? fontSize / 13 : 1) * 1.25).rounded() }
 
+/// `.system(size:)` at the chosen size; `design: .monospaced` uses the code font. Interface chrome stays in the system font.
 func sys(size: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .default, face: String = "System") -> Font {
     let s = size * fontSize / 13, f = design == .monospaced ? codeFont : face
     if f == "System" { return .system(size: s, weight: weight, design: design) }
@@ -1510,7 +1508,7 @@ final class RulesStore: ObservableObject {
 /// this machine): structured fields only. Strings must be short tokens (command names, enums); never text, names or paths.
 enum Diag {
     static let url = URL(fileURLWithPath: unittest ? (NSTemporaryDirectory() + "greenlight-unittest-\(getpid())/app.jsonl")  // never the real trail
-                         : uitest ? (greenlightHome + "/diag/app.jsonl") : (NSHomeDirectory() + "/Library/Logs/Greenlight/app.jsonl"))
+                         : uitest ? ((greenlightHome as NSString).expandingTildeInPath + "/diag/app.jsonl") : (NSHomeDirectory() + "/Library/Logs/Greenlight/app.jsonl"))
     static let run = String(format: "%08x", UInt32.random(in: 0...UInt32.max))
     static let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
     static let q = DispatchQueue(label: "greenlight.diag")
@@ -1556,7 +1554,7 @@ enum Diag {
     }
     /// A launch marker a clean quit removes: still there at the next launch means the app crashed or was killed.
     static let marker = uitest
-        ? (greenlightHome + "/diag/running-\(ProcessInfo.processInfo.processIdentifier)")
+        ? ((greenlightHome as NSString).expandingTildeInPath + "/diag/running-\(ProcessInfo.processInfo.processIdentifier)")
         : (NSHomeDirectory() + "/Library/Logs/Greenlight/running-\(Bundle.main.bundleIdentifier ?? "app")")  // per app: dev copies relaunch on their own
     static func launched(host: String) {
         if FileManager.default.fileExists(atPath: marker) { event("prev_crash") }

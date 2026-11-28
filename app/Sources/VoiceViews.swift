@@ -346,7 +346,7 @@ struct DropArea: NSViewRepresentable {
 
 // MARK: voice mode: a hands-free conversation with the chat, and the stage that draws what it says
 
-/// Chief's reply, split for voice mode: its own ```stage block (HTML, or notes for Haiku to draw), and the rest. An unclosed fence (still streaming) hides everything from it on.
+/// Chief's reply, split for voice mode: its own ```stage block (chart/card JSON, HTML, or markdown notes), and the rest. An unclosed fence (still streaming) hides everything from it on.
 /// The rest splits again at a `[screen]` line: `text` before it is what's spoken (the gist), `screen` after it is the detail that is
 /// only shown (on the stage, and in the transcript under the gist), never read out.
 struct Staged: Equatable {
@@ -721,8 +721,8 @@ func cardClean(_ v: Any) -> Any {
 
 /// Chief's ```stage JSON that isn't a chart: a card ({title, items, eyebrow, kind, stat}, items as lines or objects, under items,
 /// steps, notes, list or lines, or just a list; plain values beside the title become lines too), drawn as stage.spec at once,
-/// never handed to Haiku or its fallback as raw text. A native template with its facts goes through whole. nil when it isn't
-/// one, or holds a shape a card can't show (a table without its kind, a list given as text): Haiku draws that.
+/// never shown as raw JSON. A native template with its facts goes through whole. nil when it isn't
+/// one, or holds a shape a card can't show (a table without its kind, a list given as text): fallbackSpec extracts its lines.
 func stageCard(_ s: String) -> [String: Any]? {
     guard let j = stageJSON(s), let any = try? JSONSerialization.jsonObject(with: Data(j.utf8)) else { return nil }
     let o = (any as? [String: Any]) ?? (any as? [Any]).map { ["items": $0] } ?? [:]
@@ -802,8 +802,8 @@ func unescapeJSON(_ s: String) -> String {
     return out
 }
 
-/// The stage's drawing when Haiku can't (no key, an error, a refusal): the first sentence as the title, the rest as a list.
-/// JSON (a ```stage block Haiku couldn't draw) is read as a card, else its values as lines, its quoted values when it doesn't
+/// Fallback stage card spec: the first sentence as the title, the rest as a list.
+/// JSON (a ```stage block `stageCard` couldn't match) is read as a card, else its values as lines, its quoted values when it doesn't
 /// parse: never the raw JSON.
 func fallbackSpec(_ text: String) -> [String: Any] {
     if let c = stageCard(text) { return c }
@@ -830,7 +830,7 @@ func fallbackSpec(_ text: String) -> [String: Any] {
     return ["title": ss.first ?? "", "kind": "list", "eyebrow": "", "stat": "", "items": ss.dropFirst().prefix(6).map { ["label": $0, "detail": ""] }]
 }
 
-/// One Claude Haiku 5.5 call (no thinking, low effort, structured output), for the quick decisions around Chief's replies.
+/// One Claude Haiku 5.5 call (no thinking, low effort, structured output), used for voice mode's status strip while Chief works.
 /// nil when there's no key, or on an error, a refusal or a cut-off reply: the caller keeps what's on screen.
 func haiku(_ system: String, _ user: String, _ schema: [String: Any], done: @escaping ([String: Any]?) -> Void) {
     guard let key = keychain("anthropic"), !key.isEmpty else { return done(nil) }
@@ -1311,7 +1311,7 @@ let phosphorLook: Look = {
                 text: dsHex(p.accentFg, dark: true), text2: dsHex(p.accentFg, dark: true), dim: dsHex(p.accentHover, dark: true), line: dsHex(p.accentSolid, dark: true),
                 accent: dsHex(p.accentFg, dark: true), link: dsHex(p.accentFg, dark: true), you: dsHex(p.fgDefault, dark: true), font: monoCSS, dark: true)
 }()
-/// The looks the style button cycles through. The five parked looks (Orb, Conversation, On Air, Editorial, HUD, Zen) are gone
+/// The looks the style button cycles through. The six parked looks (Orb, Conversation, On Air, Editorial, HUD, Zen) are gone
 /// from the pickers; a stored choice of one opens as Default.
 var looks: [Look] { [defaultLook(dark: isDark), phosphorLook] }
 /// A look by its stored id, in today's appearance: anything but Phosphor is Default.

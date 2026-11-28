@@ -23,7 +23,8 @@ KD = "\nOptions: mark ready | keep draft"
 
 class FakeDecide(types.SimpleNamespace):
     def choice(self, state, question, options, *, context=""):
-        self.seen = context
+        assert isinstance(state, str), f"decide.choice state must be JSON-serializable str, got {type(state)}"
+        self.seen = state
         if self.boom:
             raise RuntimeError("network down")
         return {
@@ -35,6 +36,9 @@ class FakeDecide(types.SimpleNamespace):
         }
 
     def score(self, state, rubric, *, context=""):
+        assert isinstance(state, str), f"decide.score state must be JSON-serializable str, got {type(state)}"
+        self.scored_text = state
+        self.scored_rubric = rubric
         return {"score": self.s, "provider": self.provider}
 
 
@@ -456,3 +460,65 @@ def test_dismiss_turn_kind_and_clear_all(autonomy_env, monkeypatch):
     decisions.main()
     assert [x["closed"] for x in decisions.load()] == ["cleared"] * 4, decisions.load()
     assert not greenlight.ping("You could tidy fix-1's commits.\nOptions: do it | no", "@tidy", kind="check-in").get("held")
+
+
+def test_autonomy_cli_corrupt_log_and_key_flag(autonomy_env, monkeypatch, capsys):
+    from unittest import mock
+
+    def run(*args):
+        monkeypatch.setattr(sys, "argv", ["autonomy.py", *args])
+        autonomy.main()
+        return capsys.readouterr().out
+
+    # settings (text + json)
+    assert "auto answers:" in run("settings")
+    s_json = json.loads(run("settings", "--json"))
+    assert "auto" in s_json and "gate" in s_json
+
+    # set --auto + --gate + human gate rejection
+    set_out = json.loads(run("set", "--auto", "delete-workspace", "on", "--gate", "0.8"))
+    assert "delete-workspace" in set_out["auto"] and set_out["gate"] == 0.8
+    set_off = json.loads(run("set", "--auto", "delete-workspace", "off"))
+    assert "delete-workspace" not in set_off["auto"]
+    with pytest.raises(SystemExit):
+        run("set", "--auto", "signoff", "on")
+
+    # propose & gate (including --key flag consumed without corrupting prompt text)
+    seen_texts = []
+    def fake_propose(kind, text):
+        seen_texts.append((kind, text))
+        return {"choice": "keep", "prob": 0.9}
+
+    with mock.patch.object(autonomy, "propose", side_effect=fake_propose):
+        assert json.loads(run("propose", "--kind", "delete-workspace", "--key", "ws-1", "Delete?"))["choice"] == "keep"
+    assert seen_texts == [("delete-workspace", "Delete?")]
+    with mock.patch.object(autonomy, "gate", return_value={"ok": True, "score": 0.9}):
+        with pytest.raises(SystemExit) as ex:
+            run("gate", "--kind", "watch", "Ask?")
+        assert ex.value.code == 0
+
+    # calibrate (text + json)
+    cal = {"delete-workspace": {"n": 10, "right": 9, "acc": 0.9, "bands": {"0.9+": {"n": 10, "right": 9}}}}
+    with (
+        mock.patch.object(autonomy, "calibrate", return_value=cal),
+        mock.patch.object(autonomy, "candidates", return_value=[{"kind": "delete-workspace", "right": 9, "n": 10}]),
+    ):
+        assert "graduate? delete-workspace" in run("calibrate")
+        assert json.loads(run("calibrate", "--json"))["kinds"]["delete-workspace"]["right"] == 9
+
+    # BUG-CORE-8: audit_log tolerates blank and corrupt JSON lines
+    (autonomy_env / "autonomy.jsonl").write_text(
+        "\n"
+        + json.dumps({"id": "a1", "ts": 1700000000, "act": "auto", "kind": "delete-workspace", "choice": "keep", "prob": 0.92, "text": "Keep?"}) + "\n"
+        + "{corrupt json line\n"
+        + "   \n"
+        + json.dumps({"id": "a2", "ts": 1700000001, "act": "held", "kind": "watch", "score": 0.3, "threshold": 0.7, "text": "Held?"}) + "\n"
+    )
+    log_txt = run("log")
+    assert "auto delete-workspace: keep" in log_txt and "held watch: score 0.3" in log_txt
+    assert len(json.loads(run("log", "--json"))) == 2
+
+    with mock.patch.object(autonomy, "undo", return_value={"ok": True, "id": "a1"}):
+        assert json.loads(run("undo", "a1"))["ok"] is True
+    with pytest.raises(SystemExit):
+        run("undo")

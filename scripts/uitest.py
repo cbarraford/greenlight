@@ -356,66 +356,6 @@ def _make_fixture(root: Path, fixture: str):
     _native_worktrees(root, home, worktrees, rows)
     (home / "last.json").write_text(json.dumps({"ts": int(time.time()), "rows": rows}))
 
-    # Ensure every worktree entry has id & repoId so both `orca worktree ps` and `orca worktree list` work cleanly.
-    for wt in worktrees:
-        wt.setdefault("id", wt.get("worktreeId", "wt-0"))
-        wt.setdefault("repoId", f"repo-{wt.get('repo', 'widgets')}")
-
-    orca_data = root / "orca-ps.json"
-    orca_data.write_text(json.dumps({"ok": True, "result": {"worktrees": worktrees}}))
-    orca_terms = root / "orca-terms.json"
-    orca_terms.write_text(json.dumps({"ok": True, "result": {"terminals": []}}))
-    repo_names = sorted({str(wt.get("repo") or "widgets") for wt in worktrees} or {"widgets"})
-    orca_repos = root / "orca-repos.json"
-    orca_repos.write_text(json.dumps({
-        "ok": True,
-        "result": {
-            "repos": [
-                {"id": f"repo-{rn}", "displayName": rn, "gitRemoteIdentity": {"canonicalKey": f"github.com/acme/{rn}"}}
-                for rn in repo_names
-            ]
-        },
-    }))
-
-    orca_bin = bindir / "orca"
-    dispatch_ok = (
-        f"case \"$1 $2\" in\n"
-        f"  'terminal list'*) cat {shlex.quote(str(orca_terms))};;\n"
-        f"  'repo list'*) cat {shlex.quote(str(orca_repos))};;\n"
-        f"  *) cat {shlex.quote(str(orca_data))};;\n"
-        f"esac\n"
-    )
-    if fixture == "chaos":
-        # Deterministically cycles: ok -> slow + mutated worktrees -> malformed JSON -> non-zero exit -> ok
-        orca_alt = root / "orca-ps-alt.json"
-        ws_c = str(wsdir / "churn-ws")
-        Path(ws_c).mkdir(exist_ok=True)
-        alt_wts = [worktrees[0], {
-            "id": "wt-c", "worktreeId": "wt-c", "displayName": "churn-ws", "path": ws_c,
-            "repo": "widgets", "repoId": "repo-widgets", "branch": "feat/churn", "comment": "Transient churn workspace",
-            "agents": [{"state": "rate_limited", "agentType": "claude", "lastAssistantMessage": "Rate limit hit"}],
-        }]
-        orca_alt.write_text(json.dumps({"ok": True, "result": {"worktrees": alt_wts}}))
-        counter = root / "chaos-counter"
-        orca_bin.write_text(
-            "#!/bin/sh\n"
-            f"if [ \"$1\" = 'terminal' ]; then cat {shlex.quote(str(orca_terms))}; exit 0; fi\n"
-            f"if [ \"$1\" = 'repo' ]; then cat {shlex.quote(str(orca_repos))}; exit 0; fi\n"
-            f"CFILE={shlex.quote(str(counter))}\n"
-            "N=$(cat \"$CFILE\" 2>/dev/null || echo 0)\n"
-            "N=$((N + 1))\n"
-            "echo \"$N\" > \"$CFILE\"\n"
-            "MOD=$((N % 5))\n"
-            f"if [ \"$MOD\" -eq 1 ]; then cat {shlex.quote(str(orca_data))}; exit 0; fi\n"
-            f"if [ \"$MOD\" -eq 2 ]; then sleep 0.35; cat {shlex.quote(str(orca_alt))}; exit 0; fi\n"
-            "if [ \"$MOD\" -eq 3 ]; then echo '{broken-json'; exit 0; fi\n"
-            "if [ \"$MOD\" -eq 4 ]; then echo 'transient orca error' >&2; exit 1; fi\n"
-            f"cat {shlex.quote(str(orca_data))}\n"
-        )
-    else:
-        orca_bin.write_text("#!/bin/sh\n" + dispatch_ok)
-    orca_bin.chmod(0o755)
-
     for stub in ("glab", "gh"):
         p = bindir / stub
         if fixture == "chaos":
@@ -847,7 +787,8 @@ def main():
         if root_str and Path(root_str).name.startswith("gl-uitest-"):
             _reap_session_processes(Path(root_str), pgid if isinstance(pgid, int) else None)
         if meta.get("tmux_socket"):
-            subprocess.run(["tmux", "-L", meta["tmux_socket"], "kill-server"], capture_output=True, timeout=5)
+            with contextlib.suppress(OSError, subprocess.SubprocessError):
+                subprocess.run(["tmux", "-L", meta["tmux_socket"], "kill-server"], capture_output=True, timeout=5)
         if root_str and Path(root_str).name.startswith("gl-uitest-"):
             shutil.rmtree(root_str, ignore_errors=True)
         print(json.dumps({"ok": True}))

@@ -307,17 +307,25 @@ def test_create_args_and_git_fetch_calls(gl_home):
     ]
 
     def calls(c):
-        with mock.patch.object(adopt, "git") as g, mock.patch.object(greenlight, "orca", return_value={"worktree": {}}) as o:
+        def fake_git(_path, *a, **_kw):
+            return "fetched-sha" if a == ("rev-parse", "FETCH_HEAD") else ""
+
+        with mock.patch.object(adopt, "git", side_effect=fake_git) as g, mock.patch.object(greenlight, "orca", return_value={"worktree": {}}) as o:
             adopt.create(c)
         return [x.args[1:] for x in g.call_args_list], o.call_args.args
 
     g, o = calls(mine)
-    assert g == [("fetch", "origin", "me/x")] and o[o.index("--base-branch") + 1] == "origin/me/x"
+    assert g == [("fetch", "origin", "--", "refs/heads/me/x")] and o[o.index("--base-branch") + 1] == "origin/me/x"
     g, o = calls(theirs)
-    assert g == [("fetch", "origin", "refs/merge-requests/6/head")] and o[o.index("--base-branch") + 1] == "abc"
+    assert g == [("fetch", "origin", "refs/merge-requests/6/head"), ("rev-parse", "FETCH_HEAD")]
+    assert o[o.index("--base-branch") + 1] == "fetched-sha"
+    # BUG-CORE-6: stale/None c["sha"] still uses FETCH_HEAD rather than stale metadata
+    g_none, o_none = calls(theirs | {"sha": None})
+    assert o_none[o_none.index("--base-branch") + 1] == "fetched-sha"
     with mock.patch.dict(adopt.os.environ, {"GREENLIGHT_ADE": "t3"}), \
+            mock.patch.object(adopt, "git", return_value="fetched-sha"), \
             pytest.raises(RuntimeError, match="live ADE backends are retired"):
-        calls(theirs)
+        adopt.create(theirs)
 
 
 def test_ensure_branch_on_real_git_repo(gl_home, tmp_path):
@@ -468,3 +476,80 @@ def test_github_adopt_and_renamed_repo(gl_home):
         p = adopt.plan([{"id": "w7", "name": "b7", "project": "old/r", "branch": "b7", "linked_mr": 7}], NOW - 60, now=NOW)
     assert {i["key"]: i["verdict"] for i in p["items"]} == {"old/r!7": "skip", "old/r!8": "create"}, p["items"]
     assert p["create"][0]["repo"]["path"] == "/w/r" and not p["pings"]
+
+
+def test_sec1_branch_validation_and_ensure_branch_rejection(gl_home):
+    bad_branches = ["-flag", "--upload-pack=id", "a..b", "bad space", "bad\x00nul", "bad\nline", "a//b", "a/.hidden", "a.lock", "@", "a@{0}", "a:b", ""]
+    for bad in bad_branches:
+        assert not adopt._valid_branch(bad), bad
+        c = {"role": "author", "iid": 5, "title": "t", "source_branch": bad, "repo": REPO_TN, "sha": "abc", "forge": "gitlab"}
+        with pytest.raises(ValueError, match="invalid source branch"):
+            adopt.create(c)
+        with pytest.raises(ValueError, match="invalid branch name"):
+            adopt.ensure_branch("/w/x", bad)
+    # Invalid source branch in plan() is skipped safely rather than scheduled for creation
+    p, _ = _run_plan([_mr(30, branch="--evil")], [])
+    assert _verdicts(p)["30"] == ("skip", "invalid source branch name")
+    with pytest.raises(ValueError, match="invalid upstream branch name"):
+        adopt.ensure_branch("/w/x", "ok-branch", upstream="-evil")
+
+
+def test_apply_dismiss_cli_and_log_permissions(gl_home, monkeypatch, capsys):
+    import stat
+    import sys
+
+    # 1. dismiss CLI records keys
+    monkeypatch.setattr(sys, "argv", ["adopt.py", "dismiss", "acme/widgets!5", "octo/app#9"])
+    adopt.main()
+    saved = json.loads(adopt.DISMISSED.read_text())
+    assert "acme/widgets!5" in saved and "octo/app#9" in saved
+
+    # 2. apply creates workspaces, handles failure, writes 0600 log, pings
+    sample_plan = {
+        "items": [
+            {"key": "acme/widgets!1", "verdict": "create", "role": "author", "title": "Fix bug", "reason": "no ws", "name": "fix-bug", "forge": "gitlab", "iid": 1, "project": "acme/widgets", "repo": {"id": "r1"}},
+            {"key": "acme/widgets!2", "verdict": "create", "role": "reviewer", "block": "approval", "title": "Review PR", "reason": "no ws", "name": "rev-pr", "forge": "gitlab", "iid": 2, "project": "acme/widgets", "repo": {"id": "r1"}},
+            {"key": "acme/widgets!3", "verdict": "deferred", "role": "author", "title": "Later", "reason": "cap"},
+        ],
+        "create": [],
+        "dismissed": {"acme/widgets!9": {"ts": 1, "why": "no-repo"}},
+        "seen": {"acme/widgets!1": {"id": "w1", "name": "fix-bug"}},
+        "pings": [("@no-repo:x", "No repo for !9")],
+    }
+    sample_plan["create"] = [sample_plan["items"][0], sample_plan["items"][1]]
+
+    def fake_create(c):
+        if c["iid"] == 2:
+            raise RuntimeError("branch conflict")
+        return {"path": "/w/fix-bug", "branch": "fix-bug"}
+
+    pings = []
+    monkeypatch.setattr(adopt, "create", fake_create)
+    monkeypatch.setattr(adopt.greenlight, "note", lambda *_a: None)
+    monkeypatch.setattr(adopt.greenlight, "ping", lambda text, key: pings.append((key, text)))
+
+    adopt.apply(sample_plan)
+    assert sample_plan["items"][0]["created"] is True
+    assert sample_plan["items"][1]["created"] is False and "branch conflict" in sample_plan["items"][1]["error"]
+    assert pings == [("@no-repo:x", "No repo for !9")]
+    assert stat.S_IMODE(adopt.LOG.stat().st_mode) == 0o600
+
+    # 3. main() scan / precheck / apply (text + json + error exit)
+    monkeypatch.setattr(adopt, "plan", lambda cap=adopt.CAP: sample_plan)
+    monkeypatch.setattr(sys, "argv", ["adopt.py", "scan"])
+    adopt.main()
+    out = capsys.readouterr().out
+    assert "WOULD CREATE" in out and "DEFERRED (cap)" in out
+
+    monkeypatch.setattr(sys, "argv", ["adopt.py", "precheck"])
+    with pytest.raises(SystemExit) as ex:
+        adopt.main()
+    assert ex.value.code == 0
+    capsys.readouterr()
+
+    monkeypatch.setattr(sys, "argv", ["adopt.py", "apply", "--json"])
+    with pytest.raises(SystemExit) as ex:
+        adopt.main()
+    assert ex.value.code == 1
+    rows = json.loads(capsys.readouterr().out)
+    assert len(rows) == 3 and all("repo" not in r for r in rows)

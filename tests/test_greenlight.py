@@ -983,3 +983,93 @@ assert not greenlight.create_refused(["worktree", "create", "--name", "cost-mete
 del os.environ["GREENLIGHT_REQUEST"]  # no request (a person at a terminal, adopt.py): never refused
 assert not greenlight.create_refused(["worktree", "create", "--name", "x"])
 print("read-only ok")
+
+# --- SEC-10, SEC-11, BUG-CORE-7, TEST-ADD-8 (gl_all, whoami, scan backfill race & pruning) ---
+from pathlib import Path as _Path
+import stat as _stat
+from unittest import mock as _mock
+
+# SEC-10: report() guards mr.web_url against non-http(s) schemes and emits CSP meta tag
+_rep_sec = greenlight.report({"ts": 1700000000, "skipped": 0, "gone": [], "rows": [
+    {"name": "bad-url", "project": "acme/x", "branch": "b", "goal": "g", "agent": {"state": "none", "idle_h": None},
+     "mr": {"iid": 9, "ref": "!9", "role": "author", "web_url": "javascript:alert(1)"},
+     "next": {"step": "ready", "owner": "me", "action": "check"}},
+    {"name": "ok-url", "project": "acme/x", "branch": "b2", "goal": "g", "agent": {"state": "none", "idle_h": None},
+     "mr": {"iid": 10, "ref": "!10", "role": "author", "web_url": "https://gitlab.com/acme/x/-/merge_requests/10"},
+     "next": {"step": "ready", "owner": "me", "action": "check"}},
+]})
+assert 'content="default-src \'none\'; style-src \'unsafe-inline\'"' in _rep_sec
+assert 'href="javascript:' not in _rep_sec and ">!9<" in _rep_sec
+assert 'href="https://gitlab.com/acme/x/-/merge_requests/10"' in _rep_sec
+
+# SEC-11: STATE dir is 0700, last.json and outbox.jsonl are 0600
+_sec_state = _Path(tempfile.mkdtemp(prefix="gl-sec11-")) / "nested-state"
+with _mock.patch.object(greenlight, "STATE", _sec_state):
+    assert greenlight.keep({"scan_started_ns": 1, "scan_clock_id": "c1", "rows": []})
+    greenlight.outbox({"text": "hello", "key": "k"})
+    assert _stat.S_IMODE(_sec_state.stat().st_mode) == 0o700
+    assert _stat.S_IMODE((_sec_state / "last.json").stat().st_mode) == 0o600
+    assert _stat.S_IMODE((_sec_state / "outbox.jsonl").stat().st_mode) == 0o600
+
+# TEST-ADD-8: gl_all pagination (multiple pages + query separator handling)
+_pages = {1: [{"id": i} for i in range(100)], 2: [{"id": 100}]}
+_seen_urls = []
+def _fake_gl(u):
+    _seen_urls.append(u)
+    pg = int(u.split("&page=")[1])
+    return _pages[pg]
+with _mock.patch.object(greenlight, "gl", side_effect=_fake_gl):
+    _all = greenlight.gl_all("merge_requests?state=opened")
+assert len(_all) == 101 and "&per_page=100&page=1" in _seen_urls[0] and "&per_page=100&page=2" in _seen_urls[1]
+
+# TEST-ADD-8: whoami() falls back glab -> gh -> caches me.json -> returns "" when both fail
+_who_state = _Path(tempfile.mkdtemp(prefix="gl-who-"))
+with _mock.patch.object(greenlight, "STATE", _who_state):
+    with _mock.patch.object(greenlight, "run", side_effect=[RuntimeError("no glab"), json.dumps({"login": "gh-user"})]):
+        assert greenlight.whoami() == "gh-user"
+    with _mock.patch.object(greenlight, "run", side_effect=AssertionError("should read me.json cache")):
+        assert greenlight.whoami() == "gh-user"
+    (_who_state / "me.json").unlink()
+    with _mock.patch.object(greenlight, "run", side_effect=RuntimeError("offline")):
+        assert greenlight.whoami() == ""
+
+# BUG-CORE-7 + TEST-ADD-8: scan() clears _goal_backfill on mismatched remembered MR, prunes superseded backfill, and retries on BackfillChanged
+_bf_state = _Path(tempfile.mkdtemp(prefix="gl-bf-"))
+with _mock.patch.object(greenlight, "STATE", _bf_state), \
+     _mock.patch.object(greenlight.decisions, "STATE", _bf_state), \
+     _mock.patch.object(greenlight.autonomy, "STATE", _bf_state), \
+     _mock.patch.object(greenlight.lifestage, "STATE", _bf_state), \
+     _mock.patch.object(greenlight.lifestage, "CHECKS", _bf_state / "checks"), \
+     _mock.patch.object(greenlight, "orca", side_effect=lambda *a: (
+         {"worktrees": [{"id": "w1", "worktreeId": "w1", "repoId": "r1", "displayName": "feat", "branch": "refs/heads/feat", "path": "/tmp/nonexistent", "projectId": "github:octo/app", "comment": "", "agents": []}]}
+         if a[:2] in (("worktree", "ps"), ("worktree", "list")) else {"terminals": []}
+     )), \
+     _mock.patch.object(greenlight, "gh_open_prs", return_value=[{"headRefName": "feat", "number": 20}]), \
+     _mock.patch.object(greenlight, "mr_details", return_value={
+         "iid": 20, "web_url": "https://github.com/octo/app/pull/20", "title": "New PR", "state": "opened", "draft": False,
+         "updated_at": "2026-11-27T00:00:00Z", "author": {"username": greenlight.ME, "login": greenlight.ME},
+         "source_branch": "feat", "target_branch": "main", "sha": "sha20", "has_conflicts": False,
+         "detailed_merge_status": "mergeable", "_approved_by": [], "_discussions": [],
+     }), \
+     _mock.patch.object(greenlight, "release_milestone", return_value=None), \
+     _mock.patch.object(greenlight.lifestage, "blocks", return_value={}):
+    greenlight.backfills_update(lambda d: d.__setitem__("w1", {
+        "goal": "Merge #10: Old PR", "comment": "", "branch": "feat", "linked_mr": None,
+        "resolved_mr": 10, "forge": "github", "project": "octo/app",
+    }))
+    _res_bf = greenlight.scan(save=True)
+    assert _res_bf["rows"][0]["_goal_backfill"] is False and _res_bf["rows"][0]["goal"] == ""
+    assert "w1" not in greenlight.backfills_load()  # superseded backfill pruned
+
+    # BackfillChanged triggers retry, and fails after 2 retries
+    _orig_keep = greenlight.keep
+    _attempts = {"n": 0}
+    def _flaky_keep(res, expected_backfill_revision=greenlight.ANY_BACKFILL_REVISION):
+        _attempts["n"] += 1
+        if _attempts["n"] == 1:
+            raise greenlight.BackfillChanged()
+        return _orig_keep(res, expected_backfill_revision=expected_backfill_revision)
+    with _mock.patch.object(greenlight, "keep", side_effect=_flaky_keep):
+        greenlight.scan(save=True)
+    assert _attempts["n"] == 2
+print("hardening & backfill ok")

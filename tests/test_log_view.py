@@ -3,20 +3,16 @@ from __future__ import annotations
 
 import io
 import json
-import re
 import os
+import re
 import sys
-import tempfile
 import time
 from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "scripts"))
-os.environ.setdefault("GREENLIGHT_HOME", tempfile.mkdtemp(prefix="gl-logview-import-"))
-import diag  # noqa: E402
-import log_view  # noqa: E402
+import diag
+import log_view
 
 # Built at run time so this file's own text never looks like a secret, an address or a home folder to the publish audit
 HOME = "/" + "home"

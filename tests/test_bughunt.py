@@ -162,16 +162,14 @@ def test_fixtures_and_offline_stubs():
             if fx == "corrupt":
                 assert (home / "state" / "wt-ok.json").read_text() == "{truncated json"
             if fx == "chaos":
-                # Verify cyclic deterministic behavior of chaos orca stub: ok -> alt -> malformed -> exit 1 -> ok
-                orca = str(bindir / "orca")
-                r1 = subprocess.run([orca, "ps"], capture_output=True, text=True)
-                r2 = subprocess.run([orca, "ps"], capture_output=True, text=True)
-                r3 = subprocess.run([orca, "ps"], capture_output=True, text=True)
-                r4 = subprocess.run([orca, "ps"], capture_output=True, text=True)
-                assert r1.returncode == 0 and json.loads(r1.stdout)["ok"] is True
-                assert r2.returncode == 0 and any(w["displayName"] == "churn-ws" for w in json.loads(r2.stdout)["result"]["worktrees"])
-                assert r3.returncode == 0 and "{broken-json" in r3.stdout
-                assert r4.returncode == 1
+                # Dead orca stub is gone; glab/gh chaos stubs emit rate-limit 429 on cycle 3
+                assert not (bindir / "orca").exists()
+                glab = str(bindir / "glab")
+                r1 = subprocess.run([glab, "mr", "list"], capture_output=True, text=True)
+                r2 = subprocess.run([glab, "mr", "list"], capture_output=True, text=True)
+                r3 = subprocess.run([glab, "mr", "list"], capture_output=True, text=True)
+                assert r1.returncode == 0 and r2.returncode == 0
+                assert r3.returncode == 1 and "429" in r3.stderr
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -602,7 +600,7 @@ def test_remote_schedule_run_nightly_and_cli():
         subprocess.CompletedProcess([], 0, stdout="installed\n", stderr=""),
     ]) as ssh_m:
         assert bughunt.install_schedule(host="mac-mini", repo="~/greenlight", hour=3, minute=0, max_prs=2, with_vm=True) == 0
-        assert "cd ~/greenlight && python3 scripts/bughunt.py install --hour 3 --minute 0 --max-prs 2 --with-vm" in ssh_m.call_args_list[1][0][1]
+        assert "cd ~/greenlight && python3 scripts/bughunt.py install --host local --hour 3 --minute 0 --max-prs 2 --with-vm" in ssh_m.call_args_list[1][0][1]
 
     with mock.patch.object(bughunt, "_ssh_exec", return_value=subprocess.CompletedProcess([], 0, stdout="", stderr="")) as ssh_r:
         assert bughunt.run_remote("mac-mini", repo="~/greenlight", extra_args=["--dry-run"]) == 0
@@ -753,22 +751,18 @@ def test_uv_no_project_chaos_filter_and_commit_overlap():
     with mock.patch.object(bughunt.shutil, "which", return_value=None):
         assert bughunt._python_cmd() == [sys.executable]
 
-    # Chaos fixture ignores expected orca_cli JSONDecodeError/RuntimeError in dash, but keeps real bugs & non-chaos errors
+    # Chaos fixture ignores expected forge 429 rate_limit RuntimeError in dash/greenlight, but keeps real bugs & non-chaos errors
     tmp = Path(tempfile.mkdtemp(prefix="gl-chaos-diag-"))
     try:
         (tmp / "diag").mkdir()
         (tmp / "diag" / "events.jsonl").write_text(
             json.dumps({
-                "kind": "dash_error", "comp": "dash", "err": "JSONDecodeError", "msg_class": "parse",
-                "where": ["dash.py:610:snapshot", "greenlight.py:180:orca_cli"],
+                "kind": "dash_error", "comp": "dash", "err": "RuntimeError", "msg_class": "rate_limit",
+                "where": ["dash.py:610:snapshot", "greenlight.py:136:_run"],
             }) + "\n"
             + json.dumps({
-                "kind": "uncaught", "comp": "dash", "err": "RuntimeError", "msg_class": "other",
-                "where": ["dash.py:610:snapshot", "greenlight.py:180:orca_cli", "greenlight.py:136:_run"],
-            }) + "\n"
-            + json.dumps({
-                "kind": "uncaught", "comp": "greenlight", "err": "RuntimeError", "msg_class": "parse",
-                "where": ["greenlight.py:1147:scan", "greenlight.py:180:orca_cli", "greenlight.py:136:_run"],
+                "kind": "uncaught", "comp": "greenlight", "err": "RuntimeError", "msg_class": "rate_limit",
+                "where": ["greenlight.py:1147:scan", "greenlight.py:136:_run"],
             }) + "\n"
             + json.dumps({
                 "kind": "dash_error", "comp": "dash", "err": "KeyError", "msg_class": "other",
@@ -778,7 +772,7 @@ def test_uv_no_project_chaos_filter_and_commit_overlap():
         chaos_hits = bughunt._read_isolated_diag_errors(tmp, fixture="chaos")
         assert len(chaos_hits) == 1 and "KeyError" in chaos_hits[0]["summary"], chaos_hits
         default_hits = bughunt._read_isolated_diag_errors(tmp, fixture="default")
-        assert len(default_hits) == 4, default_hits
+        assert len(default_hits) == 3, default_hits
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -1023,47 +1017,92 @@ def test_upgrades_pull_playwright_stub_backend_fuzz_and_flows():
         shutil.rmtree(pw_tmp, ignore_errors=True)
 
 
-def main():
-    test_normalize_and_fingerprint()
-    print("ok  normalize & fingerprint")
-    test_rank_dedupe_and_top2_selection()
-    print("ok  priority ranking, dedupe & top-2 PR selection")
-    test_shrink_trace_ddmin()
-    print("ok  delta-debugging trace shrinker")
-    test_fixtures_and_offline_stubs()
-    print("ok  all 6 uitest fixtures & offline harness stubs")
-    test_perf_oracles()
-    print("ok  performance & leak oracles")
-    test_diag_reader_and_llm_parser()
-    print("ok  isolated diag reader & LLM JSON parser")
-    test_launchd_plist_and_report_and_trace_io()
-    print("ok  launchd plist, report writer & trace I/O")
-    test_verify_patch_requires_test_file()
-    print("ok  repro-first verification gate (single & multi-commit)")
-    test_remote_quoting_plist_escaping_and_pid_lock()
-    print("ok  remote path quoting, plist XML safety & atomic PID lock")
-    test_uitest_session_trace_and_methods()
-    print("ok  UITestSession trace recording & RPC wrappers")
-    test_github_dedupe_commits_and_baseline()
-    print("ok  GitHub dedupe, commit parsing & baseline runner")
-    test_oracles_fuzz_soak_replay_and_matrix()
-    print("ok  oracle polling, fuzzing, soak, replay & matrix")
-    test_agent_llm_vm_and_patcher_pipeline()
-    print("ok  agent fallback, LLM explorer, VM HID & Draft PR patcher")
-    test_remote_schedule_run_nightly_and_cli()
-    print("ok  remote Mac mini scheduling, run_nightly & CLI")
-    test_socket_eof_crash_excerpt_and_settle()
-    print("ok  socket EOF, mid-RPC crash settle & top-frame crash excerpt")
-    test_uv_no_project_chaos_filter_and_commit_overlap()
-    print("ok  uv --no-project, chaos orca filter & commit overlap scoring")
-    test_track_b_blocked_detection_permissions_and_report()
-    print("ok  Track B scoped permissions, blocked detection & report status")
-    test_verification_gates_and_nightly_fault_isolation()
-    print("ok  app/ verification gates & nightly track fault isolation")
-    test_upgrades_pull_playwright_stub_backend_fuzz_and_flows()
-    print("ok  all 6 bug-hunter upgrades (--pull, oracles, stub, backend fuzz, Track B, WebKit)")
-    print("all test_bughunt checks passed")
+def test_sec7_and_infra_hardening_regressions(tmp_path):
+    # SEC-7: _ssh_exec rejects leading-dash host and inserts -- before host
+    for bad_host in ("", "-oProxyCommand=evil", "--bad"):
+        try:
+            bughunt._ssh_exec(bad_host, "true")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"_ssh_exec accepted unsafe host: {bad_host!r}")
+    with mock.patch.object(bughunt.subprocess, "run", return_value=subprocess.CompletedProcess(["ssh"], 0, stdout="", stderr="")) as m_ssh:
+        bughunt._ssh_exec("macmini", "uname -s")
+    cmd = m_ssh.call_args.args[0]
+    assert cmd[cmd.index("--") + 1] == "macmini"
 
+    # SEC-7: _pull_repo_if_clean rejects leading-dash branch and passes -- + refs/heads/<branch>
+    assert bughunt._pull_repo_if_clean(tmp_path, "origin/--upload-pack=evil") == "pull_failed"
+    with mock.patch.object(bughunt.subprocess, "run", side_effect=[
+        subprocess.CompletedProcess([], 0, stdout="main\n", stderr=""),
+        subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+        subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+    ]) as m_pull:
+        assert bughunt._pull_repo_if_clean(tmp_path, "origin/main") == "pulled"
+    assert m_pull.call_args_list[-1].args[0][-3:] == ["--", "origin", "refs/heads/main"]
 
-if __name__ == "__main__":
-    main()
+    # BUG-INFRA-7: _acquire_pid_lock reclaims pid <= 0 / corrupt / dead, treats PermissionError as active
+    lock = tmp_path / "run.pid"
+    for bad_pid in ("0", "-1", "corrupt"):
+        lock.write_text(bad_pid)
+        assert bughunt._acquire_pid_lock(lock) is True
+        assert int(lock.read_text()) == os.getpid()
+        lock.unlink()
+    lock.write_text("424242")
+    with mock.patch.object(bughunt.os, "kill", side_effect=PermissionError("EPERM")):
+        assert bughunt._acquire_pid_lock(lock) is False
+    assert lock.exists()
+    with mock.patch.object(bughunt.os, "kill", side_effect=ProcessLookupError("ESRCH")):
+        assert bughunt._acquire_pid_lock(lock) is True
+    lock.unlink()
+
+    # BUG-INFRA-8: remote install_schedule passes --host local so remote GREENLIGHT_HOST never recurses
+    ssh_cmds = []
+    def fake_ssh(host, remote_cmd, stream=False):
+        ssh_cmds.append((host, remote_cmd, stream))
+        return subprocess.CompletedProcess(["ssh"], 0, stdout="Darwin\n", stderr="")
+    with mock.patch.object(bughunt, "_ssh_exec", side_effect=fake_ssh):
+        assert bughunt.install_schedule(host="macmini", repo="~/gl", hour=3, minute=15, max_prs=1) == 0
+    assert "--host local" in ssh_cmds[1][1]
+
+    # BUG-INFRA-9: git add -A failure in patch_and_open_draft_pr sets status="failed" instead of crashing
+    finding = bughunt.make_finding(
+        oracle="js_error", track="fuzz", fixture="default",
+        title="Sample error", summary="boom", details="stack", where="app/dashboard.html", reproducible=True,
+    )
+    finding["priority"] = 90
+    def fake_patch_run(cmd, **kw):
+        if "worktree" in cmd and "add" in cmd:
+            Path(cmd[-2]).mkdir(parents=True, exist_ok=True)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if "status" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=" M a.py\n", stderr="")
+        if "add" in cmd and "-A" in cmd:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="index.lock exists")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    with (
+        mock.patch.object(bughunt.subprocess, "run", side_effect=fake_patch_run),
+        mock.patch.object(bughunt, "run_agent_with_fallback", return_value=("ok", 0, "claude")),
+    ):
+        res = bughunt.patch_and_open_draft_pr(finding, repo_dir=tmp_path, base_ref="HEAD", run_dir=tmp_path, dry_run=False)
+    assert res["status"] == "failed" and "git add failed" in res["note"]
+
+    # BUG-INFRA-9 + SEC-7: run_nightly suppresses git fetch TimeoutExpired and skips leading-dash base branch
+    with (
+        mock.patch.object(bughunt.subprocess, "run", side_effect=subprocess.TimeoutExpired(["git"], 30)),
+        mock.patch.object(bughunt, "run_baseline", return_value=[]),
+        mock.patch.object(bughunt, "run_backend_fuzz", return_value=[]),
+        mock.patch.object(bughunt, "run_fuzz_matrix", return_value=([], {})),
+        mock.patch.object(bughunt, "run_llm_explorer", return_value=[]),
+        mock.patch.object(bughunt, "fetch_open_pr_fingerprints", return_value=set()),
+        mock.patch.object(bughunt, "get_recent_commits", return_value=([], set())),
+        mock.patch.object(bughunt.sys, "argv", ["bughunt.py", "run", "--dry-run", "--skip-llm", "--base", "origin/main", "--fixtures", "default"]),
+    ):
+        assert bughunt.main() == 0
+
+    # BUG-INFRA-10: _check_tmux_leak suppresses missing/timed-out tmux
+    with mock.patch.object(bughunt.subprocess, "run", side_effect=FileNotFoundError("tmux")):
+        assert bughunt._check_tmux_leak("gl-test", "default") == []
+    with mock.patch.object(bughunt.subprocess, "run", side_effect=subprocess.TimeoutExpired(["tmux"], 5)):
+        assert bughunt._check_tmux_leak("gl-test", "default") == []
+

@@ -356,7 +356,7 @@ final class Core: ObservableObject {
     @Published var levels = [Float](repeating: 0, count: 28)  // recent mic levels 0...1, newest last
     @Published var settingsOpen = false
     @Published var settingsTab = "General"
-    // (Settings' own light/dark toggle is gone: appearance is one setting for every window, §2.2.)  // Settings' own light or dark; the rest of the app keeps its themes
+    // Settings' own light/dark toggle is gone: appearance is one setting for every window (§2.2).
     @Published var settingsRepo = ""  // the hover card's "Edit <repo>'s prompt…": Repositories opens on it
     @Published var orbsHidden = ud.bool(forKey: "orbsHidden") { didSet { ud.set(orbsHidden, forKey: "orbsHidden") } }
     @Published var termOpens = ud.string(forKey: "termOpens") ?? "pipe" { didSet { ud.set(termOpens, forKey: "termOpens") } }  // the app opens to: greenlight | basement | pipe (New windows: the Pipe)
@@ -782,7 +782,8 @@ final class Core: ObservableObject {
         recording = nil
         levels = levels.map { _ in 0 }
         transcribing = true
-        transcribe(voiceFile, engine: engine) { text, err in DispatchQueue.main.async {
+        transcribe(voiceFile, engine: engine) { [weak self] text, err in DispatchQueue.main.async {
+            guard let self else { return }
             self.transcribing = false
             if let text, !text.isEmpty {
                 self.input += (self.input.isEmpty ? "" : " ") + text
@@ -1029,7 +1030,7 @@ final class Core: ObservableObject {
         picks += 1; light([], false)  // nor lit anything
         if voice.on { voice.wait("Listening", note) }
         questions.removeAll { !$0.ping && $0.answer == nil }  // their conversation is gone
-        context = 0; window = 0; run?.meterStale = true  // the next harness reports its own window
+        context = 0; window = 0  // the next harness reports its own window
     }
 
     private func sendNew(on targetHost: String) {

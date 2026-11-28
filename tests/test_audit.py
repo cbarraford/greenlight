@@ -1164,4 +1164,163 @@ assert all(diag.TOKEN.fullmatch(t) for _, t in audit.BLOCK_REASONS) and "reason"
 inner = io.StringIO(); tee = audit._Tee(inner)
 assert tee.write("BLOCKED NoScopeCreep (diff_matches_goal, p=0.90, jev): x\n") > 0
 tee.flush(); assert inner.getvalue() == tee.buf.getvalue() and audit.block_reason(tee.buf.getvalue()) == "NoScopeCreep"
+
+# ---- SEC-6: checked-merge dispatches before global flag stripping (untrusted target_branch cannot shift args)
+with mock.patch.object(audit, "checked_merge", return_value=0) as cm_mock:
+    assert audit.main([
+        "checked-merge", "github", "o/x", "23", "--execute", "abc123", "base1",
+        "gh", "pr", "merge", "23", "-R", "o/x", "--merge",
+    ]) == 0
+    assert cm_mock.call_args.args == (
+        "github", "o/x", "23", "--execute", "abc123", "base1",
+        ["gh", "pr", "merge", "23", "-R", "o/x", "--merge"],
+    )
+with contextlib.redirect_stdout(io.StringIO()):
+    assert audit.main(["checked-merge", "github", "o/x"]) == 2
+
+# ---- BUG-INFRA-13: audit review handles OSError/TimeoutExpired cleanly and logs op="review"
+with mock.patch.object(audit.subprocess, "run", side_effect=subprocess.TimeoutExpired(["ruff"], 60)):
+    code, out = cli("review", "--path", str(Path(__file__).resolve().parent.parent), "--deterministic-only")
+    assert code == 3 and "TimeoutExpired" in out, (code, out)
+with mock.patch.object(audit.subprocess, "run", side_effect=PermissionError("no exec")):
+    code, out = cli("review", "--path", str(Path(__file__).resolve().parent.parent), "--deterministic-only")
+    assert code == 3 and "PermissionError" in out, (code, out)
+assert '"review"' in Path(audit.__file__).read_text()
+
+# ---- TEST-ADD-6: comment_diff, post_reply, and post_review_comment uncovered branches
+big_hunk = "".join(f"+line_{i}\n" for i in range(1, 55))
+big_diff = (
+    "diff --git a/old.py b/new.py\n--- a/old.py\n+++ b/new.py\n@@ -1,4 +1,54 @@\n"
+    "-old_1\n-old_2\n context_3\n" + big_hunk
+)
+assert audit.comment_diff(big_diff, path=None, limit=40).endswith("more chars elided)")
+assert "old_1" in audit.comment_diff(big_diff, path="old.py", line=1, limit=200, side="LEFT")
+assert "+line_30" in audit.comment_diff(big_diff, path="new.py", line=31, limit=400, side="RIGHT")
+assert audit.comment_diff(big_diff, path="new.py", line="not-an-int", limit=120).endswith("more chars elided)")
+assert audit.comment_diff(big_diff, path="missing.py", line=1, limit=60).endswith("more chars elided)")
+
+# post_reply error branches (drift before post, GitHub error/resolve fail, GitLab error/drift/resolve fail, bad forge)
+with mock.patch.object(audit, "live_thread_snapshot", return_value={"text": "Changed", "ids": ["N0"]}):
+    try:
+        audit.post_reply("o/x", 23, "github", "T-drift", "reply", "Original")
+    except RuntimeError as e:
+        assert "changed before reply" in str(e)
+    else:
+        raise AssertionError("changed thread must fail")
+
+with mock.patch.object(audit, "live_thread_snapshot", side_effect=[
+    {"text": "Orig", "ids": ["N0"]}, {"text": "Orig\n\nRep", "ids": ["N0", "N1"]},
+]), mock.patch.object(audit, "_run", side_effect=[
+    json.dumps({"data": {"addPullRequestReviewThreadReply": {"comment": {"id": "N1"}}}}),
+    json.dumps({"data": {"resolveReviewThread": {"thread": {"id": "T-res", "isResolved": False}}}}),
+]):
+    try:
+        audit.post_reply("o/x", 23, "github", "T-res", "Rep", "Orig")
+    except RuntimeError as e:
+        assert "thread resolution" in str(e)
+    else:
+        raise AssertionError("unconfirmed GitHub resolve must fail")
+
+with mock.patch.object(audit, "live_thread_snapshot", return_value={"text": "Orig", "ids": ["1"]}), \
+        mock.patch.object(audit, "_run", return_value=json.dumps({"id": None})):
+    try:
+        audit.post_reply("o/x", 23, "gitlab", "gl-unconf", "Rep", "Orig")
+    except RuntimeError as e:
+        assert "did not confirm" in str(e)
+    else:
+        raise AssertionError("unconfirmed GitLab reply must fail")
+
+with mock.patch.object(audit, "live_thread_snapshot", side_effect=[
+    {"text": "Orig", "ids": ["1"]}, {"text": "Orig\n\nExtra\n\nRep", "ids": ["1", "2", "3"]},
+]), mock.patch.object(audit, "_run", return_value=json.dumps({"id": 3, "body": "Rep"})):
+    try:
+        audit.post_reply("o/x", 23, "gitlab", "gl-newfb", "Rep", "Orig")
+    except RuntimeError as e:
+        assert "new reviewer feedback" in str(e)
+    else:
+        raise AssertionError("GitLab concurrent feedback must leave unresolved")
+
+with mock.patch.object(audit, "live_thread_snapshot", side_effect=[
+    {"text": "Orig", "ids": ["1"]}, {"text": "Orig\n\nRep", "ids": ["1", "3"]},
+]), mock.patch.object(audit, "_run", side_effect=[
+    json.dumps({"id": 3, "body": "Rep"}),
+    json.dumps({"id": "gl-resfail", "notes": [{"resolved": False}]}),
+]):
+    try:
+        audit.post_reply("o/x", 23, "gitlab", "gl-resfail", "Rep", "Orig")
+    except RuntimeError as e:
+        assert "discussion resolution" in str(e)
+    else:
+        raise AssertionError("unconfirmed GitLab resolve must fail")
+
+with mock.patch.object(audit, "live_thread_snapshot", return_value={"text": "Orig", "ids": ["1"]}):
+    try:
+        audit.post_reply("o/x", 23, "bitbucket", "bb-1", "Rep", "Orig")
+    except ValueError as e:
+        assert "unsupported forge" in str(e)
+    else:
+        raise AssertionError("unsupported forge must raise ValueError")
+
+# post_review_comment validation, file/issue-level GitHub, GitLab diff_refs/confirm errors, bad forge
+for bad_args, err_cls, needle in (
+    (("github", {"body": "x", "path": "app.py", "line": 1, "side": "CENTER"}), ValueError, "LEFT or RIGHT"),
+    (("github", {"body": "x", "line": 1}), ValueError, "needs a path"),
+    (("gitlab", {"body": "x", "path": "app.py"}), ValueError, "need a line"),
+):
+    try:
+        audit.post_review_comment("o/x", 23, bad_args[0], "abc", bad_args[1])
+    except err_cls as e:
+        assert needle in str(e), e
+    else:
+        raise AssertionError(f"expected {err_cls} for {bad_args}")
+
+with mock.patch.object(audit, "_run", return_value=json.dumps({"id": 101, "body": "Issue-level note"})) as ran:
+    assert audit.post_review_comment("o/x", 23, "github", "abc", {"body": "Issue-level note"}) == "101"
+    assert "issues/23/comments" in ran.call_args.args[0][4]
+
+with mock.patch.object(audit, "_run", return_value=json.dumps({"id": 102, "body": "File-level note", "path": "app.py", "commit_id": "abc"})) as ran:
+    assert audit.post_review_comment("o/x", 23, "github", "abc", {"body": "File-level note", "path": "app.py"}) == "102"
+    assert "subject_type=file" in ran.call_args.args[0]
+
+with mock.patch.object(audit, "_run", return_value=json.dumps({"id": None})):
+    try:
+        audit.post_review_comment("o/x", 23, "github", "abc", {"body": "Unconfirmed GH"})
+    except RuntimeError as e:
+        assert "did not confirm" in str(e)
+    else:
+        raise AssertionError("unconfirmed GitHub comment must fail")
+    # Second attempt with leftover .pending marker refuses to double-post
+    try:
+        audit.post_review_comment("o/x", 23, "github", "abc", {"body": "Unconfirmed GH"})
+    except RuntimeError as e:
+        assert "may have posted" in str(e)
+    else:
+        raise AssertionError("pending marker must block retry")
+
+with mock.patch.object(audit, "forge_diff", return_value=DIFF), \
+        mock.patch.object(audit, "_run", return_value=json.dumps({"sha": "other", "diff_refs": {}})):
+    try:
+        audit.post_review_comment("o/x", 23, "gitlab", "abc", {"body": "Stale refs", "path": "app.py", "line": 1})
+    except RuntimeError as e:
+        assert "diff refs changed" in str(e)
+    else:
+        raise AssertionError("stale GitLab diff_refs must fail")
+
+with mock.patch.object(audit, "forge_diff", return_value=DIFF), mock.patch.object(audit, "_run", side_effect=[
+    json.dumps({"sha": "abc", "diff_refs": {"base_sha": "b", "start_sha": "s", "head_sha": "abc"}}),
+    json.dumps({"id": "D-bad", "notes": []}),
+]):
+    try:
+        audit.post_review_comment("o/x", 23, "gitlab", "abc", {"body": "Unconfirmed GL", "path": "app.py", "line": 1})
+    except RuntimeError as e:
+        assert "did not confirm" in str(e)
+    else:
+        raise AssertionError("unconfirmed GitLab discussion must fail")
+
+try:
+    audit.post_review_comment("o/x", 23, "bitbucket", "abc", {"body": "Unsupported"})
+except ValueError as e:
+    assert "unsupported forge" in str(e)
+else:
+    raise AssertionError("unsupported forge must raise ValueError")
 print("unstick ok")

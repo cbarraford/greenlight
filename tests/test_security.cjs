@@ -103,13 +103,29 @@ const XSS_URL = 'javascript:window.__pwned=6';
         wsMenu({clientX: 10, clientY: 10}, "/w/xss", w);
         term.tree({op: "info", path: "/w/xss", dirty: img, unpushed: scr, error: img, teardown: img});
         ask({icon: "warn", title: img, text: esc(img), rows: [["r", img, img]], cancel: "No", ok: "Yes"});
-        return {ansiDel: ansi("hi\x7fthere\x03"), escQuote: esc("a'b")};
+        return {
+          ansiDel: ansi("hi\x7fthere\x03"),
+          escQuote: esc("a'b"),
+          claudeFlag: agentCmd("claude", "--dangerously-skip-permissions"),
+          codexFlag: agentCmd("codex", "-c approval_policy=never"),
+          piFlag: agentCmd("pi", "--evil"),
+          agyFlag: agentCmd("agy", "-x"),
+          opencodeFlag: agentCmd("opencode", "--bad"),
+          claudeEmpty: agentCmd("claude", ""),
+        };
       }, {img: XSS_IMG, scr: XSS_SCRIPT, attr: XSS_ATTR, url: XSS_URL});
       await page.waitForTimeout(150);
       assert.equal(await page.evaluate(() => window.__pwned), undefined, "terminal.html executed injected XSS!");
       assert.equal(await page.locator('img[src="x"], img[src^="javascript:"]').count(), 0, "terminal.html rendered injected <img>");
       assert.ok(!secChecks.ansiDel.includes("\x7f") && secChecks.ansiDel.includes("\\x7f") && secChecks.ansiDel.includes("\\x03"), "ansi() failed to escape DEL/control chars: " + secChecks.ansiDel);
       assert.ok(!secChecks.escQuote.includes("'"), "esc() failed to escape single quotes");
+      // SEC-4: leading-`-` prompts must be separated by `--` for claude, codex, and pi so flags cannot be injected
+      assert.equal(secChecks.claudeFlag, "claude -- $'--dangerously-skip-permissions'", "claude agentCmd missing -- separator");
+      assert.equal(secChecks.codexFlag, "codex -- $'-c approval_policy=never'", "codex agentCmd missing -- separator");
+      assert.equal(secChecks.piFlag, "pi -- $'--evil'", "pi agentCmd missing -- separator");
+      assert.equal(secChecks.agyFlag, "agy -i $'-x'", "agy agentCmd uses -i");
+      assert.equal(secChecks.opencodeFlag, "opencode --prompt $'--bad'", "opencode agentCmd uses --prompt");
+      assert.equal(secChecks.claudeEmpty, "claude", "empty prompt returns bare agent name");
       assert.deepEqual(errs, [], "terminal.html page errors: " + errs.join("; "));
       await page.close();
       console.log(`ok  terminal.html adversarial XSS & CSP (${ENGINE})`);

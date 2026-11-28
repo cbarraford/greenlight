@@ -49,7 +49,7 @@ def _split_shell_segments(cmd):
 
 
 def _strip_env_wrappers(seg):
-    """Strip leading env assignments and wrapper commands (env, command, sudo) before checking for `git`."""
+    """Strip leading env assignments and wrapper commands (env, command, nohup, time) before checking for `git`."""
     i = 0
     while i < len(seg):
         tok = seg[i]
@@ -162,7 +162,7 @@ def _fast_lint(cwd):
         if code != 0:
             errs.append(f"check_safety failed:\n{out[:600]}")
     if shutil.which("shellcheck"):
-        sh_candidates = [cwd / "app" / "build.sh", *sorted((cwd / "scripts").glob("*.sh")),
+        sh_candidates = [*sorted((cwd / "app").glob("*.sh")), *sorted((cwd / "scripts").glob("*.sh")),
                          cwd / ".githooks" / "pre-commit", cwd / ".githooks" / "pre-push"]
         sh_files = [str(p) for p in sh_candidates if p.is_file()]
         if sh_files:

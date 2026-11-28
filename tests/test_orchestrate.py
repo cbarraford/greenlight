@@ -84,7 +84,7 @@ assert c["touched_files"] == ["b.py", "c.py"], c["touched_files"]  # the branch'
 assert c["current_hypothesis"] == "I think the flake is the cache key." and c["open_risks"] == ["CI failed: unit"], c
 assert c["decisions_made"] == ["Keep it a draft? → no, ship it"], c["decisions_made"]  # only this workspace's answers
 assert not ws_state.answered([{"worktree_id": "id-feat", "mr": "#1", "target_branch": "main", "question": "Merge?", "answer": "yes", "answered": 5}],
-                             row("feat", mrx={"target_branch": "release"}), "feat")  # same head, different merge target
+                             row("feat", mrx={"target_branch": "release"}))  # same head, different merge target
 assert c["goal_contract"] == "Merge #1 — done when #1 merges"
 assert "done when #1 merges" in ws_state.contract(row("manual"))
 title_hold = row("title-hold", goal="Merge #1: Hold inbound transactions", mrx={"title": "Hold inbound transactions"})
@@ -168,15 +168,15 @@ assert orchestrate.plan([missing_row], {"ci-state": ws_state.load("ci-state")})[
 ws_state.observe(row("ci-state", mr=False, step="freeform"), recs=[])
 assert ws_state.load("ci-state")["last_stage"].endswith("freeform/agent")  # confirmed absence may advance
 legacy = {"workspace": "ci-state", "repo": "octo/app", "mr": "#1", "question": "Keep draft?", "answer": "yes"}
-assert not ws_state.answered([legacy], ci_state, "ci-state")  # name-only history cannot prove worktree ownership
-assert not ws_state.answered([legacy], row("ci-state", mrx={"ref": "#2"}), "ci-state")
+assert not ws_state.answered([legacy], ci_state)  # name-only history cannot prove worktree ownership
+assert not ws_state.answered([legacy], row("ci-state", mrx={"ref": "#2"}))
 legacy_multi = {"workspaces": [legacy], "question": "Keep draft?", "answer": "yes"}
-assert not ws_state.answered([legacy_multi], ci_state, "ci-state")
+assert not ws_state.answered([legacy_multi], ci_state)
 identified_old_mr = {"worktree_id": ci_state["id"], "mr": "#1", "question": "Ship #1?", "answer": "yes"}
-assert not ws_state.answered([identified_old_mr], row("ci-state", mrx={"ref": "#2"}), "ci-state")
-assert not ws_state.answered([{"worktree_id": ci_state["id"], "mr": None, "answer": "yes"}], ci_state, "ci-state")
+assert not ws_state.answered([identified_old_mr], row("ci-state", mrx={"ref": "#2"}))
+assert not ws_state.answered([{"worktree_id": ci_state["id"], "mr": None, "answer": "yes"}], ci_state)
 freeform_legacy = {"workspace": "free", "repo": "octo/app", "mr": None, "step": "freeform", "question": "Proceed?", "answer": "yes"}
-assert not ws_state.answered([freeform_legacy], row("free", mr=False, step="freeform"), "free")
+assert not ws_state.answered([freeform_legacy], row("free", mr=False, step="freeform"))
 old_sha = row("sha-state")
 ws_state.observe(old_sha)
 sha_card = ws_state.load("sha-state"); sha_card["forks"] = {"ci_green@abc": {"choice": "ask the user", "done": True}}; ws_state.save(sha_card)
@@ -244,8 +244,8 @@ ws_state.observe(free_a, recs=[])
 assert "CI only" in ws_state.load("goal-swap")["decisions_made"]
 branch_answer = {"worktree_id": free_a["id"], "repo": free_a["project"], "mr": None, "branch": free_a["branch"],
                  "goal": free_a["goal"], "question": "Use staging?", "answer": "yes"}
-assert ws_state.answered([branch_answer], free_a, "goal-swap")
-assert not ws_state.answered([branch_answer], other_branch, "goal-swap")
+assert ws_state.answered([branch_answer], free_a)
+assert not ws_state.answered([branch_answer], other_branch)
 ws_state.observe(row("goal-swap", goal="Merge #3: new task", mrx={"iid": 3, "ref": "#3"}), recs=[])
 assert "CI only" not in ws_state.load("goal-swap")["decisions_made"]
 ws_state.observe(free_a, recs=[])
@@ -264,7 +264,7 @@ except RuntimeError as e:
 (HOME / "last.json").write_text(json.dumps({"scan_id": "current-scan", "rows": [fresh_scan]}))
 ws_state.observe(fresh_scan)  # interrupted publication of the newer marker leaves the complete snapshot usable
 docs_answer = {"worktree_id": free_a["id"], "mr": None, "goal": "Write docs", "question": "Docs first?", "answer": "yes", "answered": int(time.time())}
-assert not ws_state.answered([docs_answer], free_a, "goal-swap", allow_untagged=False)
+assert not ws_state.answered([docs_answer], free_a, allow_untagged=False)
 archive_a = row("archive")
 ws_state.observe(archive_a); ws_state.update("archive", decision="PR1 only", failed="PR1 failed fix")
 ws_state.observe(row("archive", mrx={"iid": 2, "ref": "#2"}), recs=[])
@@ -366,7 +366,7 @@ ws_state.observe(old); ws_state.update("reused", failed="old worktree only")
 new = row("reused", mr=False); new["id"] = "new-id"
 fresh, _ = orchestrate.phase_cards([new])
 assert new["card"] != "reused" and "old worktree only" not in fresh[new["card"]]["failed_approaches"]
-assert not ws_state.answered([{"workspace": "reused", "question": "Old tree?", "answer": "yes"}], new, new["card"])
+assert not ws_state.answered([{"workspace": "reused", "question": "Old tree?", "answer": "yes"}], new)
 assert ws_state.load("reused")["id"] == "old-id"
 (HOME / "last.json").write_text(json.dumps({"rows": [new]}))
 assert ws_state.current_key("reused") == new["card"]  # manual brief follows the current worktree
@@ -1359,4 +1359,62 @@ dash.board = fake_board("")
 assert "no workspaces in this window" in chat.board_note("what next?", "claude:known")
 del os.environ["GREENLIGHT_ONLY"]
 print("chat ok")
+
+# --- SEC-8, SEC-11, and TEST-ADD-1 (guard_merge & _rereview_live_ready TOCTOU/error/peer branches) ---
+import stat as _stat
+_diag_events = []
+with mock.patch.object(orchestrate.diag, "event", side_effect=lambda *a, **kw: _diag_events.append((a, kw))):
+    orchestrate.log({"ws": "w1", "mr": "#1", "did": "dispatched claude", "step": "ci_green", "ok": True})
+    orchestrate.log({"ws": "w1", "mr": "#1", "did": "dispatched claude", "step": "secret_internal_stage", "ok": True})
+assert _diag_events[0][1]["step"] == "ci_green" and _diag_events[0][1]["step_h"] is None
+assert _diag_events[1][1]["step"] == "custom" and _diag_events[1][1]["step_h"] == orchestrate.diag.h("secret_internal_stage")
+assert _stat.S_IMODE(orchestrate.LOG.stat().st_mode) == 0o600
+
+# TEST-ADD-1: guard_merge TOCTOU/error/drift/peer branches
+_gm_cmd = ["gh", "pr", "merge", "1", "-R", "octo/app", "--squash"]
+_gm_row = row("gm", step="merge", owner="greenlight", comment="Merge #1: gm")
+assert orchestrate.guard_merge(row("gm-nosha", step="merge", mrx={"sha": ""}), _gm_cmd)[0] is None
+with mock.patch.object(orchestrate, "live_worktree", side_effect=RuntimeError("orca down")):
+    assert "couldn't re-read" in orchestrate.guard_merge(_gm_row, _gm_cmd)[1]
+with mock.patch.object(orchestrate, "live_worktree", return_value=None):
+    assert "gone" in orchestrate.guard_merge(_gm_row, _gm_cmd)[1]
+with mock.patch.object(orchestrate, "live_worktree", return_value={"branch": "refs/heads/other", "linkedPR": 1, "comment": "Merge #1: gm"}):
+    assert "branch or linked request changed" in orchestrate.guard_merge(_gm_row, _gm_cmd)[1]
+with mock.patch.object(orchestrate, "live_worktree", return_value={"branch": "refs/heads/gm", "linkedPR": 1, "comment": "Merge #1: gm (hold)"}):
+    assert "hold" in orchestrate.guard_merge(_gm_row, _gm_cmd)[1]
+with mock.patch.object(orchestrate, "live_worktree", return_value={"branch": "refs/heads/gm", "linkedPR": 1, "comment": "Changed goal"}):
+    assert "goal changed" in orchestrate.guard_merge(_gm_row, _gm_cmd)[1]
+_gm_peer = row("gm-peer", step="merge", owner="greenlight", comment="Merge #1: gm")
+def _peer_err(target, _snap=None):
+    if target["id"] == _gm_peer["id"]:
+        raise RuntimeError("peer lookup failed")
+    return {"branch": "refs/heads/gm", "linkedPR": 1, "comment": "Merge #1: gm", "agents": []}
+with mock.patch.object(orchestrate, "live_worktree", side_effect=_peer_err):
+    assert "couldn't re-read merge goal" in orchestrate.guard_merge(_gm_row, _gm_cmd, peers=[_gm_row, _gm_peer])[1]
+
+# TEST-ADD-1: _rereview_live_ready TOCTOU/error/peer branches
+_rr = row("rr-main", comment="Merge #1: rr-main")
+_rr["card"] = "rr-main"
+_rr_peer = row("rr-peer", comment="Merge #1: rr-peer")
+_rr_peer["card"] = "rr-peer"
+with mock.patch.object(orchestrate, "live_worktree", side_effect=RuntimeError("ws boom")):
+    assert "couldn't re-read workspace" in orchestrate._rereview_live_ready(_rr, ())
+with mock.patch.object(orchestrate, "live_worktree", return_value={"branch": "refs/heads/changed", "linkedPR": 1, "comment": "Merge #1: rr-main"}):
+    assert "changed" in orchestrate._rereview_live_ready(_rr, ())
+_rr_live_ok = {"branch": "refs/heads/rr-main", "linkedPR": 1, "comment": "Merge #1: rr-main", "agents": []}
+with mock.patch.object(orchestrate, "live_worktree", return_value={**_rr_live_ok, "agents": [{"state": "working"}]}):
+    assert "agent started" in orchestrate._rereview_live_ready(_rr, ())
+with mock.patch.object(orchestrate, "live_worktree", return_value=_rr_live_ok), \
+     mock.patch.object(orchestrate, "current_mr_state", side_effect=RuntimeError("forge 502")):
+    assert "couldn't re-read MR state" in orchestrate._rereview_live_ready(_rr, ())
+with mock.patch.object(orchestrate, "live_worktree", side_effect=lambda x: _rr_live_ok if x["id"] == _rr["id"] else (_ for _ in ()).throw(RuntimeError("peer down"))):
+    assert "couldn't recheck linked workspace" in orchestrate._rereview_live_ready(_rr, [_rr, _rr_peer])
+with mock.patch.object(orchestrate, "live_worktree", side_effect=lambda x: _rr_live_ok if x["id"] == _rr["id"] else {"agents": [{"state": "working"}]}):
+    assert "active agent" in orchestrate._rereview_live_ready(_rr, [_rr, _rr_peer])
+ws_state.save(ws_state.blank("rr-peer") | {"dispatches": [{"pending": True}]})
+with mock.patch.object(orchestrate, "live_worktree", side_effect=lambda x: _rr_live_ok if x["id"] == _rr["id"] else {"agents": []}):
+    assert "pending launch" in orchestrate._rereview_live_ready(_rr, [_rr, _rr_peer])
+ws_state.save(ws_state.blank("rr-peer") | {"dispatches": []})
+with mock.patch.object(orchestrate, "live_worktree", side_effect=lambda x: _rr_live_ok if x["id"] == _rr["id"] else {"agents": []}):
+    assert orchestrate._rereview_live_ready(_rr, [_rr, _rr_peer]) is None
 print("test_orchestrate ok")

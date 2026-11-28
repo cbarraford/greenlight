@@ -280,3 +280,152 @@ def test_github_review_pr_states_and_mr_numbers(gl_home):
     with mock.patch.object(cleanup, "run", side_effect=fake_run):
         assert [(m["label"], m["state"]) for m in r.mrs(None, [7, 8])] == [("#8", "open"), ("#7", "approved by me")]
     assert cleanup.mr_numbers({"comment": "Review #7: x"}, "mr-7", r) == [7]
+
+
+def test_repo_init_forges_and_errors(gl_home):
+    # TEST-ADD-4: Repo.__init__ SSH GitLab, HTTPS GitHub, missing origin/HEAD -> set-head, unsupported forge, git error
+    def mk_run(url, head_seq=("origin/develop",), fail_fetch=False):
+        heads = iter(head_seq)
+
+        def fake_run(cmd, **_kw):
+            if "get-url" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, url + "\n", "")
+            if "fetch" in cmd:
+                if fail_fetch:
+                    raise RuntimeError("offline")
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            if "symbolic-ref" in cmd:
+                val = next(heads, "")
+                if not val and _kw.get("check", True):
+                    raise RuntimeError("no origin/HEAD")
+                return subprocess.CompletedProcess(cmd, 0 if val else 1, val + "\n" if val else "", "")
+            if "set-head" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        return fake_run
+
+    with mock.patch.object(cleanup, "run", side_effect=mk_run("git" + "@gitlab.com:acme/widgets.git")):
+        r = cleanup.Repo("/r")
+    assert r.error is None and (r.host, r.project, r.default, r.base) == ("gitlab.com", "acme/widgets", "develop", "origin/develop")
+
+    with mock.patch.object(cleanup, "run", side_effect=mk_run("https://github.com/octo/app.git", head_seq=("", "origin/main"))):
+        r = cleanup.Repo("/r")
+    assert r.error is None and (r.host, r.project, r.default) == ("github.com", "octo/app", "main")
+
+    with mock.patch.object(cleanup, "run", side_effect=mk_run("https://bitbucket.org/a/b.git")):
+        r = cleanup.Repo("/r")
+    assert r.error == "unsupported forge bitbucket.org"
+
+    with mock.patch.object(cleanup, "run", side_effect=mk_run("git" + "@gitlab.com:a/b.git", fail_fetch=True)):
+        r = cleanup.Repo("/r")
+    assert r.error == "offline"
+
+
+def test_scan_log_and_cli_toctou_fail_closed(gl_home, tmp_path, monkeypatch, capsys):
+    import stat
+    import sys
+    import time
+    from pathlib import Path
+
+    import pytest
+
+    # 1. scan() + log() with 0600 permissions
+    wt_dir = tmp_path / "wt1"
+    wt_dir.mkdir()
+
+    def fake_orca_scan(*args):
+        if args[:2] == ("worktree", "list"):
+            return {"worktrees": [
+                {"id": "w-main", "repoId": "r1", "path": str(tmp_path / "main"), "isMainWorktree": True, "branch": "main"},
+                {"id": "w1", "repoId": "r1", "path": str(wt_dir), "isMainWorktree": False, "branch": "refs/heads/feat-1", "displayName": "feat-1"},
+                {"id": "w-unk", "repoId": "r-missing", "path": str(tmp_path / "none"), "isMainWorktree": False, "branch": "x"},
+            ]}
+        if args[:2] == ("terminal", "list"):
+            return {"terminals": [{"worktreeId": "w-main", "lastOutputAt": time.time() * 1000}]}
+        if args[:2] == ("repo", "list"):
+            return {"repos": [{"id": "r1", "path": str(tmp_path / "main")}]}
+        return {}
+
+    with (
+        mock.patch.object(cleanup, "orca", side_effect=fake_orca_scan),
+        mock.patch.object(cleanup, "Repo", lambda path: mock.MagicMock(path=path)),
+        mock.patch.object(cleanup, "git", lambda *_a, **_kw: "abc123"),
+        mock.patch.object(cleanup, "evaluate", lambda w, _r, _b: ("candidate", "merged") if w["id"] == "w1" else ("keep", "main")),
+    ):
+        rows = cleanup.scan()
+    by_id = {r["id"]: r for r in rows}
+    assert by_id["w1"]["verdict"] == "candidate" and by_id["w1"]["tip"] == "abc123"
+    assert by_id["w-unk"]["verdict"] == "skip" and by_id["w-unk"]["reason"] == "unknown repo"
+
+    cleanup.log({"name": "feat-1", "path": str(wt_dir), "branch": "feat-1", "reason": "merged", "removed": True})
+    assert stat.S_IMODE(cleanup.LOG.stat().st_mode) == 0o600
+    logged = json.loads(cleanup.LOG.read_text().strip())
+    assert logged["name"] == "feat-1" and logged["removed"] is True
+
+    # 2. CLI scan, precheck, apply TOCTOU guards + BUG-CORE-5 git check=True fail-closed
+    wt_ok = tmp_path / "wt-ok"
+    wt_dirty = tmp_path / "wt-dirty"
+    wt_moved = tmp_path / "wt-moved"
+    wt_busy = tmp_path / "wt-busy"
+    wt_giterr = tmp_path / "wt-giterr"
+    for d in (wt_ok, wt_dirty, wt_moved, wt_busy, wt_giterr):
+        d.mkdir()
+
+    def make_rows():
+        return [
+            {"id": "w-ok", "ids": ["w-ok"], "name": "ok", "path": str(wt_ok), "tip": "t1", "branch": "b1", "verdict": "candidate", "reason": "merged"},
+            {"id": "w-dirty", "ids": ["w-dirty"], "name": "dirty", "path": str(wt_dirty), "tip": "t2", "branch": "b2", "verdict": "candidate", "reason": "merged"},
+            {"id": "w-moved", "ids": ["w-moved"], "name": "moved", "path": str(wt_moved), "tip": "t3", "branch": "b3", "verdict": "candidate", "reason": "merged"},
+            {"id": "w-busy", "ids": ["w-busy"], "name": "busy", "path": str(wt_busy), "tip": "t4", "branch": "b4", "verdict": "candidate", "reason": "merged"},
+            {"id": "w-giterr", "ids": ["w-giterr"], "name": "giterr", "path": str(wt_giterr), "tip": "t5", "branch": "b5", "verdict": "candidate", "reason": "merged"},
+            {"id": "w-keep", "ids": ["w-keep"], "name": "keep", "path": str(tmp_path / "k"), "tip": "", "branch": "main", "verdict": "keep", "reason": "main"},
+        ]
+
+    monkeypatch.setattr(cleanup, "scan", make_rows)
+    monkeypatch.setattr(sys, "argv", ["cleanup.py", "scan"])
+    cleanup.main()
+    out = capsys.readouterr().out
+    assert "WOULD DELETE (5)" in out and "KEPT (1)" in out
+
+    monkeypatch.setattr(sys, "argv", ["cleanup.py", "precheck"])
+    with pytest.raises(SystemExit) as ex:
+        cleanup.main()
+    assert ex.value.code == 0
+    capsys.readouterr()
+
+    seen_checks = []
+
+    def fake_git(path, *args, check=True):
+        seen_checks.append((Path(path).name, args[0], check))
+        if path == str(wt_giterr):
+            if check:
+                raise RuntimeError("git rev-parse failed")
+            return ""
+        if args[:2] == ("rev-parse", "HEAD"):
+            return "t3-new" if path == str(wt_moved) else {"ok": "t1", "dirty": "t2", "busy": "t4"}.get(Path(path).name.split("-")[-1], "")
+        if args[0] == "status":
+            return " M file.py" if path == str(wt_dirty) else ""
+        return ""
+
+    removed_ids = []
+
+    def fake_orca(*args):
+        if args[:2] == ("terminal", "list"):
+            return {"terminals": [{"worktreeId": "w-busy", "lastOutputAt": time.time() * 1000}]}
+        if args[:2] == ("worktree", "rm"):
+            removed_ids.append(args[-1])
+            return {}
+        return {}
+
+    monkeypatch.setattr(cleanup, "git", fake_git)
+    monkeypatch.setattr(cleanup, "orca", fake_orca)
+    monkeypatch.setattr(sys, "argv", ["cleanup.py", "apply", "--json"])
+    cleanup.main()
+    res = {r["id"]: r for r in json.loads(capsys.readouterr().out)}
+    assert res["w-ok"]["removed"] is True and removed_ids == ["id:w-ok"]
+    assert res["w-dirty"]["removed"] is False and "uncommitted" in res["w-dirty"]["error"]
+    assert res["w-moved"]["removed"] is False and "HEAD changed" in res["w-moved"]["error"]
+    assert res["w-busy"]["removed"] is False and "terminal became active" in res["w-busy"]["error"]
+    assert res["w-giterr"]["removed"] is False and "git rev-parse failed" in res["w-giterr"]["error"]
+    assert all(chk is True for _, _, chk in seen_checks)

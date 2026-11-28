@@ -433,6 +433,8 @@ def _pull_repo_if_clean(repo_dir: Path, base_ref: str) -> str:
     branch = base_ref.split("/", 1)[1] if base_ref.startswith("origin/") else base_ref
     if branch in ("HEAD", ""):
         return "skip_head"
+    if branch.startswith("-"):
+        return "pull_failed"
     try:
         cur = subprocess.run(["git", "-C", str(repo_dir), "symbolic-ref", "--short", "HEAD"], capture_output=True, text=True, timeout=10)
         if cur.returncode != 0 or cur.stdout.strip() != branch:
@@ -440,7 +442,7 @@ def _pull_repo_if_clean(repo_dir: Path, base_ref: str) -> str:
         st = subprocess.run(["git", "-C", str(repo_dir), "status", "--porcelain"], capture_output=True, text=True, timeout=10)
         if st.returncode != 0 or st.stdout.strip():
             return "skip_dirty"
-        pull = subprocess.run(["git", "-C", str(repo_dir), "pull", "--ff-only", "origin", branch], capture_output=True, text=True, timeout=30)
+        pull = subprocess.run(["git", "-C", str(repo_dir), "pull", "--ff-only", "--", "origin", f"refs/heads/{branch}"], capture_output=True, text=True, timeout=30)
         return "pulled" if pull.returncode == 0 else "pull_failed"
     except (OSError, subprocess.SubprocessError):
         return "pull_failed"
@@ -612,17 +614,11 @@ _SPINNER_STUCK_JS = """(() => {
 })()"""
 
 
-def _is_expected_chaos_orca_error(ev: dict[str, Any], fixture: str) -> bool:
-    """Under the chaos fixture, stub orca/forge CLIs intentionally return malformed JSON / rate-limit 429 / exit 1."""
+def _is_expected_chaos_forge_error(ev: dict[str, Any], fixture: str) -> bool:
+    """Under the chaos fixture, stub glab/gh CLIs intentionally return rate-limit 429 failures."""
     if fixture != "chaos" or ev.get("comp") not in ("dash", "greenlight"):
         return False
-    if ev.get("err") not in ("JSONDecodeError", "RuntimeError"):
-        return False
-    if ev.get("msg_class") == "rate_limit":
-        return True
-    where = ev.get("where")
-    frames = where if isinstance(where, list) else ([str(where)] if where else [])
-    return any("greenlight.py:" in str(fr) and ("orca_cli" in str(fr) or ":_run" in str(fr)) for fr in frames)
+    return ev.get("err") == "RuntimeError" and ev.get("msg_class") == "rate_limit"
 
 
 def _read_isolated_diag_errors(home: Path, fixture: str = "default") -> list[dict]:
@@ -650,7 +646,7 @@ def _read_isolated_diag_errors(home: Path, fixture: str = "default") -> list[dic
                     "details": json.dumps(ev),
                 })
             elif kind in ("uncaught", "dash_error"):
-                if _is_expected_chaos_orca_error(ev, fixture):
+                if _is_expected_chaos_forge_error(ev, fixture):
                     continue
                 where = ev.get("where")
                 where_s = where[-1] if isinstance(where, list) and where else str(where or ev.get("comp") or "")
@@ -942,9 +938,13 @@ def _run_fuzz_step(
 def _check_tmux_leak(tmux_sock: str | None, fixture: str) -> list[dict[str, Any]]:
     if not tmux_sock:
         return []
-    cp = subprocess.run(["tmux", "-L", tmux_sock, "list-sessions"], capture_output=True, text=True)
+    try:
+        cp = subprocess.run(["tmux", "-L", tmux_sock, "list-sessions"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return []
     if cp.returncode == 0 and cp.stdout.strip():
-        subprocess.run(["tmux", "-L", tmux_sock, "kill-server"], capture_output=True, timeout=5)
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            subprocess.run(["tmux", "-L", tmux_sock, "kill-server"], capture_output=True, timeout=5)
         return [make_finding(
             oracle="process_leak", track="fuzz", fixture=fixture,
             title=f"Isolated tmux server survived quit() on `{fixture}`",
@@ -1938,7 +1938,14 @@ def patch_and_open_draft_pr(
 
         st = subprocess.run(["git", "-C", str(wt_dir), "status", "--porcelain"], capture_output=True, text=True)
         if st.stdout.strip():
-            subprocess.run(["git", "-C", str(wt_dir), "add", "-A"], check=True)
+            try:
+                add_res = subprocess.run(["git", "-C", str(wt_dir), "add", "-A"], capture_output=True, text=True, timeout=60)
+            except (OSError, subprocess.SubprocessError) as e:
+                result["status"], result["note"] = "failed", f"git add failed: {e}"
+                return result
+            if add_res.returncode != 0:
+                result["status"], result["note"] = "failed", f"git add failed: {(add_res.stderr or add_res.stdout).strip()}"
+                return result
             cm = subprocess.run(
                 ["git", "-C", str(wt_dir), "commit", "-m", f"fix: {finding['title'][:72]} (bughunt {fp})"],
                 capture_output=True, text=True,
@@ -2149,7 +2156,9 @@ def _quote_remote_path(path: str) -> str:
 
 
 def _ssh_exec(host: str, remote_cmd: str, stream: bool = False) -> subprocess.CompletedProcess:
-    cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", host, remote_cmd]
+    if not host or host.startswith("-"):
+        raise ValueError(f"invalid ssh host: {host!r}")
+    cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "--", host, remote_cmd]
     if stream:
         return subprocess.run(cmd)
     return subprocess.run(cmd, capture_output=True, text=True)
@@ -2181,6 +2190,7 @@ def install_schedule(
             return 1
         q_repo = _quote_remote_path(repo or "~/.claude/skills/greenlight")
         flags = [
+            "--host local",
             f"--hour {int(hour)}",
             f"--minute {int(minute)}",
             f"--max-prs {int(max_prs)}",
@@ -2262,10 +2272,20 @@ def _acquire_pid_lock(lock_file: Path) -> bool:
         except FileExistsError:
             try:
                 old_pid = int(lock_file.read_text().strip())
+            except (OSError, ValueError):
+                lock_file.unlink(missing_ok=True)
+                continue
+            if old_pid <= 0:
+                lock_file.unlink(missing_ok=True)
+                continue
+            try:
                 os.kill(old_pid, 0)
                 print(f"bughunt: another run is active (pid {old_pid}); skipping.", file=sys.stderr)
                 return False
-            except (OSError, ValueError):
+            except PermissionError:
+                print(f"bughunt: another run is active (pid {old_pid}); skipping.", file=sys.stderr)
+                return False
+            except ProcessLookupError:
                 lock_file.unlink(missing_ok=True)
     return False
 
@@ -2307,11 +2327,21 @@ def run_nightly(args) -> int:
         # Resolve base ref (refresh origin/main if present, and fast-forward when --pull is enabled)
         base_ref = args.base
         if base_ref.startswith("origin/"):
-            subprocess.run(["git", "-C", str(ROOT), "fetch", "origin", base_ref.split("/", 1)[1], "--quiet"],
-                           capture_output=True, timeout=30)
-            chk = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--verify", base_ref], capture_output=True)
-            if chk.returncode != 0:
+            branch = base_ref.split("/", 1)[1]
+            if not branch or branch.startswith("-"):
                 base_ref = "HEAD"
+            else:
+                with contextlib.suppress(OSError, subprocess.SubprocessError):
+                    subprocess.run(
+                        ["git", "-C", str(ROOT), "fetch", "--quiet", "--", "origin", f"refs/heads/{branch}"],
+                        capture_output=True, timeout=30,
+                    )
+                try:
+                    chk = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--verify", "--", base_ref], capture_output=True, timeout=10)
+                    if chk.returncode != 0:
+                        base_ref = "HEAD"
+                except (OSError, subprocess.SubprocessError):
+                    base_ref = "HEAD"
         if getattr(args, "pull", False):
             _pull_repo_if_clean(ROOT, base_ref)
 

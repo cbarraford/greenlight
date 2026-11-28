@@ -1791,11 +1791,6 @@ def test_prompt_answers_questions_directly():
     assert "never create a workspace to answer one" in chat.PROMPT and "investigations" not in chat.PROMPT  # the old rule dispatched them
 
 
-if __name__ == "__main__":
-    test_norm()
-    print("ok")
-
-
 def test_session_saved_before_done(tmp_path, monkeypatch):
     """The app may Clear (`chat.py new`) the moment it hears done: the session must already be saved, never written after."""
     seen = []
@@ -2784,3 +2779,99 @@ def test_approved_turn_never_replays_allow_on_retry_or_session_loss(tmp_path, mo
         mp.setattr(chat, "run", fake_run_model_err)
         chat.turn("Next question", "claude-haiku-5-5", None)
     assert chat.take_approvals([aid4]) == []
+
+
+def test_live_question_status_gitlab_none_and_atomic_session_permissions(gl_home, monkeypatch):
+    import stat
+    from unittest import mock
+
+    import greenlight
+
+    # BUG-CORE-9 + SEC-11: session() writes atomically with 0600 and chat/ gets 0700; missing session returns None
+    chat_dir = gl_home / "chat-priv"
+    monkeypatch.setattr(chat, "DIR", str(chat_dir))
+    monkeypatch.setattr(chat, "PIDFILE", str(chat_dir / "pid"))
+    monkeypatch.delenv("GREENLIGHT_ONLY", raising=False)
+    assert chat.session("claude") is None
+    assert chat.session("claude", "sid-abc") == "sid-abc"
+    assert stat.S_IMODE(chat_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE((chat_dir / "session").stat().st_mode) == 0o600
+    chat.seen_save({"key": "claude:sid-abc", "board": "b", "lines": {}, "context": {}})
+    assert stat.S_IMODE((chat_dir / chat.SEEN).stat().st_mode) == 0o600
+
+    # BUG-CORE-3: linkedGitLabMR: None on live worktree must not falsely mark a valid question stale
+    open_q = [{
+        "via": "chat", "chat": chat.chat_identity(), "answer": None, "closed": None,
+        "worktree_id": "w1", "forge": "gitlab", "repo": "acme/widgets",
+        "mr": "!42", "branch": "feat", "goal": "Merge !42: x", "sha": None,
+    }]
+    live_wt = {"worktreeId": "w1", "branch": "refs/heads/feat", "comment": "Merge !42: x", "linkedGitLabMR": None}
+    with (
+        mock.patch.object(chat.decisions, "load", return_value=open_q),
+        mock.patch.object(greenlight, "orca", return_value={"worktrees": [live_wt]}),
+    ):
+        assert chat.live_question_status(("", {})) == "valid"
+    # A different linked MR number still marks it stale
+    live_wt_other = {**live_wt, "linkedGitLabMR": 99}
+    with (
+        mock.patch.object(chat.decisions, "load", return_value=open_q),
+        mock.patch.object(greenlight, "orca", return_value={"worktrees": [live_wt_other]}),
+    ):
+        assert chat.live_question_status(("", {})) == "stale"
+
+
+def test_background_and_run_chat_attempt_branches(gl_home, monkeypatch):
+    from unittest import mock
+
+    import greenlight
+
+    # TEST-ADD-3: background() merges live bg shells (when PIDFILE exists) and working Orca agents
+    chat_dir = gl_home / "chat-bg"
+    chat_dir.mkdir()
+    monkeypatch.setattr(chat, "DIR", str(chat_dir))
+    monkeypatch.setattr(chat, "PIDFILE", str(chat_dir / "pid"))
+    monkeypatch.setattr(chat, "BGFILE", str(chat_dir / "bg.json"))
+    (chat_dir / "pid").write_text(json.dumps({"pid": os.getpid(), "birth": "b"}))
+    (chat_dir / "bg.json").write_text(json.dumps([{"id": "sh1", "title": "pytest"}]))
+    live_ps = {"worktrees": [{"worktreeId": "w1", "displayName": "fix-ci", "agents": [
+        {"state": "working", "agentType": "claude", "taskTitle": "Fix CI", "stateStartedAt": 1000},
+        {"state": "idle", "agentType": "claude"},
+    ]}]}
+    with mock.patch.object(greenlight, "orca", return_value=live_ps):
+        bg = chat.background()
+    assert bg["shells"] == [{"id": "sh1", "title": "pytest"}]
+    assert len(bg["agents"]) == 1 and bg["agents"][0]["workspace"] == "fix-ci"
+
+    # Corrupt bg.json falls back cleanly to []
+    (chat_dir / "bg.json").write_text("{corrupt")
+    with mock.patch.object(greenlight, "orca", side_effect=RuntimeError("offline")):
+        assert chat.background() == {"shells": [], "agents": []}
+
+    # TEST-ADD-3: _run_chat_attempt error branches (FileNotFoundError, ValueError, OSError, session-lost retry)
+    events = []
+    monkeypatch.setattr(chat, "emit", lambda **e: events.append(e))
+    monkeypatch.setattr(chat, "TURN", {})
+    with mock.patch.object(chat.harness, "argv", side_effect=FileNotFoundError("no bin")):
+        _, err, _, _, missing, unusable = chat._run_chat_attempt("claude", None, None, None, "hi", "sys", False, False, [], (False, []), lambda x: x, "hi", None, "")
+    assert missing is True and unusable is False and "no bin" in err
+
+    with mock.patch.object(chat.harness, "argv", side_effect=ValueError("pi needs bypass")):
+        _, err, _, _, missing, unusable = chat._run_chat_attempt("pi", None, None, None, "hi", "sys", False, False, [], (False, []), lambda x: x, "hi", None, "")
+    assert missing is False and unusable is True and "bypass" in err
+
+    # Non-limit error with existing sid triggers session-lost retry with sid=None
+    calls = []
+    def fake_run(cmd, engine, text, norm, **kw):
+        calls.append(cmd)
+        return ("s2", None) if len(calls) == 2 else ("s1", "session expired")
+
+    with (
+        mock.patch.object(chat.harness, "argv", side_effect=lambda eng, t, sid=None, **_k: (["fake", str(sid)], t)),
+        mock.patch.object(chat, "run", side_effect=fake_run),
+        mock.patch.object(chat, "board_note", return_value="BOARD"),
+    ):
+        new_sid, err, _, _, missing, unusable = chat._run_chat_attempt(
+            "claude", None, None, "old-sid", "hi", "sys", False, False, [], (False, []), lambda x: x, "hi", None, "",
+        )
+    assert new_sid == "s2" and err is None and not missing and not unusable
+    assert calls == [["fake", "old-sid"], ["fake", "None"]]

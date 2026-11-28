@@ -104,11 +104,23 @@ def decide_choice(state, question, options, context=""):
             "provider": err or "local"}
 
 
+KNOWN_STEPS = frozenset(greenlight.BUILTIN) | {"plan", "parked", "done", "automation", "goal", "freeform", "review", "error"}
+
+
 def log(entry):
-    with LOG.open("a") as fh:
+    LOG.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with contextlib.suppress(OSError):
+        os.chmod(LOG.parent, 0o700)
+    fd = os.open(LOG, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(fd, "a") as fh:
         fh.write(json.dumps({"ts": int(time.time())} | entry) + "\n")
+    raw_step = entry.get("step")
+    if raw_step is None or raw_step in KNOWN_STEPS:
+        step_tok, step_h = raw_step, None
+    else:
+        step_tok, step_h = "custom", diag.h(raw_step)
     diag.event("orch", did=str(entry.get("did") or "").split(" ")[0], ws_h=diag.h(entry.get("ws")), mr_h=diag.h(entry.get("mr")),
-               ok=entry.get("ok"), step=entry.get("step"))
+               ok=entry.get("ok"), step=step_tok, step_h=step_h)
 
 
 def ref_of(r):
@@ -469,7 +481,7 @@ def _act_drift(r, name, a):
     if old_ping and old_ping != ping_key and old_ping in open_pings:
         with contextlib.suppress(Exception):
             greenlight.resolve(old_ping, f"superseded by {summary}")
-    _resolve_rereview_ping(key, sha, f"superseded by {summary}")
+    _resolve_rereview_ping(key, f"superseded by {summary}")
     if ping_key not in open_pings:
         opt = f"Confirm target {new_val}" if kind == "target_changed" else f"Confirm head {new_val[:8]}"
         url = (r.get("mr") or {}).get("web_url") or ""
@@ -490,14 +502,14 @@ def _act_drift(r, name, a):
     return [f"paused {name}: {summary}"]
 
 
-def _resolve_rereview_ping(key, sha, why):
+def _resolve_rereview_ping(key, why):
     prefix = f"@rereview:{key}:"
     for pk in [k for k in greenlight.pinged() if k.startswith(prefix)]:
         with contextlib.suppress(Exception):
             greenlight.resolve(pk, why)
 
 
-def _rereview_live_ready(r, name, peers):
+def _rereview_live_ready(r, peers):
     """Run fresh live worktree/agent/MR/peer pre-launch guards before dispatching a re-review fix."""
     try:
         live = live_worktree(r)
@@ -553,7 +565,7 @@ def _rereview_dispatch_fix(r, name, sha, target, summary, peers):
     card = ws_state.load(key)
     if any(d.get("sig") == fix_sig for d in card.get("dispatches") or []):
         return _rereview_fail_closed(r, name, sha, target, summary, "Diff re-review still failing after fix")
-    if why := _rereview_live_ready(r, name, peers):
+    if why := _rereview_live_ready(r, peers):
         return [f"left {name}: {why}"]
     assignment = record_dispatch(r, fix_sig, expected=ws_state.situation_token(card))
     if assignment is False:
@@ -570,7 +582,7 @@ def _rereview_dispatch_fix(r, name, sha, target, summary, peers):
             ws_state.append_activity(c, f"Re-review failed at {sha[:8]}; dispatched {agent}", kind="rereview",
                                      step=r["next"].get("step", ""), sha=sha, target=target, detail=summary, ok=False)
             ws_state.save(c)
-        _resolve_rereview_ping(key, sha, f"dispatched {agent} to fix contracts")
+        _resolve_rereview_ping(key, f"dispatched {agent} to fix contracts")
         log({"ws": name, "mr": ref, "did": f"dispatched {agent} (rereview)", "ok": True})
         return [f"dispatched {agent} to {name}: re-review fix ({summary[:80]})"]
     if greenlight.LIMIT_RE.search(err) or re.search(r"rejected|invalid agent|unknown agent|not configured|unsupported agent|no such agent|worktree not found|permission denied", err, re.I):
@@ -615,7 +627,7 @@ def _act_rereview(r, name, a, peers=()):
             ws_state.append_activity(c, f"Re-reviewed diff at {sha[:8]}", kind="rereview",
                                      step=r["next"].get("step", ""), sha=sha, target=target, detail=detail, ok=True)
             ws_state.save(c)
-        _resolve_rereview_ping(key, sha, f"re-review passed at {sha[:8]}")
+        _resolve_rereview_ping(key, f"re-review passed at {sha[:8]}")
         log({"ws": name, "mr": ref, "did": "re-reviewed diff", "ok": True})
         return [f"re-reviewed {name} at {sha[:8]}: ok"]
     summary = audit.summary(verdict) if not verdict.get("unverified") else "audit unverified (local fallback)"

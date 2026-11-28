@@ -56,13 +56,19 @@ def load():
 @contextlib.contextmanager
 def book():
     """Every record, under a lock. What the caller leaves in the list is written back."""
-    STATE.mkdir(parents=True, exist_ok=True)
+    STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with contextlib.suppress(OSError):
+        os.chmod(STATE, 0o700)
     with open(STATE / "decisions.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)  # a scan's ping and a chat answer can land together
         recs = load()
         yield recs
         tmp = file().with_suffix(".tmp")
-        tmp.write_text("".join(json.dumps(r) + "\n" for r in recs))
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write("".join(json.dumps(r) + "\n" for r in recs))
+        with contextlib.suppress(OSError):
+            os.chmod(tmp, 0o600)
         os.replace(tmp, file())
 
 

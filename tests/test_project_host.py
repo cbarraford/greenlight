@@ -1,21 +1,13 @@
 """Per-project host setting (`host=server|mac|auto`, default `server`), Mac detection, Settings ops, adopt & placement."""
 import json
-import os
 import sys
-import tempfile
-from pathlib import Path
 
-_BOOT = tempfile.mkdtemp(prefix="gl-proj-host-")
-os.environ.setdefault("GREENLIGHT_HOME", _BOOT)
-os.environ.setdefault("GREENLIGHT_ME", "octo")
+from conftest import ROOT
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "scripts"))
-
-import adopt  # noqa: E402
-import dash  # noqa: E402
-import greenlight  # noqa: E402
-import placement  # noqa: E402
+import adopt
+import dash
+import greenlight
+import placement
 
 
 def test_repo_host_mode_defaults_to_server_and_parses_options(tmp_path, monkeypatch):

@@ -37,8 +37,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
-    import decide  # system-one-decide's scripts/decide.py
-except ImportError:  # not merged or not synced yet: the grammar decides alone
+    import decide  # System One (scripts/decide.py)
+except ImportError:  # optional: when unavailable, the grammar decides alone
     decide = None
 import lifestage  # noqa: E402  (stdlib only, cheap)
 

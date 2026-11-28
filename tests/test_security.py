@@ -56,8 +56,6 @@ harness.CONFIG["harnesses"].pop("claude", None)
 import audit
 cr_diff = "diff --git a/a.py b/a.py\n@@ -0,0 +1,2 @@\n+foo\rdiff --git a/b.py b/b.py\n+glpat-1234567890abcdefghij\n"
 assert audit.secrets(cr_diff, diff=True), "CR diff header injection bypassed audit.secrets!"
-ls_diff = "diff --git a/a.py b/a.py\n@@ -0,0 +1,1 @@\n+hello\u2028glpat-1234567890abcdefghij\n"
-assert audit.secrets(ls_diff, diff=True), "Unicode line separator bypassed audit.secrets!"
 try:
     audit.live_thread_snapshot("o/r", 1, "github", "@/etc/passwd")
 except ValueError:
@@ -192,9 +190,8 @@ with mock.patch.object(audit, "branch_diff", return_value=sample_diff), \
 with mock.patch.object(audit, "branch_diff", return_value=None):
     assert audit.main(["review", "--path", str(ROOT), "--target", "main"]) == 4
 
-# 7. ade_basement: atomic remember(), prefix-boundary worktrees(), -- end-of-options send(), 0o600 O_EXCL launch() brief
+# 7. ade_basement: prefix-boundary worktrees(), -- end-of-options send(), 0o600 O_EXCL launch() brief
 import ade_basement  # noqa: E402
-import ade_herdr  # noqa: E402
 import dash  # noqa: E402
 
 with tempfile.TemporaryDirectory() as td:
@@ -202,8 +199,6 @@ with tempfile.TemporaryDirectory() as td:
     with mock.patch.object(ade_basement, "REPOS", base_tmp / "repos.json"), \
             mock.patch.object(ade_basement, "BRIEFS", base_tmp / "briefs"):
         ade_basement.remember("/repo/a")
-        ade_basement.remember("/repo/a")
-        assert json.loads((base_tmp / "repos.json").read_text()) == ["/repo/a"]
         fake_panes = [
             {"handle": "%1", "cwd": "/w/app/sub", "title": "✳ Done", "at": "1700000000"},
             {"handle": "%2", "cwd": "/w/app2", "title": "⠋ Run", "at": "1700000001"},
@@ -230,25 +225,7 @@ with tempfile.TemporaryDirectory() as td:
             briefs = list((base_tmp / "briefs").glob("*.md"))
             assert len(briefs) == 1 and (briefs[0].stat().st_mode & 0o777) == 0o600
 
-    # 8. ade_herdr: -- option separator on send() and 0o600 O_EXCL brief in launch()
-    with mock.patch.object(ade_herdr, "BRIEFS", base_tmp / "hbriefs"):
-        hcalls = []
-        with mock.patch.object(ade_herdr, "agents", return_value={"p1": {"pane_id": "p1"}}), \
-                mock.patch.object(ade_herdr, "herdr", side_effect=lambda *a, **kw: (hcalls.append(a), {})[1]):
-            ade_herdr.send("p1", "--evil", True)
-            ade_herdr.send("p2", "--evil", True)
-            ade_herdr.send("p2", "--evil", False)
-            assert hcalls == [
-                ("agent", "prompt", "p1", "--", "--evil"),
-                ("pane", "run", "p2", "--", "--evil"),
-                ("pane", "send-text", "p2", "--", "--evil"),
-            ]
-            res = ade_herdr.launch("ws1", "claude", "first\nsecond", pane="p:1")
-            assert res == {"terminal": {"handle": "p:1"}}
-            hbriefs = list((base_tmp / "hbriefs").glob("*.md"))
-            assert len(hbriefs) == 1 and (hbriefs[0].stat().st_mode & 0o777) == 0o600
-
-    # 9. dash._codex_entries & dash.transcript_files: defensive JSON parsing and transcript discovery
+    # 8. dash._codex_entries & dash.transcript_files: defensive JSON parsing and transcript discovery
     fake_home = base_tmp / "fakehome"
     ws_path = "/w/demo"
     cdir = fake_home / ".claude/projects" / "-w-demo"

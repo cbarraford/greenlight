@@ -416,8 +416,15 @@ class StandbyPool:
             if self.warm_proc.poll() is None:
                 with contextlib.suppress(OSError):
                     self.warm_proc.terminate()
-                with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+                try:
                     self.warm_proc.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    with contextlib.suppress(OSError):
+                        self.warm_proc.kill()
+                    with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+                        self.warm_proc.wait(timeout=0.3)
+                except OSError:
+                    pass
             self.warm_proc = None
         if self.warm_name:
             name = self.warm_name
@@ -472,7 +479,6 @@ class TermBridge:
         self.wake_fd = wake_fd
         self.sel = selectors.DefaultSelector()
         self.panes: dict[str, PaneProc] = {}
-        self.fd_to_pane: dict[int, PaneProc] = {}
         self._in_buf = bytearray()
         self._in_drop_until_nl = False
         self._out_buf = bytearray()
@@ -486,9 +492,16 @@ class TermBridge:
             return
         events = (0 if self._paused_read else selectors.EVENT_READ) | (selectors.EVENT_WRITE if pane.write_buf else 0)
         with contextlib.suppress(KeyError, ValueError):
-            if events:
+            try:
+                self.sel.get_key(pane.master_fd)
+                registered = True
+            except KeyError:
+                registered = False
+            if events and registered:
                 self.sel.modify(pane.master_fd, events, pane)
-            else:
+            elif events and not registered:
+                self.sel.register(pane.master_fd, events, pane)
+            elif not events and registered:
                 self.sel.unregister(pane.master_fd)
 
     def _set_read_pause(self, pause: bool) -> None:
@@ -496,21 +509,7 @@ class TermBridge:
             return
         self._paused_read = pause
         for pane in list(self.panes.values()):
-            if pane.master_fd < 0:
-                continue
-            events = (0 if pause else selectors.EVENT_READ) | (selectors.EVENT_WRITE if pane.write_buf else 0)
-            with contextlib.suppress(KeyError, ValueError):
-                try:
-                    self.sel.get_key(pane.master_fd)
-                    registered = True
-                except KeyError:
-                    registered = False
-                if events and registered:
-                    self.sel.modify(pane.master_fd, events, pane)
-                elif events and not registered:
-                    self.sel.register(pane.master_fd, events, pane)
-                elif not events and registered:
-                    self.sel.unregister(pane.master_fd)
+            self._update_pane_events(pane)
 
     def _sync_out_registration(self) -> None:
         want = bool(self._out_buf) and not self._stop
@@ -639,7 +638,6 @@ class TermBridge:
             os.close(slave_fd)
         pane = PaneProc(pane_id, session, master_fd, proc)
         self.panes[pane_id] = pane
-        self.fd_to_pane[master_fd] = pane
         if not self._paused_read:
             self.sel.register(master_fd, selectors.EVENT_READ, pane)
         return pane
@@ -662,7 +660,6 @@ class TermBridge:
         if not pane:
             return
         if pane.master_fd >= 0:
-            self.fd_to_pane.pop(pane.master_fd, None)
             with contextlib.suppress(KeyError, ValueError):
                 self.sel.unregister(pane.master_fd)
         pane.close_master()
@@ -891,7 +888,6 @@ class TermBridge:
             if not pane:
                 continue
             if pane.master_fd >= 0:
-                self.fd_to_pane.pop(pane.master_fd, None)
                 with contextlib.suppress(KeyError, ValueError):
                     self.sel.unregister(pane.master_fd)
             pane.stop()

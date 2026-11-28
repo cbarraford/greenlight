@@ -16,7 +16,7 @@ A question of a known kind (KINDS) gets a proposal before it's pinged:
 A sign-off, a held merge's "merge" and the like are never answered for you or preselected, and the signoff and merge-held
 kinds can't be opted in at all (not even their "not yet"): the lifecycle's human gates stay human.
 
-    autonomy.py propose --kind K [--key K] <text ending in an Options line>   # the proposal, JSON (nothing saved)
+    autonomy.py propose --kind K <text ending in an Options line>   # the proposal, JSON (nothing saved)
     autonomy.py calibrate [--json]      # per kind: how often proposals were right, by tier; graduation candidates
     autonomy.py gate --kind K [<text>]  # may a proactive question go out now? JSON {ok, score, ...}; exit 1 when held
     autonomy.py settings [--json]       # opted-in kinds, gate threshold, calibration, candidates, recent auto acts
@@ -41,7 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import decisions  # noqa: E402
 
 try:
-    import decide  # system one: decide.choice / decide.score. Owned by its own PR; optional here
+    import decide  # system one: decide.choice / decide.score; optional here
 except ImportError:
     decide = None
 
@@ -125,7 +125,14 @@ def audit(ev):
 
 def audit_log():
     f = STATE / "autonomy.jsonl"
-    return [json.loads(l) for l in f.read_text().splitlines() if l.strip()] if f.exists() else []
+    if not f.exists():
+        return []
+    out = []
+    for line in f.read_text().splitlines():
+        if line.strip():
+            with contextlib.suppress(ValueError):
+                out.append(json.loads(line))
+    return out
 
 
 def amend_audit(aid, **changes):
@@ -204,7 +211,7 @@ def model_choice(question, options, context):
     if decide is None:
         return None
     try:
-        d = decide.choice(STATE, question, options, context=context)
+        d = decide.choice(context, question, options)
     except Exception as e:
         print(f"autonomy: decide.choice: {e}", file=sys.stderr)
         return None
@@ -321,7 +328,7 @@ def gate(kind, text="", recs=None, s=None, now=None):
     provider = "history"
     if text and decide is not None:
         try:
-            d = decide.score(STATE, PREFLIGHT_RUBRICS.get(kind, RUBRIC), context=text)
+            d = decide.score(text, PREFLIGHT_RUBRICS.get(kind, RUBRIC))
             if d.get("provider") != "local":
                 model_score = max(0.0, min(1.0, float(d["score"])))
                 score = min(score, (score + model_score) / 2)  # content may hold a ping; repeated dismissals still veto it
@@ -385,7 +392,7 @@ def main():
     a, flags, pos = sys.argv[1:], {}, []
     it = iter(a)
     for x in it:
-        if x in ("--kind", "--gate"):
+        if x in ("--kind", "--gate", "--key"):
             flags[x] = next(it, None)
         elif x == "--auto":  # --auto <kind> on|off, repeatable
             flags.setdefault(x, []).append((next(it, None), next(it, None)))

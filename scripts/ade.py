@@ -91,12 +91,6 @@ def _migrate_config():
         pass
 
 
-def ran_before():
-    """This install already ran greenlight (on Orca, the old default): what only a past scan or run leaves. Not me.json
-    (importing greenlight writes it), state/ (update.py), auto/ (the timer's first tick) or diag/."""
-    return any((_home() / x).exists() for x in ("last.json", "log.jsonl", "decisions.jsonl", "history"))
-
-
 def config_ok():
     """False when config.json sets an "ade" that names no backend (doctor says so)."""
     raw = _config_raw_ade()
@@ -118,8 +112,6 @@ def settle():
                 tmp = f.with_name(f".{f.name}.{os.getpid()}.tmp")
                 tmp.write_text(json.dumps({**cfg, "ade": n, "ade_set_because": why}, indent=1))
                 os.replace(tmp, f)
-            elif isinstance(cfg, dict) and isinstance(cfg["ade"], str):
-                n = DEFAULT
     except (OSError, ValueError):
         pass  # can't write it (or not settings we can add to): the same answer next time, from the same facts
     return n
@@ -131,10 +123,6 @@ def is_orca():
 
 def is_native():
     return name() == "native"
-
-
-def deprecated():
-    return None
 
 
 def get(n=None):

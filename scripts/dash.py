@@ -33,7 +33,7 @@
 
 Pucks join ~/.greenlight/last.json (lifecycle, MR, next step from greenlight.py scan, refreshed by every greenlight run; the interval is in Greenlight Settings → Dashboard)
 with live native workspace state (`ade_basement.worktrees()`, agent state, seconds old). Never calls GitLab for the overview.
-Page layouts come from Claude Haiku picking widgets out of CATALOG; the page renders only known
+Page layouts come from the configured LLM (harness.ask) picking widgets out of CATALOG; the page renders only known
 widgets, so a bad layout degrades to fewer cards, never to executed output.
 """
 import base64
@@ -250,7 +250,13 @@ def moves(r, blk=None, card=None, attempts=None):
     out, cmd = [], nxt.get("cmd") or []
     repo = r["project"].rsplit("/", 1)[-1]
     goal = r.get("goal") or ""
-    on_auto = {} if greenlight.HOLD_RE.search(goal) or greenlight.PARKED_RE.search(goal) or greenlight.AUTOMATION_RE.search(goal) else autorun().get(repo, {})
+    intents = r.get("_intents") or {}
+    held_or_parked = (
+        greenlight.HOLD_RE.search(goal) or greenlight.PARKED_RE.search(goal) or greenlight.AUTOMATION_RE.search(goal)
+        or intents.get("is_held") or intents.get("is_parked")
+        or nxt.get("owner") == "parked" or "goal says hold" in (nxt.get("action") or "").lower()
+    )
+    on_auto = {} if held_or_parked else autorun().get(repo, {})
     lines = lambda xs: "\n".join(f"- {x}" for x in xs) or None
     doc = greenlight.lifecycle_doc(r["project"])
     vals = dict(zip(COMMON, (mr.get("ref"), mr.get("web_url"), mr.get("title"), mr.get("source_branch") or r.get("branch"), mr.get("target_branch"), mr.get("sha"),
@@ -279,6 +285,24 @@ def moves(r, blk=None, card=None, attempts=None):
     return out
 
 
+def _live_goal_guard(path, r):
+    """Re-read the live goal for `path` before an automatic merge; return an error string if held/parked or changed."""
+    live_goals = ade_common.goals()
+    live_goal = (live_goals.get(path) or "").strip() if isinstance(live_goals, dict) else ""
+    scanned_comment = (r.get("comment") if "comment" in r else r.get("goal") or "").strip()
+    if live_goal:
+        if greenlight.HOLD_RE.search(live_goal) or greenlight.PARKED_RE.search(live_goal) or greenlight.AUTOMATION_RE.search(live_goal):
+            return "workspace goal is held or parked"
+        ws = {**r, "goal": live_goal, "comment": live_goal}
+        ws.pop("_intents", None)
+        live_intents = greenlight.intents(ws, r.get("mr") or {})
+        if live_intents.get("is_held") or live_intents.get("is_parked"):
+            return "workspace goal is held or parked"
+    if live_goal != scanned_comment and (live_goal or (not r.get("_goal_backfill") and scanned_comment and ade_common.GOALS.exists())):
+        return "workspace goal changed since scan"
+    return None
+
+
 def tree_merge(path, automatic=False):
     """The card's Merge: greenlight's own merge cmd for this workspace's MR, pinned to the head greenlight saw, so a push since
     can't land unseen. The forge still checks everything else; its refusal comes back verbatim."""
@@ -288,6 +312,8 @@ def tree_merge(path, automatic=False):
     m = next((x for x in moves(r) if x["kind"] == "merge"), None) if r else None
     if not m or not r["mr"].get("sha") or automatic and not m.get("auto"):
         return {"error": "greenlight doesn't say this can merge now"}
+    if automatic and (goal_err := _live_goal_guard(path, r)):
+        return {"error": goal_err}
     mr_identity = (r.get("id"), r.get("forge"), r.get("project"), r["mr"].get("iid"), r["mr"].get("sha"))
     if drift_err := audit.check_merge_drift(r.get("forge"), r.get("project"), r["mr"].get("iid"),
                                             r["mr"].get("target_branch") or "", r["mr"].get("sha") or ""):
@@ -2412,13 +2438,16 @@ def _agy_transcript_files(path, cutoff):
     except (OSError, sqlite3.Error):
         return []
     for cid, uris_raw in rows:
+        cid_s = _valid_session_id(cid)
+        if not cid_s:
+            continue
         try:
             uris = json.loads(uris_raw) if isinstance(uris_raw, str) else []
         except ValueError:
             uris = []
         if not any(isinstance(u, str) and (u.rstrip("/") in want or unquote(u).rstrip("/") in want) for u in uris):
             continue
-        tr = root / "brain" / str(cid) / ".system_generated" / "logs" / "transcript.jsonl"
+        tr = root / "brain" / cid_s / ".system_generated" / "logs" / "transcript.jsonl"
         try:
             mt = tr.stat().st_mtime
             if mt > cutoff:
@@ -2432,10 +2461,6 @@ def _transcript_stem(path, kind):
     if kind == "agy" and path.stem == "transcript" and len(path.parents) >= 3:
         return path.parents[2].name
     return path.stem
-
-
-def _entries_for(path, kind):
-    return {"claude": _claude_entries, "codex": _codex_entries, "agy": _agy_entries}.get(kind, _claude_entries)(path)
 
 
 _ORIG_CLAUDE_ENTRIES = _claude_entries
@@ -3086,7 +3111,11 @@ def settings(op, arg, stdin):
     if op in ("instructions-get", "instructions-set"):
         f = greenlight.STATE / "instructions.md"
         if op == "instructions-set":
-            f.write_text(stdin.strip() + "\n") if stdin.strip() else f.unlink(missing_ok=True)
+            if stdin.strip():
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_text(stdin.strip() + "\n")
+            else:
+                f.unlink(missing_ok=True)
         return {"text": f.read_text() if f.exists() else ""}
     if op.startswith("memory-"):
         index = MEMORY / "MEMORY.md"
@@ -3105,7 +3134,8 @@ def settings(op, arg, stdin):
                 f.unlink(missing_ok=True)
             else:
                 return {"error": f"no op {op}"}
-            index.write_text("\n".join(keep) + "\n")
+            if MEMORY.exists():
+                index.write_text("\n".join(keep) + "\n")
         return {"notes": [{"name": f.stem, "text": f.read_text()} for f in sorted(MEMORY.glob("*.md")) if f.name != "MEMORY.md"]}
     return {"error": f"no task op {op}"}
 
@@ -3205,7 +3235,11 @@ def main():
         if kind and not re.fullmatch(r"[a-z_]{1,32}", kind):
             sys.exit("bad --kind")
         prompt = sys.stdin.read().strip()[:8000]
-        print(json.dumps({"name": a[1], **(run(a[1], prompt, kind=kind) if prompt else {"error": "empty prompt"})}))
+        try:
+            print(json.dumps({"name": a[1], **(run(a[1], prompt, kind=kind) if prompt else {"error": "empty prompt"})}))
+        except Exception as e:
+            oops(a, e)
+            print(json.dumps({"name": a[1], "error": str(e)[:200]}))
     elif a[:1] in (["ask"], ["answer"]) and len(a) > 1 and NAME_RE.match(a[1]):
         opt = _model_opts(a)
         try:
@@ -3233,7 +3267,11 @@ def main():
         before = a[a.index("--before") + 1] if "--before" in a[:-1] else None
         if before and not re.fullmatch(r"[\w.-]{1,200}:\d{1,9}", before):
             sys.exit("bad --before")
-        print(json.dumps({"name": a[1], **transcript(a[1], before)}))
+        try:
+            print(json.dumps({"name": a[1], **transcript(a[1], before)}))
+        except Exception as e:
+            oops(a, e)
+            print(json.dumps({"name": a[1], "error": str(e)[:200]}))
     elif a[:1] in (["logextras"], ["logshare"]) and len(a) in (2, 4) and NAME_RE.match(a[1]) and (len(a) == 2 or a[2] == "--req" and a[3].isdigit()):
         import log_view  # noqa: PLC0415
 

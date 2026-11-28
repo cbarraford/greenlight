@@ -915,7 +915,7 @@ test("workspace card: facts, agent actions, inline goal, delete asks once (or ne
   await page.evaluate(() => term.suggest({name: "sidebar", label: "Fix lint job", prompt: "Fix the failing lint job on !51 and push."}));
   assert.match(await page.$eval("#card .nx", b => b.textContent), /Fix lint job.*Fix the failing lint job/);
   await page.click("#card .nx");
-  assert.match((await posts(page, "in")).pop().d, /^claude \$'Fix the failing lint job on !51 and push\.'/);
+  assert.match((await posts(page, "in")).pop().d, /^claude -- \$'Fix the failing lint job on !51 and push\.'/);
   // Copy opens a small menu
   await row("sidebar").click({button: "right"}); await page.click("#card button:has-text('Copy')"); await page.click("#menu button:text-is('Branch name')");
   assert.equal((await posts(page, "copy")).pop().text, "term-sidebar");
@@ -1070,7 +1070,7 @@ test("workspace card: Review runs Claude with the repo's prompt, in place of the
   await page.click("#card .rv .mn"); await page.click("#menu button:has-text('Edit greenlight')");
   assert.deepEqual((await posts(page, "settings")).pop(), {cmd: "settings", repo: "greenlight", kind: "review"});
   await page.locator(".ws", {hasText: "rv"}).first().click({button: "right"}); await page.click("#card .rv .go");
-  assert.equal((await posts(page, "in")).pop().d, "claude $'Review !58 at abc123.\\x0aIt\\'s\\x09yours: don\\'t post.'\r");
+  assert.equal((await posts(page, "in")).pop().d, "claude -- $'Review !58 at abc123.\\x0aIt\\'s\\x09yours: don\\'t post.'\r");
 });
 test("workspace card: the most urgent move on top, the rest under it, Terminal and Claude below", async page => {
   await page.evaluate(() => term.workspaces({trees: [{ade: "cmux", project: "octo/greenlight", name: "fx", path: "/w/fx", branch: "fx", main: false, agent: "done", state: "needs", puck: "fx",
@@ -1082,7 +1082,7 @@ test("workspace card: the most urgent move on top, the rest under it, Terminal a
   assert.match(await page.$eval("#card .rv .go", b => b.textContent), /^Resolve 2 threads/, "several fixes: blue");
   assert.equal(await page.$("#card .nx"), null);
   await page.click("#card .also button:text-is('Fix CI')");
-  assert.equal((await posts(page, "in")).pop().d, "claude $'fix ci'\r");
+  assert.equal((await posts(page, "in")).pop().d, "claude -- $'fix ci'\r");
 });
 test("workspace card: Merge asks once more, then merges; the forge's refusal shows verbatim", async page => {
   const t = ok => ({trees: [{ade: "cmux", project: "octo/greenlight", name: "mg", path: "/w/mg", branch: "mg", main: false, agent: "done", state: "needs", puck: "mg",
@@ -1163,7 +1163,7 @@ test("auto-run: the main window runs a marked move once per head, in an unfocuse
   await page.evaluate(t => term.workspaces(t), w([ci]));
   assert.deepEqual(await page.evaluate(() => tabs.filter(t => t.auto).map(t => [t.name, t.auto.kind, t.ws])), [["Fix CI · !7", "ci", "/w/ar"]]);
   assert.equal(await page.evaluate(() => cur.key), was, "focus stays where it was");
-  assert.equal((await posts(page, "in")).pop().d, "claude $'unattended: fix'\r");
+  assert.equal((await posts(page, "in")).pop().d, "claude -- $'unattended: fix'\r");
   assert.equal(await page.$$eval('#side svg[data-icon="bolt"]', x => x.length), 1, "the bolt");
   await page.evaluate(t => term.workspaces(t), w([ci]));
   assert.equal(await page.evaluate(() => tabs.filter(t => t.auto).length), 1, "once per head");
@@ -1429,7 +1429,7 @@ test("Basement supports Codex and agy: tab icons, configured default agent launc
   await page.locator(".ws", {hasText: "fix-agy"}).first().click({button: "right"});
   assert.ok(await page.$("#card button:text-is('Codex')"), "primary agent button switches to Codex");
   await page.click("#card .rv .go");
-  assert.equal((await posts(page, "in")).pop().d, "codex $'Fix CI now'\r", "codex launches with positional prompt");
+  assert.equal((await posts(page, "in")).pop().d, "codex -- $'Fix CI now'\r", "codex launches with -- and positional prompt");
   // Diff note pastes directly into an open Codex or agy pane, not only Claude
   const codexId = await page.evaluate(() => cur.focus.id);
   await page.evaluate(([id, data]) => term.feed(id, data), [codexId, b64("\x1b]0;⌬ Codex session\x07")]);
@@ -1731,6 +1731,147 @@ test("show() debounces focusWs hints and avoids standby thrash on synchronous ba
   assert.equal(countAfter, countBefore, "synchronous A -> B -> A bounce must not thrash focusWs");
   await page.evaluate(() => { newTab("/w/sidebar") });
   await page.waitForFunction(() => window.__posts.filter(m => m.cmd === "focusWs").pop()?.ws === "/w/sidebar", null, {timeout: 2000});
+});
+
+test("restore() discards corrupt partial tab trees cleanly without crashing show/render/snap (BUG-UI-4)", async page => {
+  const b = page.context().browser();
+  // One corrupt split tab (kids missing second child) followed by one valid tab
+  const p1 = await boot(b, {
+    cur: 0,
+    tabs: [
+      {ws: "/w/bad", name: "broken", tree: {col: false, kids: [{s: "mc-partial"}, null]}},
+      {ws: "/w/fix-login", name: "good", tree: {s: "mc-good"}},
+    ],
+  });
+  try {
+    const st = await p1.evaluate(() => ({
+      nTabs: tabs.length,
+      names: tabs.map(t => t.name),
+      stageRoots: document.querySelectorAll("#stage > .root").length,
+      hasFocus: !!cur?.focus,
+      panesCount: panes.size,
+      errs: window.__posts.filter(m => m.cmd === "error" && /restore:/.test(m.text)).length,
+      snapOk: JSON.parse(snap()).tabs.length,
+    }));
+    assert.equal(st.nTabs, 1, "broken tab removed from tabs");
+    assert.deepEqual(st.names, ["good"]);
+    assert.equal(st.stageRoots, 1, "broken tab DOM removed from #stage");
+    assert.equal(st.hasFocus, true);
+    assert.equal(st.panesCount, 1, "partial pane disposed");
+    assert.equal(st.errs, 1, "restore error posted");
+    assert.equal(st.snapOk, 1);
+    assert.deepEqual(p1._errs, []);
+  } finally { await p1.close() }
+  // Layout with ONLY a corrupt tab falls back to a fresh shell instead of crashing
+  const p2 = await boot(b, {cur: 0, tabs: [{ws: "/w/bad", tree: {col: true}}]});
+  try {
+    const ok = await p2.evaluate(() => ({nTabs: tabs.length, hasFocus: !!cur?.focus, snapOk: JSON.parse(snap()).tabs.length}));
+    assert.equal(ok.nTabs, 1, "fell back to first shell");
+    assert.equal(ok.hasFocus, true);
+    assert.equal(ok.snapOk, 1);
+    assert.deepEqual(p2._errs, []);
+  } finally { await p2.close() }
+});
+
+test("dlgClose resolves superseded ask() Promises and runs prior dlgForm onEnd cleanups (BUG-UI-5)", async page => {
+  const res = await page.evaluate(async () => {
+    const p1 = ask({title: "First", text: "old"});
+    let endCount = 0;
+    dlgForm("Second", el("div"), "OK", () => true, () => { endCount++ });
+    const v1 = await Promise.race([p1, new Promise(r => setTimeout(() => r("HUNG"), 100))]);
+    // Opening a third modal triggers Second's onEnd
+    const p3 = ask({title: "Third", text: "replaces form"});
+    const endAfterAsk = endCount;
+    // Open Diff, switch compare mode (same ws keeps ws in diffs), then supersede Diff with ask() (removes ws from diffs)
+    diffs.add("/w/fix-login");
+    diffShow({op: "diff", path: "/w/fix-login", mode: "branch", base: "main", files: [["a.py", "1", "0"]], status: ["M"], patch: "diff --git a/a.py b/a.py\n@@ -1 +1 @@\n+x\n"});
+    const v3 = await Promise.race([p3, new Promise(r => setTimeout(() => r("HUNG"), 100))]);
+    const inDiffs1 = diffs.has("/w/fix-login");
+    diffShow({op: "diff", path: "/w/fix-login", mode: "head", base: "main", files: [["a.py", "1", "0"]], status: ["M"], patch: "diff --git a/a.py b/a.py\n@@ -1 +1 @@\n+x\n"});
+    const inDiffsAfterSwap = diffs.has("/w/fix-login");
+    ask({title: "Fourth", text: "supersedes diff", cancel: false});
+    const inDiffsAfterReplace = diffs.has("/w/fix-login");
+    document.querySelector("#dlg button[type=submit]").click();
+    return {v1, endAfterAsk, v3, inDiffs1, inDiffsAfterSwap, inDiffsAfterReplace};
+  });
+  assert.equal(res.v1, false, "superseded ask() resolves to false instead of hanging");
+  assert.equal(res.endAfterAsk, 1, "prior dlgForm onEnd ran when superseded by ask()");
+  assert.equal(res.v3, false, "second superseded ask() resolves to false");
+  assert.equal(res.inDiffs1, true);
+  assert.equal(res.inDiffsAfterSwap, true, "switching diff mode keeps ws in diffs");
+  assert.equal(res.inDiffsAfterReplace, false, "superseding Diff runs diffs.delete(ws)");
+});
+
+test("mergeDone updates only the .mg.st element when multiple .mg landing buttons exist (BUG-UI-8)", async page => {
+  await page.evaluate(() => term.workspaces({trees: [{ade: "cmux", project: "octo/greenlight", name: "mg2", path: "/w/mg2", branch: "mg2", main: false, agent: "done", state: "needs", puck: "mg2",
+    mr: {ref: "!65", state: "opened"}, moves: [{kind: "merge", how: "Squash", target: "main"}]}]}));
+  await page.locator(".ws", {hasText: "mg2"}).first().click({button: "right"});
+  await page.waitForSelector("#card:not([hidden])");
+  // Inject a non-in-flight .mg element ahead of the real .mg, then trigger merge (making the real one .mg.st)
+  await page.evaluate(() => {
+    const first = el("div", "mg", "<button class='go'>Other landing action</button>");
+    $("card").querySelector(".mg").before(first);
+  });
+  await page.locator("#card .mg").nth(1).locator(".go").click();
+  await page.locator("#card .mg").nth(1).locator(".go").click();
+  assert.equal(await page.locator("#card .mg.st").count(), 1);
+  await page.evaluate(() => term.tree({op: "merge", path: "/w/mg2", ok: true, ref: "!65", target: "main", how: "Squash"}));
+  assert.equal(await page.locator("#card .mg").first().textContent(), "Other landing action", "first idle .mg left untouched");
+  assert.match(await page.locator("#card .mg.ok").textContent(), /Merged !65 into main/);
+});
+
+test("tab context menu, split/sidebar drag, nudge() resize, and zoom() clamping (TEST-ADD-11)", async page => {
+  // Tab context menu: rename state toggles, split right/down, close
+  await page.evaluate(() => { newTab("/w/fix-login"); cur.name = "custom"; render() });
+  await page.locator("#tabs .tab.on").click({button: "right"});
+  await page.waitForSelector("#menu:not([hidden])");
+  const labels1 = await page.$$eval("#menu button", bs => bs.map(b => b.firstChild.textContent));
+  assert.ok(labels1.includes("Rename…") && labels1.includes("Name with AI") && labels1.includes("Use the terminal's title") && labels1.includes("Split right") && labels1.includes("Close tab"), labels1.join(", "));
+  await page.click("#menu button:text-is('Use the terminal\\'s title')");
+  assert.equal(await page.evaluate(() => cur.name === "" && cur.manual === true), true);
+  await page.locator("#tabs .tab.on").click({button: "right"});
+  await page.click("#menu button:text-is('Name automatically')");
+  assert.equal(await page.evaluate(() => cur.manual), false);
+  // Split right via context menu, then drag split divider & nudge() keyboard resize
+  await page.locator("#tabs .tab.on").click({button: "right"});
+  await page.click("#menu button:has-text('Split right')");
+  assert.equal(await page.evaluate(() => paneOf(cur).length), 2);
+  const dvBox = await page.locator(".root:not([hidden]) .dv").boundingBox();
+  await page.mouse.move(dvBox.x + dvBox.width / 2, dvBox.y + dvBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(dvBox.x + 80, dvBox.y + dvBox.height / 2);
+  await page.mouse.up();
+  const afterDrag = await page.evaluate(() => {
+    const s = document.querySelector(".root:not([hidden]) .split");
+    return [parseFloat(s.children[0].style.flex), parseFloat(s.children[2].style.flex)];
+  });
+  assert.ok(afterDrag[0] > afterDrag[1], `split drag widened left pane: ${afterDrag}`);
+  await page.evaluate(() => nudge(cur.focus, "ArrowLeft"));
+  const afterNudge = await page.evaluate(() => parseFloat(document.querySelector(".root:not([hidden]) .split").children[0].style.flex));
+  assert.ok(afterNudge < afterDrag[0], `nudge ArrowLeft shrank left pane: ${afterNudge} vs ${afterDrag[0]}`);
+  // Sidebar divider drag clamps between 200 and 520
+  const sdv = await page.locator("#sdv").boundingBox();
+  await page.mouse.move(sdv.x + sdv.width / 2, sdv.y + 100);
+  await page.mouse.down();
+  await page.mouse.move(100, sdv.y + 100);
+  await page.mouse.up();
+  assert.equal(await page.evaluate(() => sideW), 200, "sidebar drag clamps at min 200");
+  const sdv2 = await page.locator("#sdv").boundingBox();
+  await page.mouse.move(sdv2.x + sdv2.width / 2, sdv2.y + 100);
+  await page.mouse.down();
+  await page.mouse.move(700, sdv2.y + 100);
+  await page.mouse.up();
+  assert.equal(await page.evaluate(() => sideW), 520, "sidebar drag clamps at max 520");
+  // zoom() clamps font size to [8, 32] and applies to panes
+  const z = await page.evaluate(() => {
+    zoom(2); const lo = [px, cur.focus.t.options.fontSize, localStorage.getItem("termSize")];
+    zoom(99); const hi = [px, cur.focus.t.options.fontSize, localStorage.getItem("termSize")];
+    zoom(15); const mid = [px, cur.focus.t.options.fontSize];
+    return {lo, hi, mid};
+  });
+  assert.deepEqual(z.lo, [8, 8, "8"]);
+  assert.deepEqual(z.hi, [32, 32, "32"]);
+  assert.deepEqual(z.mid, [15, 15]);
 });
 
 (async () => {

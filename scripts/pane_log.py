@@ -345,21 +345,23 @@ def record(
     lock_fd = _acquire_session_lock(d, session)
     if lock_fd is None:
         return 0
-    keep = {session} | (_live_tmux_sessions(socket) if log_dir is None else set())
-    prune_stale(d, keep=keep)
-
-    cur, prev = d / f"{session}.jsonl", d / f"{session}.jsonl.1"
-    half = max(4096, int(max_bytes) // 2)
-    chunk_cap = max(512, min(COALESCE_BYTES, half // 2))
-    fh, gen, size, has_data = _open_session_log(cur, prev, session, cwd, agent=agent)
-    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    fh = None
+    prev_term = None
     total_written = 0
-
-    def _handle_stop(_sig: int, _frame: Any) -> None:
-        raise _StopRecord()
-
-    prev_term = signal.signal(signal.SIGTERM, _handle_stop) if in_fd == 0 else None
     try:
+        keep = {session} | (_live_tmux_sessions(socket) if log_dir is None else set())
+        prune_stale(d, keep=keep)
+
+        cur, prev = d / f"{session}.jsonl", d / f"{session}.jsonl.1"
+        half = max(4096, int(max_bytes) // 2)
+        chunk_cap = max(512, min(COALESCE_BYTES, half // 2))
+        fh, gen, size, has_data = _open_session_log(cur, prev, session, cwd, agent=agent)
+        decoder = codecs.getincrementaldecoder("utf-8")("replace")
+
+        def _handle_stop(_sig: int, _frame: Any) -> None:
+            raise _StopRecord()
+
+        prev_term = signal.signal(signal.SIGTERM, _handle_stop) if in_fd == 0 else None
         try:
             while True:
                 try:
@@ -391,9 +393,10 @@ def record(
             fh.flush()
             total_written += len(rec.encode("utf-8"))
     finally:
-        with contextlib.suppress(OSError):
-            fh.flush()
-            fh.close()
+        if fh is not None and not fh.closed:
+            with contextlib.suppress(OSError, ValueError):
+                fh.flush()
+                fh.close()
         with contextlib.suppress(OSError):
             os.close(lock_fd)
         if prev_term is not None:
@@ -643,12 +646,19 @@ def _stat_inode(path: Path) -> tuple[int, int] | None:
         return None
 
 
+def _has_nonempty_file(path: Path) -> bool:
+    try:
+        return path.is_file() and not path.is_symlink() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
 def _load_session_entries(cur: Path, prev: Path, session: str, need_prev: bool) -> tuple[list[dict[str, Any]], int, bool]:
     """Read cur (and prev when needed), retrying once if rotation swapped cur mid-read."""
     for attempt in range(2):
         ino_before = _stat_inode(cur)
         cur_entries, cur_ts, cur_gen = _load_file_entries(cur, session)
-        has_prev = prev.is_file() and not prev.is_symlink() and prev.stat().st_size > 0
+        has_prev = _has_nonempty_file(prev)
         if not need_prev and len(cur_entries) >= 1:
             return cur_entries, cur_ts, has_prev
         prev_entries, prev_ts, prev_gen = _load_file_entries(prev, session, final=True) if has_prev else ([], 0, -1)
@@ -868,7 +878,7 @@ def attach(session: str, cwd: str = "", socket: str | None = None, code_dir: Pat
     )
     if check.returncode != 0 or check.stdout.strip() == "1":
         return check.returncode == 0
-    root = (code_dir or Path(__file__).resolve().parent).parent
+    root = Path(code_dir) if code_dir is not None else Path(__file__).resolve().parent.parent
     if not (root / "scripts" / "pane_log.py").is_file():
         return False
     home = os.environ.get("GREENLIGHT_HOME") or str(Path.home() / ".greenlight")

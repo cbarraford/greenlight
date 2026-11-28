@@ -47,24 +47,6 @@ def git_info(path):
             "projectId": common and project_id(git(path, "remote", "get-url", "origin"))}
 
 
-def worktree_add(repo, name, base=None):
-    if not name or name.startswith("-") or (base and base.startswith("-")):
-        raise RuntimeError("git worktree add: invalid branch or base ref")
-    path = str(Path(repo).parent / f"{Path(repo).name}-{name.replace('/', '-')}")
-    p = subprocess.run(bins.argv(["git", "-C", repo, "worktree", "add", "-b", name, "--", path, *([base] if base else [])]),
-                       capture_output=True, text=True)
-    if p.returncode:
-        raise RuntimeError(f"git worktree add: {p.stderr.strip()[:300]}")
-    return path
-
-
-def worktree_remove(ws, force=False):
-    if not ws["isMainWorktree"]:  # git refuses a dirty tree without --force: only the Basement passes it, after the page showed the risks
-        p = subprocess.run(bins.argv(["git", "-C", ws["repoId"], "worktree", "remove", *(["--force"] if force else []), "--", ws["path"]]), capture_output=True, text=True)
-        if p.returncode:
-            raise RuntimeError(f"git worktree remove {ws['path']}: {p.stderr.strip()[:300]}")
-
-
 VALUE_FLAGS = frozenset({
     "worktree", "repo", "name", "base-branch", "base", "comment", "terminal",
     "text", "agent", "prompt", "limit", "pr", "gitlab-mr", "setup", "status", "display-name",
@@ -386,7 +368,7 @@ def screen_state(lines, _ask_checked=False):
     answered = at(ANSWERED_RE)
     typed = draft(ls)
     typed_at = max((i for i, x in enumerate(nonblank) if typed and
-                    (x.strip()[:1] in "❯›" or (BOX_RE.search(x.strip()) and BOX_RE.sub("", x.strip()).strip().startswith(">")))), default=-1)
+                    (x.strip()[:1] in "❯›>" or (BOX_RE.search(x.strip()) and BOX_RE.sub("", x.strip()).strip().startswith(">")))), default=-1)
     menu_tail = lambda x: bool(passive(x) or re.match(r"^\s*\d+\.\s+\S", x) or re.fullmatch(r"Esc to cancel", x.strip(), re.I))
     ask_live = ask >= 0 and ask > answered and ask >= len(nonblank) - 15 and all(menu_tail(x) for x in nonblank[ask + 1:])
     if busy >= 0 and all(passive(x) for x in nonblank[busy + 1:]) and busy > max(dead, limited):

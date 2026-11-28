@@ -1,21 +1,13 @@
 """Cross-layer contract tests between Swift, HTML/JS, and Python backends."""
 import json
-import os
 import re
-import sys
-import tempfile
 from pathlib import Path
 
-_BOOT = tempfile.mkdtemp(prefix="gl-contracts-")
-os.environ.setdefault("GREENLIGHT_HOME", _BOOT)
-os.environ.setdefault("GREENLIGHT_ME", "octo")
+from conftest import ROOT
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "scripts"))
-
-import check_safety  # noqa: E402
-import dash  # noqa: E402
-import diag  # noqa: E402
+import check_safety
+import dash
+import diag
 
 
 def _swift_source() -> str:

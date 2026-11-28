@@ -1,25 +1,14 @@
 """Deterministic property-based & fuzz invariant tests across critical Greenlight parsers and guards."""
 import json
-import os
 import random
 import string
-import sys
-import tempfile
 import time
-from pathlib import Path
 
-_BOOT = tempfile.mkdtemp(prefix="gl-props-")
-os.environ.setdefault("GREENLIGHT_HOME", _BOOT)
-os.environ.setdefault("GREENLIGHT_ME", "octo")
-
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "scripts"))
-
-import ade_common  # noqa: E402
-import audit  # noqa: E402
-import auto  # noqa: E402
-import diag  # noqa: E402
-import dwim  # noqa: E402
+import ade_common
+import audit
+import auto
+import diag
+import dwim
 
 
 def test_property_cron_due_invariants():
