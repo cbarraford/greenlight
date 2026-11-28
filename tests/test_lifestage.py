@@ -447,26 +447,22 @@ def test_dash_new_task_and_tree_new_preflight_gates(lifestage_env):
         assert lifestage.record("preflight", {"path": "/w/new"})["answers"]
 
 
-def test_tree_new_starts_default_harness_in_basement_even_under_orca(monkeypatch):
+def test_tree_new_starts_default_harness_in_basement_preserving_goal_newlines(monkeypatch):
     import ade_basement
 
-    orca_calls, launches = [], []
+    create_calls, launches = [], []
 
-    def fake_orca_cli(*args, **kw):
-        orca_calls.append(args)
+    def fake_create(*args, **kw):
+        create_calls.append(args)
         if args[:2] == ("worktree", "create"):
             return {"worktree": {"path": "/w/new"}}
-        if args[:2] == ("host", "list"):
-            return {"hosts": [{"id": "local", "machineName": greenlight.here()}]}
         return {}
 
     def fake_launch(path, agent, prompt):
         launches.append((path, agent, prompt))
         return {"terminal": {"handle": "%4", "session": "mc-new"}}
 
-    monkeypatch.setenv("GREENLIGHT_ADE", "orca")
-    monkeypatch.setattr(greenlight, "orca_cli", fake_orca_cli)
-    monkeypatch.setattr(dash, "tree", lambda path, every=False: (greenlight.orca_cli, {"repoId": "r", "hostId": "local"}, [{"repoId": "r", "hostId": "local"}]))
+    monkeypatch.setattr(dash, "tree", lambda path, every=False: (fake_create, {"repoId": "/w/repo", "hostId": "local"}, [{"repoId": "/w/repo", "hostId": "local"}]))
     monkeypatch.setattr(dash, "repo_cfg", lambda path: {})
     monkeypatch.setattr(dash, "main_of", lambda path: None)
     monkeypatch.setattr(dash, "preflight", lambda *args: None)
@@ -476,7 +472,8 @@ def test_tree_new_starts_default_harness_in_basement_even_under_orca(monkeypatch
     goal = "Fix login\nKeep the existing API"
     out = dash.tree_new("/w/repo", {"name": "login", "goal": goal, "agent": True})
     assert out["ok"] and out["path"] == "/w/new" and out["session"] == "mc-new"
-    assert not any(args[:2] == ("agent", "launch") for args in orca_calls)
+    assert ("worktree", "create", "--repo", "id:/w/repo", "--name", "login", "--comment", goal) in create_calls
+    assert not any(args[:2] == ("agent", "launch") for args in create_calls)
     assert len(launches) == 1
     assert launches[0][0] == "/w/new" and launches[0][1] == "codex"
     assert launches[0][2].startswith(goal) and "gate push --execute" in launches[0][2]

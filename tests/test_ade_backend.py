@@ -1,5 +1,6 @@
 """ade.py: which backend is in use, its one contract, and the Orca-shaped dispatcher on top of it (#195)."""
 import json
+import os
 import subprocess
 import sys
 import types
@@ -29,25 +30,26 @@ def test_settle_new_and_existing_installs(home):
     (home / "last.json").write_text("{}")  # its own scans later never flip it
     assert ade.name() == "native"
     (home / "config.json").write_text(json.dumps({"agents": ["codex"]}))  # an install that ran (on Orca) and never chose
-    assert ade.name() == "orca"
+    assert ade.name() == "native"
     cfg = json.loads((home / "config.json").read_text())
-    assert cfg["ade"] == "orca" and cfg["agents"] == ["codex"] and "ade_set_because" in cfg  # its other settings stay
+    assert cfg["ade"] == "native" and cfg["agents"] == ["codex"] and "ade_set_because" in cfg
     (home / "config.json").write_text("[1]")  # not settings: decided, nothing written
-    assert ade.name() == "orca" and (home / "config.json").read_text() == "[1]"
+    assert ade.name() == "native" and (home / "config.json").read_text() == "[1]"
     (home / "config.json").write_text(json.dumps({"ade": True}))  # not even a string: never a crash
-    assert ade.name() == "orca" and not ade.config_ok()  # an install that ran on Orca stays there (doctor flags the value)
+    assert ade.name() == "native" and not ade.config_ok()
     (home / "config.json").write_text(json.dumps({"ade": "basment"}))  # a typo stays the user's to fix
-    assert ade.name() == "orca" and json.loads((home / "config.json").read_text())["ade"] == "basment"
+    assert ade.name() == "native" and json.loads((home / "config.json").read_text())["ade"] == "basment"
     (home / "last.json").unlink()
     (home / "config.json").unlink()
     (home / "history").mkdir()  # no scan ever finished (glab kept failing), but it ran: still an Orca install
-    assert ade.name() == "orca"
+    assert ade.name() == "native"
 
 
 def test_name_resolution(home, monkeypatch):
     assert ade.name() == ade.DEFAULT == "native" and ade.is_native() and not ade.is_orca()  # a new install: native (#195)
-    (home / "config.json").write_text(json.dumps({"ade": "Orca"}))  # Orca: opt-in
-    assert ade.name() == "orca" and ade.is_orca()
+    (home / "config.json").write_text(json.dumps({"ade": "Orca"}))
+    assert ade.name() == "native" and not ade.is_orca()
+    assert json.loads((home / "config.json").read_text())["ade"] == "native"
     (home / "config.json").write_text(json.dumps({"ade": "Native"}))
     assert ade.name() == "native" and ade.is_native()
     (home / "config.json").write_text(json.dumps({"ade": "basement"}))  # the old name
@@ -57,11 +59,11 @@ def test_name_resolution(home, monkeypatch):
     (home / "config.json").write_text("{not json")
     assert ade.name() == "native" and ade.deprecated() is None
     (home / "config.json").write_text(json.dumps({"ade": "native"}))
-    monkeypatch.setenv("GREENLIGHT_ADE", "t3")  # the env wins over a valid config
-    assert ade.name() == "t3"
-    assert ade.deprecated() == "t3"  # a legacy live driver still answers, flagged
+    monkeypatch.setenv("GREENLIGHT_ADE", "t3")
+    with pytest.raises(RuntimeError, match="live ADE backends are retired"):
+        ade.name()
     monkeypatch.setenv("GREENLIGHT_ADE", "rex")  # an env naming no backend is an error, not a silent default
-    with pytest.raises(RuntimeError, match="not one of"):
+    with pytest.raises(RuntimeError, match="use native"):
         ade.name()
 
 
@@ -71,10 +73,11 @@ def test_get_modules(home, monkeypatch):
     assert ade.get() is ade_basement
     with pytest.raises(KeyError):
         ade.get("rex")
-    for n in ade.NAMES:  # every backend implements the whole contract and names itself
+    for n in ade.NAMES:
         m = ade.get(n)
         assert n == m.NAME
-        for fn in ("worktrees", "terminals", "read", "send", "launch", "set_goal", "remove", "create", "repos", "call"):
+        for fn in (("worktrees", "terminals", "read", "send", "launch", "set_goal", "remove", "create", "repos", "call")
+                   if n == "native" else ("worktrees", "repos")):
             assert callable(getattr(m, fn)), (n, fn)
 
 
@@ -124,29 +127,44 @@ def test_greenlight_orca_routes_through_the_backend(home, monkeypatch):
     with mock.patch.object(ade_basement, "worktrees", return_value=[{"id": "/w"}]), \
             mock.patch.object(greenlight, "orca_cli", side_effect=AssertionError("Orca called under native")):
         assert greenlight.orca("worktree", "ps", "--limit", "10000") == {"worktrees": [{"id": "/w"}]}
+        with mock.patch.object(ade, "call", return_value={"worktree": {"id": "/w"}}) as native:
+            assert greenlight.orca("worktree", "create", "--repo", "/repo", "--name", "feat") == {"worktree": {"id": "/w"}}
+            native.assert_called_once_with("worktree", "create", "--repo", "/repo", "--name", "feat")
     monkeypatch.setenv("GREENLIGHT_ADE", "orca")
-    with mock.patch.object(greenlight, "orca_cli", return_value={"worktrees": []}) as oc, \
-            mock.patch.object(greenlight, "place_here", side_effect=lambda a: (list(a), None)):
-        assert greenlight.orca("worktree", "ps") == {"worktrees": []}
-        oc.assert_called_once_with("worktree", "ps", timeout=120)
+    with pytest.raises(RuntimeError, match="live ADE backends are retired"):
+        greenlight.orca("worktree", "ps")
+    for source in ade.LEGACY:
+        with pytest.raises(RuntimeError, match="import source"):
+            ade.call("worktree", "create", n=source)
+    with pytest.raises(KeyError, match="no ADE backend"):
+        ade.call("worktree", "ps", n="bogus")
 
 
-def test_orca_adapter_contract(home):
-    with mock.patch.object(greenlight, "orca_cli", return_value={"worktrees": [1], "terminals": [2]}) as oc, \
-            mock.patch.object(greenlight, "place_here", side_effect=lambda a: (list(a), None)):
-        assert ade_orca.worktrees() == [1] and ade_orca.terminals() == [2]
-        ade_orca.set_goal("abc", "Goal")
-        ade_orca.remove("abc", force=True)
-        ade_orca.create("r1", "feat", "main", "Goal", "claude", "go")
-        ade_orca.launch("abc", "codex", "")
-    assert [c.args for c in oc.call_args_list][2:] == [
-        ("worktree", "set", "--worktree", "id:abc", "--comment", "Goal"),
-        ("worktree", "rm", "--worktree", "id:abc", "--force"),
-        ("worktree", "create", "--repo", "id:r1", "--name", "feat", "--base-branch", "main", "--comment", "Goal",
-         "--agent", "claude", "--prompt", "go"),
-        ("agent", "launch", "--worktree", "id:abc", "--agent", "codex")]
-    with mock.patch.object(greenlight, "place_here", return_value=(None, "elsewhere")), pytest.raises(greenlight.PlacementRefused):
-        ade_orca.create("r1", "feat")
+def test_name_no_migrate_and_stale_env_tolerance(home, monkeypatch):
+    import dash
+    import importers
+
+    # migrate=False never creates or rewrites config.json
+    assert ade.name(migrate=False) == "native"
+    assert not (home / "config.json").exists()
+    (home / "config.json").write_text(json.dumps({"ade": "orca"}))
+    assert ade.name(migrate=False) == "native"
+    assert json.loads((home / "config.json").read_text())["ade"] == "orca"
+
+    # Stale GREENLIGHT_ADE=orca is tolerated cleanly by importers.first_run() and dash.outside_agent()
+    monkeypatch.setenv("GREENLIGHT_ADE", "orca")
+    assert importers.first_run() is None
+    assert dash.outside_agent(str(home)) is None
+
+
+def test_orca_adapter_is_import_only(home):
+    with mock.patch.object(greenlight, "orca_cli", side_effect=[{"worktrees": [1]}, {"repos": [2]}]) as oc:
+        assert ade_orca.worktrees() == [1]
+        assert ade_orca.repos() == {"repos": [2]}
+    assert [c.args for c in oc.call_args_list] == [
+        ("worktree", "ps", "--limit", "10000"), ("repo", "list")]
+    for operation in ("call", "terminals", "read", "send", "launch", "set_goal", "remove", "create"):
+        assert not hasattr(ade_orca, operation)
 
 
 def git(*a, cwd):
@@ -162,7 +180,71 @@ def repo(tmp_path):
     return r
 
 
+def _make_fake_wt(tmp_path):
+    """Minimal executable `wt` stub backed by git worktree so tests never require Worktrunk on PATH."""
+    wt = tmp_path / "wt-stub"
+    wt.write_text(
+        f"#!{sys.executable}\n"
+        "import json, subprocess, sys\n"
+        "from pathlib import Path\n"
+        "args = sys.argv[1:]\n"
+        "repo, i = '.', 0\n"
+        "while i < len(args):\n"
+        "    if args[i] == '-C':\n"
+        "        repo = args[i + 1]; i += 2\n"
+        "    elif args[i] in ('-y', '--yes'):\n"
+        "        i += 1\n"
+        "    elif args[i] == '--config-set':\n"
+        "        i += 2\n"
+        "    else:\n"
+        "        break\n"
+        "sub, rest = args[i], args[i + 1:]\n"
+        "if sub == 'switch':\n"
+        "    base, pos, j = None, [], 0\n"
+        "    while j < len(rest):\n"
+        "        if rest[j] == '--base':\n"
+        "            base = rest[j + 1]; j += 2\n"
+        "        elif rest[j].startswith('-'):\n"
+        "            j += 1\n"
+        "        else:\n"
+        "            pos.append(rest[j]); j += 1\n"
+        "    branch = pos[0]\n"
+        "    r = Path(repo).resolve()\n"
+        "    dest = r.parent / f'{r.name}.{branch.replace(\"/\", \"-\")}'\n"
+        "    cmd = ['git', '-C', str(r), 'worktree', 'add', '-q', '-b', branch, str(dest)]\n"
+        "    if base:\n"
+        "        cmd.append(base)\n"
+        "    p = subprocess.run(cmd, capture_output=True, text=True)\n"
+        "    if p.returncode:\n"
+        "        sys.stderr.write(p.stderr); sys.exit(p.returncode)\n"
+        "    print(json.dumps({'branch': branch, 'path': str(dest)}))\n"
+        "elif sub == 'list':\n"
+        "    p = subprocess.run(['git', '-C', repo, 'worktree', 'list', '--porcelain'], capture_output=True, text=True, check=True)\n"
+        "    items, cur = [], {}\n"
+        "    for line in p.stdout.splitlines() + ['']:\n"
+        "        if line.startswith('worktree '):\n"
+        "            cur = {'worktree': {'path': line[9:]}}\n"
+        "        elif line.startswith('branch '):\n"
+        "            cur['branch'] = line[7:].removeprefix('refs/heads/')\n"
+        "        elif not line and cur:\n"
+        "            items.append(cur); cur = {}\n"
+        "    print(json.dumps({'schema': 2, 'items': items}))\n"
+        "elif sub == 'remove':\n"
+        "    force = '--force' in rest or '-f' in rest\n"
+        "    target = [x for x in rest if not x.startswith('-')][-1]\n"
+        "    cmd = ['git', '-C', repo, 'worktree', 'remove', *(['--force'] if force else []), target]\n"
+        "    p = subprocess.run(cmd, capture_output=True, text=True)\n"
+        "    if p.returncode:\n"
+        "        sys.stderr.write(p.stderr); sys.exit(p.returncode)\n"
+        "else:\n"
+        "    sys.stderr.write(f'unsupported wt subcommand: {sub}\\n'); sys.exit(2)\n"
+    )
+    wt.chmod(0o755)
+    return wt
+
+
 def test_native_registry_and_create_launches_agent(home, repo, monkeypatch):
+    monkeypatch.setenv("WORKTRUNK_BIN", str(_make_fake_wt(home)))
     monkeypatch.setattr(ade_basement, "REPOS", home / "repos.json")
     monkeypatch.setattr(ade_basement.ade_common, "GOALS", home / "goals.json")
     (repo / "sub").mkdir()
@@ -173,7 +255,7 @@ def test_native_registry_and_create_launches_agent(home, repo, monkeypatch):
     with mock.patch.object(ade_basement, "launch", return_value={"terminal": {"handle": "%9", "session": "mc-1"}}) as la:
         out = ade_basement.create("widgets", "feat-x", None, "Ship X", "codex", "do it")  # a registered repo by name
     path = out["worktree"]["path"]
-    assert path.endswith("widgets-feat-x") and out["terminal"]["handle"] == "%9"
+    assert path.endswith("widgets.feat-x") and out["terminal"]["handle"] == "%9"
     la.assert_called_once_with(path, "codex", "do it")
     assert ade_basement.ade_common.goals() == {path: "Ship X"}
     with mock.patch.object(ade_basement, "panes", return_value=[]):
@@ -200,7 +282,7 @@ def test_native_registry_and_create_launches_agent(home, repo, monkeypatch):
     monkeypatch.chdir(repo.parent)
     with pytest.raises(RuntimeError, match="names no registered repo"):
         ade_basement.create("gadgets", "feat-q")
-    assert not (repo.parent / "gadgets-feat-q").exists() and str(gadgets.resolve()) not in ade_basement.saved()
+    assert not (repo.parent / "gadgets.feat-q").exists() and str(gadgets.resolve()) not in ade_basement.saved()
     with pytest.raises(RuntimeError, match="not a git checkout"):
         ade_basement.create(str(home / "nowhere"), "feat-q")
     other = home / "b" / "widgets"
@@ -226,9 +308,10 @@ def test_repos_cli(home, repo, monkeypatch, capsys):
 
 
 def test_cli_ade_native_end_to_end(home, repo):
-    """`greenlight.py ade` under GREENLIGHT_ADE=native: a real worktree, its goal, listed, removed. No tmux needed."""
+    """`greenlight.py ade` under GREENLIGHT_ADE=native: a real worktree, its goal, listed, removed. No tmux or host wt needed."""
+    wt = str(_make_fake_wt(home))
     env = {"GREENLIGHT_HOME": str(home), "GREENLIGHT_ADE": "native", "GREENLIGHT_TMUX_SOCKET": "gl-test-none",
-           "GREENLIGHT_ME": "tester", "PATH": "/usr/bin:/bin", "HOME": str(home)}
+           "GREENLIGHT_ME": "tester", "WORKTRUNK_BIN": wt, "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home)}
     (home / "imported.json").write_text("{}")  # never this machine's real ADEs (the first-run import)
     run = lambda *a: subprocess.run([sys.executable, "scripts/greenlight.py", *a], capture_output=True, text=True, env=env, timeout=60)
     assert run("repos", "add", str(repo)).returncode == 0
@@ -240,23 +323,28 @@ def test_cli_ade_native_end_to_end(home, repo):
     assert {w["path"]: w["comment"] for w in ps}[path] == "Goal Y"
     assert json.loads(run("ade", "worktree", "rm", "--worktree", f"id:{path}").stdout) == {"removed": path}
     assert json.loads((home / "goals.json").read_text()) == {}  # its goal went with it
+    assert subprocess.run(["git", "-C", str(repo), "show-ref", "--verify", "--quiet", "refs/heads/feat-y"]).returncode == 0
 
 
 def test_dash_backend_order(home, monkeypatch):
     import dash
-    assert dash.ades() == ("orca", "native")  # the default: Orca's own workspaces still go through Orca, git finds the rest
+    assert dash.ades() == ("native",)
+    with pytest.raises(RuntimeError, match="import source"):
+        dash.ade_call("orca")
     monkeypatch.setenv("GREENLIGHT_ADE", "basement")
-    assert dash.ades() == ("orca", "native")
+    assert dash.ades() == ("native",)
     monkeypatch.setenv("GREENLIGHT_ADE", "orca")
-    assert dash.ades() == ("orca", "cmux", "herdr", "t3")  # an Orca user's sidebar as before: every installed ADE
+    assert dash.ades() == ("native",)
     monkeypatch.setenv("GREENLIGHT_ADE", "cmux")
-    assert dash.ades() == ("orca", "cmux", "herdr", "t3")
+    assert dash.ades() == ("native",)
     monkeypatch.setenv("GREENLIGHT_ADE", "bogus")
-    assert dash.ades() == ("orca", "cmux", "herdr", "t3")
+    assert dash.ades() == ("native",)
     monkeypatch.setattr(dash, "ADES", ("orca",))
     assert dash.ades() == ("orca",)
     assert dash.ade_call("orca") is greenlight.orca_cli  # tree_new knows an Orca create by it (placement as the user's pick)
     assert dash.ade_call("native") == ade_basement.call
+    with pytest.raises(RuntimeError, match="import source"):
+        dash.ade_call("cmux")
 
 
 def test_native_without_tmux(home, monkeypatch):

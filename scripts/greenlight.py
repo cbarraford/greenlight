@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""greenlight: work out the next lifecycle step, and who it's waiting on, for every Orca workspace.
+"""greenlight: work out the next lifecycle step, and who it's waiting on, for every Worktrunk workspace.
 
     greenlight.py scan [--json]   facts + next step per workspace; snapshot saved to ~/.greenlight/last.json. Each row also
                                   carries `life`: its lifecycle stage and sub-stage, who holds it, and the suggested move (lifestage.py)
@@ -18,8 +18,8 @@
     greenlight.py import [detect|preview|apply] [--from orca|t3|cmux|herdr|folder] [--path DIR]  another ADE's repos and
                                  goals into the native engine, read-only on its side (importers.py; preview changes nothing)
     greenlight.py repos [list|add|rm <path>...]  the native engine's repos (repos.json): every worktree of each is a workspace
-    greenlight.py ade <orca args>           an `orca`-shaped call answered by the backend in use (ade.py: native|orca|cmux|herdr|t3), JSON out;
-                                            `worktree create` stays on this machine (place_here; placement.py lists strays)
+    greenlight.py ade <orca-shaped args>    a compatibility JSON call answered by the native backend (ade.py);
+                                            Worktrunk creates and removes the worktrees
 
 Read-only: it never changes anything. The greenlight skill acts on `next.cmd` / `next.owner`.
 Deleting finished workspaces is cleanup.py's job (next to this file); creating workspaces for MRs
@@ -177,20 +177,8 @@ ME = os.environ.get("GREENLIGHT_ME") or CONFIG["me"] or whoami()
 
 
 def orca(*args, timeout=120):
-    """An `orca …`-shaped call, answered by the backend in use (ade.name(): native, orca, or a legacy driver) through
-    ade.py's contract, in Orca's shape. Under Orca, a `worktree create` goes through place_here first, so adopt.py's
-    and dash.py's workspaces stay on this machine too."""
-    if not ade.is_orca():
-        return ade.call(*args)
-    return orca_placed(*args, timeout=timeout)
-
-
-def orca_placed(*args, timeout=120):
-    """The Orca CLI, with a `worktree create` placed on this machine first (place_here)."""
-    args, why = place_here(args)
-    if why:
-        raise PlacementRefused(why)
-    return orca_cli(*args, timeout=timeout)
+    """An Orca-shaped compatibility call answered by Greenlight's native backend."""
+    return ade.call(*args)
 
 
 class PlacementRefused(RuntimeError):
@@ -1474,10 +1462,7 @@ def screen(ws, terminals):
         return None
     ws["agent"]["terminal"] = terms[0]["handle"]
     try:
-        if terms[0].get("basement"):
-            tail = ade.get("native").read(terms[0]["handle"], 60)["terminal"].get("tail", "")
-        else:
-            tail = orca("terminal", "read", "--terminal", terms[0]["handle"], "--limit", "60")["terminal"].get("tail", "")
+        tail = orca("terminal", "read", "--terminal", terms[0]["handle"], "--limit", "60")["terminal"].get("tail", "")
     except Exception:
         return None
     lines = tail.splitlines() if isinstance(tail, str) else [str(x) for x in tail]
@@ -1651,44 +1636,15 @@ def goal_with_backfill(comment, worktree_id, backfills, branch=None, linked_mr=N
     return goal or remembered.get("goal") or "", False
 
 
-def _basement_overlays(wts):
-    """Under ade == 'orca', discover live agents and terminals running in Basement's tmux inside those worktrees."""
-    if not ade.is_orca() or not wts:
-        return {}, {}
-    try:
-        return ade.get("native").overlays(wts)
-    except Exception:  # noqa: BLE001 - no tmux / Basement unavailable: Orca's own view stands
-        return {}, {}
-
-
-def merge_basement_worktrees(wts):
-    """Under ade == 'orca', merge Basement tmux agents into local worktrees; returns (worktrees, terminals_by_wid)."""
-    b_agents, b_terms = _basement_overlays(wts)
-    if not b_agents:
-        return wts, {}
-    merged = []
-    for w in wts:
-        wid = w.get("worktreeId") or w.get("id")
-        extra = b_agents.get(wid)
-        if not extra:
-            merged.append(w)
-            continue
-        last_out = max([w.get("lastOutputAt") or 0, *(a.get("updatedAt") or 0 for a in extra)]) or None
-        merged.append({**w, "agents": [*(w.get("agents") or []), *extra], "lastOutputAt": last_out})
-    return merged, b_terms
-
-
 def scan(save=True, _backfill_retries=0):
     scan_started_ns = time.monotonic_ns()
     started = int(time.time())  # wall clock, for the dashboard: a scan that began after an action can show its result
     clock_id = scan_clock_id()
-    wts, basement_terms = merge_basement_worktrees(orca("worktree", "ps", "--limit", "10000")["worktrees"])
+    wts = orca("worktree", "ps", "--limit", "10000")["worktrees"]
     full = {w["id"]: w for w in orca("worktree", "list", "--limit", "10000")["worktrees"]}
     terminals = {}
     for t in orca("terminal", "list", "--limit", "10000")["terminals"]:
         terminals.setdefault(t["worktreeId"], []).append(t)
-    for wid, ts in basement_terms.items():
-        terminals.setdefault(wid, []).extend(ts)
 
     projects = {w["repoId"]: fp for w in full.values() if (fp := forge_project(w.get("projectId")))}
     backfill_before = backfill_revision()
@@ -2259,7 +2215,7 @@ def note(name, text):
         fh.write(f"- {time.strftime('%Y-%m-%d %H:%M')} {text}\n")
 
 
-SCAN_TOOLS = {"glab": "GitLab", "gh": "GitHub", "orca": "Orca", "orca-ide": "Orca",
+SCAN_TOOLS = {"glab": "GitLab", "gh": "GitHub", "wt": "Worktrunk", "orca": "Orca", "orca-ide": "Orca",
               "tmux": "tmux", "cmux": "cmux", "herdr": "herdr", "t3": "t3"}
 SCAN_WHY = {"auth": "login expired", "rate_limit": "rate limited", "timeout": "timed out", "network": "unreachable",
             "transient": "server error", "permission": "permission denied"}

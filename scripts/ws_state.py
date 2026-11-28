@@ -96,7 +96,7 @@ def owner_keys(ids, migrate=True):
         for card_file in DIR.glob("*.json"):
             with contextlib.suppress(OSError, ValueError):
                 card = json.loads(card_file.read_text())
-                if card.get("id") in missing and card.get("ws"):
+                if isinstance(card, dict) and card.get("id") in missing and card.get("ws"):
                     owners[card["id"]] = card["ws"]
     if missing and not (DIR / ".owners-migrated").exists() and migrate:
         with index_write_lock():
@@ -104,7 +104,7 @@ def owner_keys(ids, migrate=True):
                 for card_file in DIR.glob("*.json"):
                     with contextlib.suppress(OSError, ValueError):
                         card = json.loads(card_file.read_text())
-                        if card.get("id") and card.get("ws"):
+                        if isinstance(card, dict) and card.get("id") and card.get("ws"):
                             record = {"id": card["id"], "card": card["ws"]}
                             of = owner_file(card["id"])
                             tmp = of.with_name(f".{of.name}.{os.getpid()}.tmp")

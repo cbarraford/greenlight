@@ -1724,7 +1724,7 @@ struct SettingsView: View {
 
     @ViewBuilder var addRepoForm: some View {
         box("Add a repository") {
-            row("Name", "As orca knows it: the last part of its path. A remote like gitlab.com/group/repo works too.") {
+            row("Name", "The repository's folder name: the last part of its path. A remote like gitlab.com/group/repo works too.") {
                 TextField("repo", text: $rs.draftRepo).textFieldStyle(DSField()).font(sys(size: DS.TypeRole.label.size, design: .monospaced)).frame(width: 240).onSubmit(addRepo)
             }
             row("Project") {

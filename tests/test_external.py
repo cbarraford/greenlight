@@ -217,8 +217,10 @@ def test_cleanup_never_deletes_under_an_external_agent(monkeypatch, tmp_path):
     assert cleanup.outside_agent(str(wt)) == "codex"
     monkeypatch.setattr(cleanup, "ALL_PATHS", [])
     assert cleanup.outside_agent(str(wt)) is None  # (what asking about wt alone would have said)
-    monkeypatch.setenv("GREENLIGHT_ADE", "orca")  # Orca lists its own agents' terminals: the busy check covers them
-    assert cleanup.outside_agent(str(wt)) is None
+    monkeypatch.setenv("GREENLIGHT_ADE", "orca")
+    with pytest.raises(RuntimeError, match="live ADE backends are retired"):
+        cleanup.outside_agent(str(wt))
+    monkeypatch.setenv("GREENLIGHT_ADE", "native")
     assert cleanup.evaluate(w, repo, set()) == ("candidate", "MR !4 merged")
 
 

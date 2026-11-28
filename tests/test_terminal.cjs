@@ -1659,6 +1659,48 @@ test("stuck stage in Basement escalates smart button to Inspect workspace, with 
   assert.equal(rst.path, "/w/fix-login");
 });
 
+test("term.ws with sessionId opens in the workspace and types the session connect command + Return (new terminal window launch)", async page => {
+  const sid = "0eb62452-d4f6-4e8d-a381-64ec2d0e3137";
+  const cases = [
+    [{harness: "claude", sessionId: sid}, `claude --resume ${sid}\r`],
+    [{harness: "claude", sessionId: sid, bin: "/opt/bin/claude"}, `/opt/bin/claude --resume ${sid}\r`],
+    [{harness: "codex", sessionId: sid}, `codex resume ${sid}\r`],
+    [{harness: "agy", sessionId: sid}, `agy --resume ${sid}\r`],
+    [{harness: "opencode", sessionId: "ses_123"}, "opencode -s ses_123\r"],
+    [{harness: "gemini", sessionId: sid}, `gemini --resume ${sid}\r`],
+    [{harness: "pi", sessionId: sid}, `pi --session ${sid}\r`],
+  ];
+  for (const [resume, wantCmd] of cases) {
+    const before = (await posts(page, "open")).length;
+    await page.evaluate(([r]) => term.ws("/w/fix-login", r), [resume]);
+    const opened = (await posts(page, "open")).slice(before);
+    assert.equal(opened.length, 1, `expected one new pane for ${resume.harness}`);
+    assert.equal(opened[0].ws, "/w/fix-login", "pane must open in the requested workspace");
+    assert.deepEqual(await ins(page, opened[0].id), [wantCmd], `typed command mismatch for ${resume.harness}`);
+  }
+  // Unsafe or non-ASCII sessionId on a fresh workspace must never fall through to --continue or type the bad ID
+  const beforeBad = (await posts(page, "in")).length;
+  await page.evaluate(() => term.ws("/w/sidebar", {harness: "claude", sessionId: "id; touch /tmp/pwn"}));
+  await page.evaluate(() => term.ws("/w/review", {harness: "claude", sessionId: "aé"}));
+  const typedBad = (await posts(page, "in")).slice(beforeBad).map(m => m.d).join("");
+  assert.equal(typedBad, "", "invalid sessionId must not fall through to --continue or type anything: " + typedBad);
+  // Pre-restore pendingWs path (as App.swift openSessionWindow sends term.ws before term.restore(null))
+  const prePage = await page.context().browser().newPage();
+  await prePage.addInitScript(() => {
+    window.__posts = [];
+    window.webkit = {messageHandlers: {term: {postMessage: m => window.__posts.push(m)}}};
+  });
+  try {
+    await prePage.goto("file://" + path.join(dir, "terminal.html?main=0&side=0"));
+    await prePage.waitForFunction(() => window.__posts.some(m => m.cmd === "ready"));
+    await prePage.evaluate(([id]) => { term.ws("/w/fix-login", {harness: "codex", sessionId: id}); term.restore(null) }, [sid]);
+    const opened = await prePage.evaluate(() => window.__posts.filter(m => m.cmd === "open"));
+    assert.equal(opened.length, 1, "pre-restore session window opens exactly one pane (no extra blank shell)");
+    assert.equal(opened[0].ws, "/w/fix-login");
+    assert.deepEqual(await prePage.evaluate(id => window.__posts.filter(m => m.cmd === "in" && m.id === id).map(m => m.d), opened[0].id), [`codex resume ${sid}\r`]);
+  } finally { await prePage.close() }
+});
+
 (async () => {
   const browser = await launchBrowser();
   let failed = 0;

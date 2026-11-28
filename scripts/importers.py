@@ -186,7 +186,10 @@ def first_run():
     """Once per install, the first time the native engine lists workspaces: import every detected ADE (not folders),
     so someone moving from Orca, T3, cmux or herdr keeps their repos and goals. A source that couldn't be read is
     tried again later (`pending`), a few times. Never raises; the marker (imported.json) makes it once."""
-    if not ade.is_native():
+    try:
+        if not ade.is_native():
+            return None
+    except RuntimeError:
         return None
     marker = ade_basement.HOME / FIRST_RUN
     if _due(marker) is None:

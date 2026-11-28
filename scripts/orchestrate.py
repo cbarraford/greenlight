@@ -40,7 +40,6 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import ade  # noqa: E402
 import diag  # noqa: E402
 import greenlight  # noqa: E402
 import ws_state  # noqa: E402
@@ -169,18 +168,6 @@ def branch_has_open_mr(r):
     return False
 
 
-def _live_worktrees():
-    return greenlight.merge_basement_worktrees(greenlight.orca("worktree", "ps", "--limit", "10000")["worktrees"])[0]
-
-
-def _with_basement_terminals(live, wid, terminals):
-    if not ade.is_orca():
-        return terminals
-    _, b_terms = greenlight._basement_overlays([live])
-    extra = b_terms.get(wid)
-    return [*terminals, *extra] if extra else terminals
-
-
 def active_agent_blocks(live, r, rate_limit_handoff=False):
     active = [a for a in live.get("agents") or [] if a.get("state") in ("working", "waiting")]
     scanned = r.get("agent") or {}
@@ -189,7 +176,7 @@ def active_agent_blocks(live, r, rate_limit_handoff=False):
     if not active:
         return False
     try:
-        terminals = _with_basement_terminals(live, r["id"], greenlight.orca("terminal", "list", "--limit", "10000")["terminals"])
+        terminals = greenlight.orca("terminal", "list", "--limit", "10000")["terminals"]
     except Exception:
         return True
     for a in active:
@@ -222,7 +209,7 @@ def merge_agent_blocks(live, r):
     if not pane or any(a.get("paneKey") != pane for a in active):
         return True
     try:
-        terminals = _with_basement_terminals(live, r["id"], greenlight.orca("terminal", "list", "--limit", "10000")["terminals"])
+        terminals = greenlight.orca("terminal", "list", "--limit", "10000")["terminals"]
         seen = greenlight.screen(r, {r["id"]: terminals})
     except Exception:
         return True
@@ -320,7 +307,7 @@ def dispatch(r, card, first=None, why_handoff="", assignment=None, exhausted=(),
                                 any(d.get("pending") for d in ws_state.load(peer["card"])["dispatches"]):
                             return None, "rejected: linked workspace active or pending before quota fallback"
                     link_field = "linkedPR" if r.get("forge") == "github" else "linkedGitLabMR"
-                    current = _live_worktrees()
+                    current = greenlight.orca("worktree", "ps", "--limit", "10000")["worktrees"]
                     projects_by_repo = None
                     for w in current:
                         same_link = str(greenlight.linked_number(w.get(link_field)) or "") == str(r["mr"]["iid"])
@@ -824,7 +811,7 @@ MERGE = (["pr", "merge"], ["mr", "merge"])
 
 def live_worktree(r, snapshot=None):
     """Use one tick-wide agent snapshot and a targeted fresh metadata read for every action."""
-    ps = snapshot if snapshot is not None else _live_worktrees()
+    ps = snapshot if snapshot is not None else greenlight.orca("worktree", "ps", "--limit", "10000")["worktrees"]
     row = ps.get(r["id"]) if isinstance(ps, dict) else next((w for w in ps if w.get("worktreeId") == r["id"]), None)
     if row is None:
         return None
@@ -834,18 +821,12 @@ def live_worktree(r, snapshot=None):
             return None  # the target disappeared after the tick snapshot
         detail = shown.get("worktree") or {}
     except Exception:
-        if ade.is_orca():
-            raise
         fresh = greenlight.orca("worktree", "ps", "--limit", "10000")["worktrees"]
         row = next((w for w in fresh if w.get("worktreeId") == r["id"]), None)
         if row is None:
             return None
-        detail = {}  # other ADEs supply the live row through ps
-    merged = {**row, **detail, "worktreeId": r["id"], "agents": detail.get("agents", row.get("agents", []))}
-    if ade.is_orca():
-        base_agents = [a for a in merged.get("agents") or [] if not a.get("basement")]
-        merged = greenlight.merge_basement_worktrees([{**merged, "agents": base_agents}])[0][0]
-    return merged
+        detail = {}  # the native backend supplies the live row through ps
+    return {**row, **detail, "worktreeId": r["id"], "agents": detail.get("agents", row.get("agents", []))}
 
 
 def branch_changed(r, live):
@@ -914,7 +895,7 @@ def guard_merge(r, cmd, snapshot=None, peers=()):
             if readying and (stay_draft(peer) or stay_draft(peer, fresh.get("comment") or "")):
                 return None, "a linked workspace says keep draft"
         try:
-            fresh_rows = _live_worktrees()
+            fresh_rows = greenlight.orca("worktree", "ps", "--limit", "10000")["worktrees"]
         except Exception as e:
             return None, f"couldn't recheck linked workspaces: {str(e)[:100]}"
         known = {p["id"] for p in matching}
@@ -971,7 +952,7 @@ def guard_merge(r, cmd, snapshot=None, peers=()):
         return None, "goal changed since the scan"
     if merging or readying:
         try:
-            final_rows = _live_worktrees()
+            final_rows = greenlight.orca("worktree", "ps", "--limit", "10000")["worktrees"]
         except Exception as e:
             return None, f"couldn't recheck linked workspaces after forge read: {str(e)[:100]}"
         final_by_id = {w.get("worktreeId"): w for w in final_rows}
@@ -1142,7 +1123,7 @@ def phase_me(rows, cards):
     sent = []
     open_keys = greenlight.pinged()
     try:
-        live_snapshot = {w["worktreeId"]: w for w in _live_worktrees()}
+        live_snapshot = {w["worktreeId"]: w for w in greenlight.orca("worktree", "ps", "--limit", "10000")["worktrees"]}
     except Exception:
         return sent  # no live evidence: do not resolve or publish a question from an old scan
     all_decisions = None
@@ -1211,7 +1192,7 @@ def act(rows, cards, acts):
     by = {r["id"]: r for r in keyed(rows)}
     done, launches, forge_actions, claimed = [], 0, 0, set()
     try:
-        live_snapshot = {w["worktreeId"]: w for w in _live_worktrees()}
+        live_snapshot = {w["worktreeId"]: w for w in greenlight.orca("worktree", "ps", "--limit", "10000")["worktrees"]}
     except Exception:
         live_snapshot = None  # each action will retry its own live read and report failures
     for a in acts:
@@ -1273,18 +1254,6 @@ def act_one(r, name, a, cards, snapshot=None, peers=()):
             return [f"left {name}: goal changed since scan; backfill skipped"]
         try:
             old_comment = r.get("comment") or ""
-            if r.get("linked_mr") is None and r.get("forge") == "gitlab" and ade.is_orca():
-                branch = (r.get("mr") or {}).get("source_branch") or r["branch"]
-                query = urllib.parse.urlencode({"source_branch": branch, "state": "opened", "per_page": 100})
-                opened = greenlight.gl(f"projects/{greenlight.pid(r['project'])}/merge_requests?{query}")
-                if {m["iid"] for m in opened} != {r["mr"]["iid"]}:
-                    return [f"left {name}: open MR for {branch} changed since scan; backfill skipped"]
-                latest = live_worktree(r)
-                if latest is None or branch_changed(r, latest) or link_changed(r, latest) or \
-                        (latest.get("comment") or "").strip() != (r.get("comment") or "").strip():
-                    return [f"left {name}: workspace link or goal changed during backfill"]
-                greenlight.orca("worktree", "set", "--worktree", f"id:{r['id']}", "--gitlab-mr", str(r["mr"]["iid"]))
-                r["linked_mr"] = r["mr"]["iid"]
             store_backfill(r, a["goal"])
             greenlight.decisions.backfilled_goal(r["id"], (r.get("mr") or {}).get("ref"), a["goal"], r.get("project"), r.get("forge"))
             r["goal"] = a["goal"]  # a later action sees this generated goal; the user's comment remains untouched
@@ -1409,7 +1378,7 @@ def act_one(r, name, a, cards, snapshot=None, peers=()):
                         continue
                     return [f"left {name}: another workspace has a user decision about this MR"]
             try:
-                current_worktrees = _live_worktrees()
+                current_worktrees = greenlight.orca("worktree", "ps", "--limit", "10000")["worktrees"]
             except Exception as e:
                 return [f"dispatch failed on {name}: couldn't recheck linked workspaces: {str(e)[:100]}"]
             link_field = "linkedPR" if r.get("forge") == "github" else "linkedGitLabMR"

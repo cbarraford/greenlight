@@ -1,5 +1,6 @@
-"""T3 Code backend (GREENLIGHT_ADE=t3, a legacy live driver): ade.py's contract answered by T3 Code.
+"""Read-only T3 Code import source for importers.py (no longer a live GREENLIGHT_ADE=t3 backend).
 
+Live workspace operations use Worktrunk and ade_basement.py (`GREENLIGHT_ADE=native`).
 A workspace is a T3 project (one git worktree each); its threads are both its agents and its "terminals", so a
 terminal handle is a thread id. Goals live in ~/.greenlight/goals.json (T3 has no project description). Needs the
 T3 Code server running (the desktop app, or `t3 serve`).

@@ -11,7 +11,7 @@
     dash.py logextras <ws>                          one JSON line: All output's extras: the sessions' tokens and estimated cost
                                                     (log_view.usage), and the files the branch touched (tree diff branch, else head)
     dash.py logshare <ws> [--req N] < text          one JSON line: {text, removed}: the log text with private details taken out
-    dash.py trees                                   one JSON line: every worktree of every installed ADE (orca, cmux, herdr, t3), for the terminal's sidebar
+    dash.py trees                                   one JSON line: every native Worktrunk workspace, for the terminal's sidebar
                                                     (and `usage`, the footer's plan meters: usage.py)
     dash.py turn <mc-session>                       one JSON line: how a Basement pane's agent ended its turn (ade_common.agent_state)
     dash.py tree info|rm|goal|cfg|new|diff <path> [--force]  the sidebar's workspace menu: git facts and listening ports; remove
@@ -30,7 +30,7 @@
                                                     send it again with answers {id: text}, or force: true to start anyway
 
 Pucks join ~/.greenlight/last.json (lifecycle, MR, next step from greenlight.py scan, refreshed by every greenlight run; the interval is in Greenlight Settings → Dashboard)
-with a live `orca worktree ps` (agent state, seconds old). Never calls GitLab for the overview.
+with live native workspace state (`ade_basement.worktrees()`, agent state, seconds old). Never calls GitLab for the overview.
 Page layouts come from Claude Haiku picking widgets out of CATALOG; the page renders only known
 widgets, so a bad layout degrades to fewer cards, never to executed output.
 """
@@ -45,6 +45,7 @@ import os
 import re
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -630,8 +631,7 @@ def advice(r, attempts=None):
 
 def live_agents():
     out = {}
-    wts, _ = greenlight.merge_basement_worktrees(greenlight.orca("worktree", "ps", "--limit", "10000")["worktrees"])
-    for w in wts:
+    for w in greenlight.orca("worktree", "ps", "--limit", "10000")["worktrees"]:
         out[w["worktreeId"]] = (w, greenlight.primary_agent(w.get("agents")))
     return out
 
@@ -759,6 +759,7 @@ def snapshot(full=False):  # full: the agent's whole last message (pages); the 5
     # an agent outside Greenlight has no Basement session: it never replaces the one the button reattaches to (no
     # identity), but it keeps the worktree busy, so the button never starts a second agent beside it (its state stays)
     add_resume(pucks, [(r["path"], resume_agent(live[r["id"]][1])) for r in rows])
+    add_sessions(pucks, [(r["path"], live[r["id"]][1]) for r in rows])
     pucks.sort(key=lambda p: (STATES.index(p["state"]), p["name"]))
     # every other worktree (default branches first): the console's picker reaches all of them, the map stays goals-only
     have = {p["path"] for p in pucks}
@@ -817,23 +818,16 @@ ADES = None  # a fixed list in place of ades() (tests)
 
 
 def ades():
-    """The backends dash.py lists worktrees from, first wins a shared path: Orca (and a legacy driver in use) first, so
-    a workspace one of them knows is changed and deleted through it, then the native engine when it's in use (it lists
-    every registered repo's worktrees, whichever ADE or plain git made them)."""
+    """The native workspaces; other ADEs are available only through Settings → Import."""
     if ADES:
         return tuple(ADES)
-    try:
-        cur = ade.name()
-    except RuntimeError:  # a GREENLIGHT_ADE naming no backend: Orca's, if it's there
-        cur = "orca"
-    if cur == "native":  # the legacy live drivers aren't merged: the native engine finds their worktrees through git
-        return ("orca", "native")
-    return ("orca", "cmux", "herdr", "t3")  # Orca (or a legacy driver) in use: every installed ADE, as before
+    return ("native",)
 
 
 def ade_call(n):
-    """The `orca …`-shaped call for backend n: the Orca CLI itself for orca (tree_new places an Orca create its own
-    way, as the user's pick: `call is greenlight.orca_cli`), else n's dispatch."""
+    """Dispatch live workspace calls to native; the legacy path exists for historical tests only."""
+    if n != "native" and (ADES is None or n not in ADES):
+        raise RuntimeError(f"{n} is an import source, not a live workspace backend")
     return greenlight.orca_cli if n == "orca" else ade.get(n).call
 
 
@@ -853,8 +847,6 @@ def trees():
         try:
             call = ade_call(name)
             ws = call("worktree", "ps", "--limit", "10000")["worktrees"]
-            if name == "orca":
-                ws, _ = greenlight.merge_basement_worktrees(ws)
         except Exception:
             continue
         for w in ws:
@@ -954,6 +946,333 @@ def add_resume(pucks, agents):
                                         created=created(p["path"]), binary=rec and harness_bin(rec["harness"]))
 
 
+_CODEX_HEAD_CACHE: dict[tuple[str, int, int], tuple[str, str, str]] = {}
+_UUID_TAIL_RE = re.compile(r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$")
+_SESSION_KEYS = ("sessionId", "session_id", "conversationId", "conversation_id")
+
+
+def _valid_session_id(val: object) -> str | None:
+    return val if isinstance(val, str) and harness.SESSION_ID_RE.fullmatch(val) else None
+
+
+def _explicit_session_id(ag: object) -> str | None:
+    if not isinstance(ag, dict):
+        return None
+    for k in _SESSION_KEYS:
+        if sid := _valid_session_id(ag.get(k)):
+            return sid
+    return None
+
+
+def _path_variants(path: str) -> list[str]:
+    norm = path.rstrip("/") or "/"
+    real = external.real(path).rstrip("/") or "/"
+    return [norm] if real == norm else [norm, real]
+
+
+def _path_alias_map(paths: set[str]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for p in paths:
+        for v in _path_variants(p):
+            out.setdefault(v, p)
+    return out
+
+
+def _claude_latest_session(path: str, cutoff: float) -> tuple[float, str] | None:
+    best: tuple[float, str] | None = None
+    for variant in _path_variants(path):
+        proj = Path.home() / ".claude/projects" / re.sub(r"[^A-Za-z0-9]", "-", variant)
+        try:
+            with os.scandir(proj) as it:
+                for ent in it:
+                    if not ent.name.endswith(".jsonl") or not ent.is_file():
+                        continue
+                    sid = _valid_session_id(ent.name[:-6])
+                    if not sid:
+                        continue
+                    with contextlib.suppress(OSError):
+                        mt = ent.stat().st_mtime
+                        if mt > cutoff and (best is None or mt > best[0]):
+                            best = (mt, sid)
+        except OSError:
+            continue
+    return best
+
+
+def _codex_rollout_head(path: Path, ino: int, size: int) -> tuple[str, str, str]:
+    if size <= 0:
+        return "", "", ""
+    key = (str(path), ino, size)
+    if key in _CODEX_HEAD_CACHE:
+        return _CODEX_HEAD_CACHE[key]
+    cwd, real_cwd, sid = "", "", ""
+    try:
+        with path.open(errors="replace") as fh:
+            first = fh.readline()
+        payload = (json.loads(first).get("payload") or {}) if first else {}
+        if isinstance(payload, dict):
+            src = payload.get("source")
+            if isinstance(src, dict) and "subagent" in src:
+                _CODEX_HEAD_CACHE[key] = ("", "", "")
+                return "", "", ""
+            raw_cwd = str(payload.get("cwd") or "")
+            cwd = (raw_cwd.rstrip("/") or "/") if raw_cwd else ""
+            sid = _valid_session_id(payload.get("id") or payload.get("session_id")) or ""
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
+    if cwd and not sid and (m := _UUID_TAIL_RE.search(path.stem)):
+        sid = m.group(1)
+    if cwd and sid:
+        real_cwd = external.real(cwd).rstrip("/") or "/"
+    res = (cwd, real_cwd, sid) if cwd and sid else ("", "", "")
+    _CODEX_HEAD_CACHE[key] = res
+    return res
+
+
+def _safe_subdirs(p: Path) -> list[Path]:
+    try:
+        return [c for c in p.iterdir() if c.is_dir()]
+    except OSError:
+        return []
+
+
+def _codex_day_dirs(root: Path, cutoff: float) -> list[Path]:
+    out: list[Path] = []
+    if not root.is_dir():
+        return out
+    for y in _safe_subdirs(root):
+        for m in _safe_subdirs(y):
+            for d in _safe_subdirs(m):
+                with contextlib.suppress(OSError):
+                    dt = _parse_day_dir(y.name, m.name, d.name)
+                    if dt is not None and dt < cutoff - 86400 and d.stat().st_mtime < cutoff - 86400:
+                        continue
+                    out.append(d)
+    return out
+
+
+def _parse_day_dir(y: str, m: str, d: str) -> float | None:
+    if not (y.isdigit() and m.isdigit() and d.isdigit()):
+        return None
+    try:
+        return datetime(int(y), int(m), int(d), tzinfo=timezone.utc).timestamp()  # noqa: UP017
+    except ValueError:
+        return None
+
+
+def _prune_codex_cache(seen_keys: set[tuple[str, int, int]]) -> None:
+    if len(_CODEX_HEAD_CACHE) <= max(len(seen_keys) * 2, 4096):
+        return
+    for k in list(_CODEX_HEAD_CACHE):
+        if k not in seen_keys:
+            _CODEX_HEAD_CACHE.pop(k, None)
+
+
+def _codex_latest_sessions(paths: set[str], cutoff: float) -> dict[str, tuple[float, str]]:
+    want = _path_alias_map(paths)
+    root = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "sessions"
+    best: dict[str, tuple[float, str]] = {}
+    seen_keys: set[tuple[str, int, int]] = set()
+    for d in _codex_day_dirs(root, cutoff):
+        try:
+            entries = list(os.scandir(d))
+        except OSError:
+            continue
+        for ent in entries:
+            if not (ent.name.startswith("rollout-") and ent.name.endswith(".jsonl") and ent.is_file()):
+                continue
+            try:
+                st = ent.stat()
+            except OSError:
+                continue
+            if st.st_mtime <= cutoff or st.st_size <= 0:
+                continue
+            seen_keys.add((ent.path, st.st_ino, st.st_size))
+            cwd, real_cwd, sid = _codex_rollout_head(Path(ent.path), st.st_ino, st.st_size)
+            if not sid or not cwd:
+                continue
+            orig = want.get(cwd) or (real_cwd and want.get(real_cwd))
+            if orig and (orig not in best or st.st_mtime > best[orig][0]):
+                best[orig] = (st.st_mtime, sid)
+    _prune_codex_cache(seen_keys)
+    return best
+
+
+_AGY_SESSION_SQL = {
+    (True, True): "select conversation_id, workspace_uris, last_modified_time from conversation_summaries where (parent_conversation_id is null or parent_conversation_id = '')",
+    (True, False): "select conversation_id, workspace_uris, last_modified_time from conversation_summaries",
+    (False, True): "select conversation_id, workspace_uris from conversation_summaries where (parent_conversation_id is null or parent_conversation_id = '')",
+    (False, False): "select conversation_id, workspace_uris from conversation_summaries",
+}
+
+
+def _agy_uri_map(paths: set[str]) -> dict[str, str]:
+    uri_map: dict[str, str] = {}
+    for p in paths:
+        for norm in _path_variants(p):
+            enc = Path(norm).as_uri().rstrip("/") if norm.startswith("/") else f"file://{norm}"
+            for k in (norm, f"file://{norm}", enc):
+                uri_map.setdefault(k, p)
+    return uri_map
+
+
+def _agy_latest_sessions(paths: set[str], cutoff: float) -> dict[str, tuple[float, str]]:
+    from urllib.parse import unquote
+
+    root = Path(os.environ.get("AGY_HOME") or Path.home() / ".gemini/antigravity-cli")
+    db_path = root / "conversation_summaries.db"
+    if not db_path.is_file():
+        return {}
+    uri_map = _agy_uri_map(paths)
+    try:
+        db = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True, timeout=2)
+        try:
+            cols = {r[1] for r in db.execute("pragma table_info(conversation_summaries)").fetchall()}
+            rows = db.execute(_AGY_SESSION_SQL[("last_modified_time" in cols, "parent_conversation_id" in cols)]).fetchall()
+        finally:
+            db.close()
+    except (OSError, sqlite3.Error, ValueError):
+        return {}
+    best: dict[str, tuple[float, str]] = {}
+    for row in rows:
+        sid = _valid_session_id(row[0])
+        if not sid:
+            continue
+        try:
+            uris = json.loads(row[1]) if isinstance(row[1], str) else []
+        except ValueError:
+            uris = []
+        if not isinstance(uris, list):
+            continue
+        matched = {uri_map[key] for u in uris if isinstance(u, str) for key in (u.rstrip("/") or "/", unquote(u).rstrip("/") or "/") if key in uri_map}
+        if not matched:
+            continue
+        ts_ms = _parse_ts_ms(row[2]) if len(row) > 2 else None
+        mt = (ts_ms / 1000.0) if ts_ms else 0.0
+        if mt <= 0 or mt > cutoff:
+            tr = root / "brain" / sid / ".system_generated" / "logs" / "transcript.jsonl"
+            with contextlib.suppress(OSError):
+                mt = max(mt, tr.stat().st_mtime)
+        if mt <= cutoff:
+            continue
+        for orig in matched:
+            prev = best.get(orig)
+            if prev is None or mt > prev[0]:
+                best[orig] = (mt, sid)
+    return best
+
+
+def _opencode_latest_sessions(paths: set[str], cutoff: float) -> dict[str, tuple[float, str]]:
+    xdg = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local/share")
+    root = Path(os.environ.get("OPENCODE_DATA_HOME") or Path(xdg) / "opencode")
+    db_path = root / "opencode.db"
+    if not db_path.is_file():
+        return {}
+    want = _path_alias_map(paths)
+    has_symlink = any((p.rstrip("/") or "/") != (external.real(p).rstrip("/") or "/") for p in paths)
+    try:
+        db = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True, timeout=2)
+        try:
+            rows = db.execute(
+                "select id, directory, time_updated from session"
+                " where (parent_id is null or parent_id = '') and time_archived is null"
+                " order by time_updated desc"
+            ).fetchall()
+        finally:
+            db.close()
+    except (OSError, sqlite3.Error, ValueError):
+        return {}
+    best: dict[str, tuple[float, str]] = {}
+    for sid_raw, directory, updated in rows:
+        dnorm = (str(directory or "").rstrip("/") or "/") if directory else ""
+        if not dnorm:
+            continue
+        orig = want.get(dnorm) or (has_symlink and want.get(external.real(dnorm).rstrip("/") or "/"))
+        if not orig or orig in best:
+            continue
+        sid = _valid_session_id(sid_raw)
+        if not sid:
+            continue
+        ts_ms = _parse_ts_ms(updated)
+        mt = (ts_ms / 1000.0) if ts_ms else 0.0
+        if mt <= cutoff:
+            continue
+        best[orig] = (mt, sid)
+    return best
+
+
+def _pick_session(
+    path: str, ag: dict, live_ag: dict | None, cands: dict[str, tuple[float, str]], native: bool = True
+) -> tuple[str | None, str | None]:
+    want = last_agent.harness_of((live_ag or {}).get("agentType") or ag.get("type"))
+    if sid := _explicit_session_id(live_ag):
+        return want, sid
+    if not native:
+        return None, None
+    born = created(path)
+    fresh = {h: v for h, v in cands.items() if not (born and v[0] and v[0] * 1000 < born)}
+    if want is not None:
+        return (want, fresh[want][1]) if want in fresh else (None, None)
+    if not fresh:
+        return None, None
+    picked_h, (_, cand_sid) = max(fresh.items(), key=lambda kv: kv[1][0])
+    return picked_h, cand_sid
+
+
+def _pair_live_agents(pucks: list[dict], agents: list[tuple[str, dict | None]]) -> list[dict | None]:
+    if len(agents) == len(pucks) and all(agents[i][0] == pucks[i].get("path") for i in range(len(pucks))):
+        return [ag for _, ag in agents]
+    by_path = dict(agents)
+    return [by_path.get(p.get("path", "")) for p in pucks]
+
+
+def _needed_session_paths(pucks: list[dict], live_list: list[dict | None]) -> dict[str, set[str]]:
+    need: dict[str, set[str]] = {"claude": set(), "codex": set(), "agy": set(), "opencode": set()}
+    for puck, live_ag in zip(pucks, live_list):
+        path, ag = puck.get("path"), puck.get("agent")
+        if puck.get("nativeHost") is False or not isinstance(path, str) or not path or not isinstance(ag, dict):
+            continue
+        if _explicit_session_id(live_ag):
+            continue
+        want = last_agent.harness_of((live_ag or {}).get("agentType") or ag.get("type"))
+        for h in (want,) if want is not None else tuple(need):
+            if h in need:
+                need[h].add(path)
+    return need
+
+
+def _discover_sessions(need: dict[str, set[str]], cutoff: float) -> dict[str, dict[str, tuple[float, str]]]:
+    by_path: dict[str, dict[str, tuple[float, str]]] = {}
+    for ws_path in need["claude"]:
+        if hit := _claude_latest_session(ws_path, cutoff):
+            by_path.setdefault(ws_path, {})["claude"] = hit
+    for h_name, fn in (("codex", _codex_latest_sessions), ("agy", _agy_latest_sessions), ("opencode", _opencode_latest_sessions)):
+        if need[h_name]:
+            for ws_path, hit in fn(need[h_name], cutoff).items():
+                if ws_path in need[h_name]:
+                    by_path.setdefault(ws_path, {})[h_name] = hit
+    return by_path
+
+
+def add_sessions(pucks: list[dict], agents: list[tuple[str, dict | None]]) -> None:
+    """Attach each puck's latest agent session_id (and harness/bin) so the Agents view can copy it or open a terminal."""
+    live_list = _pair_live_agents(pucks, agents)
+    need = _needed_session_paths(pucks, live_list)
+    by_path = _discover_sessions(need, time.time() - 30 * 86400)
+    for puck, live_ag in zip(pucks, live_list):
+        path, ag = puck.get("path"), puck.get("agent")
+        if not isinstance(path, str) or not path or not isinstance(ag, dict):
+            continue
+        native = puck.get("nativeHost") is not False
+        picked_h, sid = _pick_session(path, ag, live_ag, by_path.get(path, {}), native=native)
+        if sid:
+            ag["session_id"] = sid
+            if picked_h:
+                ag["session_harness"] = picked_h
+                if native and (b := harness_bin(picked_h)):
+                    ag["session_bin"] = b
+
+
 def basement_panes():
     """Live Basement tmux agent pane states ({session: {state, title}}), regardless of GREENLIGHT_ADE."""
     try:
@@ -963,9 +1282,10 @@ def basement_panes():
 
 
 def created(path):
-    """ms: a linked worktree's `.git` is a one-line file `git worktree add` writes and nothing rewrites."""
+    """ms: a linked worktree's `.git` is a one-line file `git worktree add` writes and nothing rewrites (ignore a repo's `.git` directory)."""
     try:  # ponytail: `git worktree repair/move` rewrites it too; the branch's first reflog entry if that misleads
-        return int((Path(path) / ".git").stat().st_mtime * 1000)
+        st = (Path(path) / ".git").stat()
+        return int(st.st_mtime * 1000) if stat.S_ISREG(st.st_mode) else None
     except OSError:
         return None
 
@@ -996,7 +1316,8 @@ def turn(session):
         meta = ade_basement.tmux("display-message", "-p", "-t", f"={session}:", "#{pane_title}\t#{pane_current_command}").strip()
         title, _, cmd = meta.partition("\t")
         kind = ade_basement.agent_type(title, cmd)
-        agent_label = {"claude": "Claude Code", "codex": "Codex", "agy": "Antigravity"}.get(kind or "", "Claude Code")
+        agent_label = {"claude": "Claude Code", "codex": "Codex", "agy": "Antigravity",
+                       "gemini": "Gemini CLI", "opencode": "opencode", "pi": "pi"}.get(kind or "", "Claude Code")
     except Exception:
         pass
     with diag.span("turn") as sp:
@@ -1033,8 +1354,7 @@ def tree_info(path):
 def outside_agent(path):
     """cleanup.outside_agent, for the Basement's Delete: an agent outside Greenlight in the tree is a risk to confirm."""
     import cleanup
-    paths = []
-    if not ade.is_native():
+    if not native_in_use():
         return None
     p = external.real(path).rstrip("/")  # resolved, as the agents' folders are (a worktree may be listed through a symlink)
     try:  # nothing in or under it, of anyone's: no need for the worktree list (it costs git calls per worktree)
@@ -1044,11 +1364,10 @@ def outside_agent(path):
         return "an agent (the process check failed, so it can't be ruled out)"
     if not near:
         return None
-    if ade.is_native():
-        try:  # every worktree: our agents' ownership depends on the nested ones
-            paths = [w["path"] for w in importlib.import_module("ade_basement").worktrees()]
-        except Exception:  # noqa: BLE001 - without the list it can't be ruled out: say so, Delete asks first
-            return "an agent (the worktree list failed, so it can't be ruled out)"
+    try:  # every worktree: our agents' ownership depends on the nested ones
+        paths = [w["path"] for w in importlib.import_module("ade_basement").worktrees()]
+    except Exception:  # noqa: BLE001 - without the list it can't be ruled out: say so, Delete asks first
+        return "an agent (the worktree list failed, so it can't be ruled out)"
     return cleanup.outside_agent(path, fresh=True, paths=paths)  # fresh again: the listing above takes a while
 
 
@@ -1642,10 +1961,10 @@ def waiting_term(name, done_ok=False):
     state = (ag or {}).get("state")
     if state != "waiting" and not (done_ok and state == "done"):
         return "its agent isn't waiting on you any more"
+    pane = (ag or {}).get("paneKey")
     terms = [t for t in greenlight.orca("terminal", "list", "--limit", "10000")["terminals"]
-             if t["worktreeId"] == w["worktreeId"] and t.get("agentIdentity")]
-    if pane := ag.get("paneKey"):
-        terms = [t for t in terms if f'{t.get("tabId")}:{t.get("leafId")}' == pane]
+             if t.get("worktreeId") == w["worktreeId"]
+             and (f'{t.get("tabId")}:{t.get("leafId")}' == pane if pane else t.get("agentIdentity"))]
     if not terms:
         return "no terminal found for its waiting agent"
     h = max(terms, key=lambda t: t.get("lastOutputAt") or 0)["handle"]

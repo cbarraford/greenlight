@@ -2585,6 +2585,130 @@ test("stuck stage escalates smart button to Ask Chief with Retry and Reset in Al
   assert.equal(rst.name, "fix-ci");
 });
 
+test("Agents view: copy session ID and launch new terminal window connected to the session (card and All output), rejecting unsafe IDs", async page => {
+  const sidCl = "0eb62452-d4f6-4e8d-a381-64ec2d0e3137";
+  const sidCx = "99999999-8888-7777-6666-555555555555";
+  const pucks = [
+    {
+      ...puck("alpha", "Fix auth", "working"),
+      path: "/w/alpha",
+      state: "working",
+      agent: {...puck("alpha", "Fix auth", "working").agent, type: "claude", state: "working", tool: "Edit", input: "auth.py",
+        session_id: sidCl, session_harness: "claude", session_bin: "/opt/bin/claude"},
+    },
+    {
+      ...puck("beta", "Review diff", "waiting"),
+      path: "/w/beta",
+      state: "needs",
+      agent: {...puck("beta", "Review diff", "waiting").agent, type: "codex", state: "waiting", last: "Merge it?",
+        session_id: sidCx, session_harness: "codex"},
+    },
+    {
+      ...puck("evil", "Bad sid", "working"),
+      path: "/w/evil",
+      state: "working",
+      agent: {...puck("evil", "Bad sid", "working").agent, type: "claude", state: "working",
+        session_id: "bad;rm -rf /", session_harness: "claude"},
+    },
+  ];
+  await page.evaluate(s => window.mc.update(s), {...SNAP, pucks});
+  // Alpha card: copy session ID posts full UUID and flips label to Copied
+  const sidBtn = page.locator(".acard[data-name='alpha'] button.asid");
+  assert.equal(await sidBtn.count(), 1);
+  assert.equal(await sidBtn.getAttribute("data-sid"), sidCl);
+  assert.match(await sidBtn.textContent(), /0eb62452…/);
+  await sidBtn.click();
+  let posts = await page.evaluate(() => window.__posts);
+  assert.deepEqual(posts.filter(m => m.cmd === "copyText").pop(), {cmd: "copyText", text: sidCl});
+  assert.equal(await page.locator(".acard[data-name='alpha'] button.asid").textContent(), "Copied");
+  // Alpha card: Connect button shows exact command in title and posts connectSession with workspace path + resume payload
+  const connBtn = page.locator(".acard[data-name='alpha'] button.aconn");
+  assert.equal(await connBtn.count(), 1);
+  assert.match(await connBtn.getAttribute("title"), new RegExp(`/opt/bin/claude --resume ${sidCl}`));
+  await connBtn.click();
+  posts = await page.evaluate(() => window.__posts);
+  assert.deepEqual(posts.filter(m => m.cmd === "connectSession").pop(), {
+    cmd: "connectSession", path: "/w/alpha", resume: {harness: "claude", sessionId: sidCl, bin: "/opt/bin/claude"},
+  });
+  // Beta card (Codex): Connect button posts codex resume payload
+  await page.click(".acard[data-name='beta'] button.aconn");
+  posts = await page.evaluate(() => window.__posts);
+  assert.deepEqual(posts.filter(m => m.cmd === "connectSession").pop(), {
+    cmd: "connectSession", path: "/w/beta", resume: {harness: "codex", sessionId: sidCx},
+  });
+  // Evil card: unsafe session_id renders no copy/connect controls
+  assert.equal(await page.locator(".acard[data-name='evil'] .asess").count(), 0);
+  // All output (#aout-strip) also exposes copy + connect controls
+  await page.click(".acard[data-name='alpha'] button.aline");
+  await page.waitForSelector("#aout");
+  assert.equal(await page.locator("#aout-strip button.asid").getAttribute("data-sid"), sidCl);
+  await page.click("#aout-strip button.asid");
+  await page.click("#aout-strip button.aconn");
+  posts = await page.evaluate(() => window.__posts);
+  assert.equal(posts.filter(m => m.cmd === "copyText" && m.text === sidCl).length, 2);
+  assert.equal(posts.filter(m => m.cmd === "connectSession" && m.path === "/w/alpha").length, 2);
+  await page.keyboard.press("Escape");
+  // Shift-click on Copy copies the full connect command and shows "Copied cmd"
+  await page.locator(".acard[data-name='alpha'] button.asid").click({modifiers: ["Shift"]});
+  posts = await page.evaluate(() => window.__posts);
+  assert.deepEqual(posts.filter(m => m.cmd === "copyText").pop(), {cmd: "copyText", text: `/opt/bin/claude --resume ${sidCl}`});
+  assert.equal(await page.locator(".acard[data-name='alpha'] button.asid").textContent(), "Copied cmd");
+  // Workspace page agentPanel shows Copy + Connect even for an idle agent with agent.type null (uses session_harness, not Claude fallback)
+  const idlePuck = {
+    ...puck("gamma", "Done task", "done"),
+    path: "/w/gamma",
+    state: "quiet",
+    agent: {...puck("gamma", "Done task", "done").agent, type: null, state: "done", last: "",
+      session_id: "12345678-aaaa-bbbb-cccc-1234567890ab", session_harness: "agy"},
+  };
+  await page.evaluate(s => { window.mc.update(s); openPage("gamma") }, {...SNAP, pucks: [...pucks, idlePuck]});
+  assert.match(await page.textContent(".wp .panel h2"), /Antigravity is idle/);
+  assert.equal(await page.locator("#wp-sid-gamma").getAttribute("data-sid"), "12345678-aaaa-bbbb-cccc-1234567890ab");
+  assert.match(await page.locator("#wp-conn-gamma").getAttribute("aria-label"), /gamma/);
+  await page.click("#wp-conn-gamma");
+  posts = await page.evaluate(() => window.__posts);
+  assert.deepEqual(posts.filter(m => m.cmd === "connectSession").pop(), {
+    cmd: "connectSession", path: "/w/gamma", resume: {harness: "agy", sessionId: "12345678-aaaa-bbbb-cccc-1234567890ab"},
+  });
+  // Workspace page for a WAITING agent (answerBox) also keeps Copy + Connect controls
+  await page.evaluate(() => openPage("beta"));
+  assert.equal(await page.locator("#wp-sid-beta").getAttribute("data-sid"), sidCx);
+  assert.equal(await page.locator("#wp-conn-beta").count(), 1);
+  await page.evaluate(() => closePage());
+  // All output (#aout): focus stays inside modal if session controls vanish on refresh, and error toast paints above #aout
+  const spacedPuck = {
+    ...puck("spaced", "Spaced path", "working"),
+    path: "/w/my folder",
+    state: "working",
+    agent: {...puck("spaced", "Spaced path", "working").agent, type: "claude", state: "working",
+      session_id: sidCl, session_harness: "claude"},
+  };
+  await page.evaluate(s => { window.mc.update(s); openOut("spaced") }, {...SNAP, pucks: [spacedPuck]});
+  const beforeBadConn = await page.evaluate(() => window.__posts.filter(m => m.cmd === "connectSession").length);
+  await page.click("#aout-strip button.aconn");
+  assert.equal(await page.evaluate(() => window.__posts.filter(m => m.cmd === "connectSession").length), beforeBadConn);
+  assert.match(await page.textContent(".toast"), /spaces or unusual characters/i);
+  assert.ok(Number(await page.evaluate(() => getComputedStyle(document.querySelector(".toast")).zIndex)) > Number(await page.evaluate(() => getComputedStyle(document.getElementById("aout")).zIndex)));
+  await page.focus("#aout-strip button.asid");
+  await page.evaluate(s => window.mc.update(s), {...SNAP, pucks: [{...spacedPuck, agent: {...spacedPuck.agent, session_id: null}}]});
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "aout-log", "focus must fall back to #aout-log when session button disappears");
+  await page.keyboard.press("Escape");
+  // Scrolled .acards keeps its scrollTop across Copy click re-render
+  const many = Array.from({length: 10}, (_, k) => ({
+    ...puck(`m-${k}`, `Task ${k}`, "working"),
+    path: `/w/m-${k}`,
+    state: "working",
+    agent: {...puck(`m-${k}`, `Task ${k}`, "working").agent, type: "claude", state: "working", session_id: sidCl, session_harness: "claude"},
+  }));
+  await page.evaluate(s => window.mc.update(s), {...SNAP, pucks: many});
+  await page.evaluate(() => { document.querySelector(".acards").scrollTop = 180 });
+  const beforeScroll = await page.evaluate(() => document.querySelector(".acards").scrollTop);
+  assert.ok(beforeScroll > 0, "expected .acards to be scrollable");
+  await page.click(".acard[data-name='m-9'] button.asid");
+  const afterScroll = await page.evaluate(() => document.querySelector(".acards").scrollTop);
+  assert.ok(afterScroll > 0, `clicking Copy must not reset .acards scrollTop (was ${beforeScroll}, now ${afterScroll})`);
+});
+
 (async () => {
   const browser = await launchBrowser();
   let failed = 0;

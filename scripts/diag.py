@@ -405,6 +405,24 @@ def crashes(after, n=5):
     return out
 
 
+def _doctor_ade(add):
+    try:
+        import ade
+        n = ade.name(migrate=False)
+        add("ade", True, state=n, imported=(home() / "imported.json").exists())
+        if not ade.config_ok():  # config.json's "ade" names no backend: ignored, the user's to fix
+            add("ade_config", False, state="invalid")
+        if n == "native":  # its agents run in tmux, its workspaces are Worktrunk's
+            wt_bin = os.environ.get("WORKTRUNK_BIN") or "wt"
+            for label, cmd_name in (("tmux", "tmux"), ("git", "git"), ("worktrunk", wt_bin)):
+                found = bool(shutil.which(cmd_name))
+                add(label, found, state=None if found else "missing")
+    except RuntimeError:
+        add("ade", False, state="invalid")
+    except ImportError:
+        pass  # standalone diagnostics in an incomplete install
+
+
 def doctor(quick=False):
     """Setup checks an AI can read: each {check, ok, ...}, numbers and enums only.
     quick: no network (skips glab/gh auth), for update.py's smoke test of a new version."""
@@ -455,16 +473,7 @@ def doctor(quick=False):
             except PermissionError:
                 pass
     add("stale_pids", dead == 0, n=dead)
-    with contextlib.suppress(Exception):  # the workspace backend: a deprecated live driver (cmux, herdr, t3) isn't ok
-        import ade
-        n = ade.name()
-        add("ade", n not in ade.LEGACY, state="deprecated" if n in ade.LEGACY else n,
-            imported=(home() / "imported.json").exists() if n == "native" else None)
-        if not ade.config_ok():  # config.json's "ade" names no backend: ignored, the user's to fix
-            add("ade_config", False, state="invalid")
-        if n == "native":  # its agents run in tmux, its workspaces are git's
-            add("tmux", bool(shutil.which("tmux")), state=None if shutil.which("tmux") else "missing")
-            add("git", bool(shutil.which("git")), state=None if shutil.which("git") else "missing")
+    _doctor_ade(add)
     return {"ok": all(c.get("ok") is not False for c in out), "checks": out}
 
 
@@ -515,7 +524,7 @@ def ade_name():
     """The workspace backend in use (ade.py), or "invalid" when GREENLIGHT_ADE names none."""
     try:
         import ade
-        return ade.name()
+        return ade.name(migrate=False)
     except Exception:  # noqa: BLE001 - a bad GREENLIGHT_ADE must not take the summary down
         return "invalid"
 
@@ -523,11 +532,13 @@ def ade_name():
 def summary(after, events=None):
     events = read(after) if events is None else events
     now = time.time()
+    wt_bin = os.environ.get("WORKTRUNK_BIN") or "wt"
     return {
         "version": version(),
         "env": {"os": platform.system(), "os_release": platform.release(), "python": platform.python_version(),
                 "ade": ade_name(),
-                "clis": {c: bool(shutil.which(c)) for c in ("glab", "gh", "claude", "codex", "opencode", "pi", "gemini", "agy")}},
+                "clis": {c: bool(shutil.which(wt_bin if c == "wt" else c))
+                         for c in ("glab", "gh", "wt", "claude", "codex", "opencode", "pi", "gemini", "agy")}},
         "config": config_shape(),
         "events": len(events),
         "errors_1h": sum(failed(e) for e in events if e.get("ts", 0) > now - 3600),

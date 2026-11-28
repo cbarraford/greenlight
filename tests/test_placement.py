@@ -1,11 +1,15 @@
 """placement.py and greenlight.place_here: workspaces chief makes stay on its machine, and strays show up (#160)."""
 import json
+import os
 
 import pytest
 
 import dash
+import ade
 import greenlight
 import placement
+
+ORIGINAL_ADE_NAME = ade.name
 
 HOSTS = {"hosts": [{"id": "local", "kind": "local", "machineName": "devbox", "name": "this machine"},
                    {"id": "ssh:t1", "kind": "ssh", "name": "laptop"}]}
@@ -20,6 +24,10 @@ def wt(name, host=None, agents=True, **k):
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
     monkeypatch.setenv("GREENLIGHT_ADE", "orca")  # placement is Orca's (hosts); native is the default since #195
+    # Exercise the historical host-placement implementation directly; production routes only to native workspaces.
+    monkeypatch.setattr(ade, "name", lambda: ade.canonical(os.environ.get("GREENLIGHT_ADE")) or "native")
+    monkeypatch.setattr(dash, "ades", lambda: tuple(dash.ADES) if dash.ADES else
+                        (("orca", "native") if ade.is_native() else ("orca", "cmux", "herdr", "t3")))
     monkeypatch.delenv("ORCA_ENVIRONMENT", raising=False)
     monkeypatch.setattr(greenlight, "here", lambda: "devbox")
     placement._MACHINES.update(at=0.0, map={})
@@ -145,6 +153,9 @@ def test_setups_by_repo(monkeypatch):
     monkeypatch.setattr(greenlight, "orca_cli", lambda *a, **k: {"setups": [{"repoId": "r1", "projectId": "p1"}, "junk"]})
     assert placement.setups() == {"r1": {"repoId": "r1", "projectId": "p1"}}
     monkeypatch.setattr(greenlight, "orca_cli", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("old orca")))
+    assert placement.setups() == {}
+    monkeypatch.setenv("GREENLIGHT_ADE", "native")
+    monkeypatch.setattr(greenlight, "orca_cli", lambda *a, **k: pytest.fail("orca_cli called under native"))
     assert placement.setups() == {}
 
 
@@ -358,30 +369,35 @@ def test_place_here_old_orca_and_other_ades(monkeypatch):
     assert calls == []  # another ADE runs where greenlight does: no Orca call to place it
 
 
-def test_orca_refuses_a_misplaced_create(monkeypatch):
+def test_live_create_never_calls_orca(monkeypatch):
     calls = cli_with(monkeypatch, local="laptop")
-    with pytest.raises(RuntimeError, match="refused"):
-        greenlight.orca("worktree", "create", "--repo", "id:r1", "--name", "x")
-    assert not any(c[:2] == ["worktree", "create"] for c in calls)  # adopt.py / dash.py creates are placed too
+    native = []
+    monkeypatch.setattr(ade, "call", lambda *args: native.append(args) or {"worktree": {"id": "/w/x"}})
+    assert greenlight.orca("worktree", "create", "--repo", "/r", "--name", "x") == {"worktree": {"id": "/w/x"}}
+    assert native == [("worktree", "create", "--repo", "/r", "--name", "x")]
+    assert calls == []
 
 
-def test_ade_cli_exits_3_when_refused(monkeypatch, capsys):
-    cli_with(monkeypatch, local="laptop")
+def test_ade_cli_rejects_legacy_backend(monkeypatch):
+    calls = cli_with(monkeypatch, local="laptop")
+    monkeypatch.setattr(ade, "name", ORIGINAL_ADE_NAME)
     monkeypatch.setattr("sys.argv", ["greenlight.py", "ade", "worktree", "create", "--repo", "id:r1", "--name", "x", "--change", "fix"])
     monkeypatch.setenv("GREENLIGHT_REQUEST", "Fix the flaky test")
-    with pytest.raises(SystemExit) as e:
+    with pytest.raises(RuntimeError, match="live ADE backends are retired"):
         greenlight.main()
-    assert e.value.code == 3 and "laptop" in capsys.readouterr().err
+    assert calls == []
 
 
-def test_ade_cli_creates_here(monkeypatch, capsys):
+def test_ade_cli_creates_natively(monkeypatch, capsys):
     calls = cli_with(monkeypatch)
-    monkeypatch.setattr("sys.argv", ["greenlight.py", "ade", "worktree", "create", "--project", "p", "--name", "x", "--json"])
+    native = []
+    monkeypatch.setattr(ade, "call", lambda *args: native.append(args) or {"worktree": {"id": "/w/x"}})
+    monkeypatch.setattr("sys.argv", ["greenlight.py", "ade", "worktree", "create", "--repo", "/r", "--name", "x", "--json"])
     monkeypatch.setenv("GREENLIGHT_REQUEST", "Fix the flaky test")
     greenlight.main()
-    assert calls[-1] == ["worktree", "create", "--project", "p", "--name", "x", "--host", "local"]
-    assert calls.count(["host", "list"]) == 1  # placed once
-    assert json.loads(capsys.readouterr().out) == {"ok": 1}
+    assert native == [("worktree", "create", "--repo", "/r", "--name", "x")]
+    assert calls == []
+    assert json.loads(capsys.readouterr().out) == {"worktree": {"id": "/w/x"}}
 
 
 # dash.py: the board says where each workspace's agent runs

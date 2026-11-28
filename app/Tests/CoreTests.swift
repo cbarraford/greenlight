@@ -1514,6 +1514,17 @@ func runCoreUnitTests(check: (String, Bool) -> Void) {
           missing.contains("aren't on this Mac") && missing.contains("srv") && !missing.contains("Lost the connection")
           && gone == "Lost the connection to srv (exit 2)." && allLocal == "Lost the connection to this Mac (exit 2).")
     check("project host: tests never prefix Mac-side commands with a backend copy", localBackendPrefix(server: "srv").isEmpty)
+    // resumeOf accepts a validated ASCII agent sessionId and rejects metacharacters, leading dashes, newlines, non-ASCII, or oversized tokens.
+    let okRes = delegate.resumeOf(["harness": "claude", "sessionId": "0eb62452-d4f6-4e8d-a381-64ec2d0e3137", "bin": "/opt/bin/claude"])
+    let badRes = delegate.resumeOf(["harness": "claude", "sessionId": "bad;whoami", "bin": "/bad/../bin"])
+    let dashRes = delegate.resumeOf(["harness": "codex", "sessionId": "--evil"])
+    let nlRes = delegate.resumeOf(["harness": "agy", "sessionId": "abc\n"])
+    let uniRes = delegate.resumeOf(["harness": "claude", "sessionId": "aé"])
+    let bigRes = delegate.resumeOf(["harness": "claude", "sessionId": String(repeating: "a", count: 129)])
+    check("resumeOf: accepts safe ASCII sessionId and rejects shell/flag/newline/unicode/oversize injection",
+          okRes["harness"] == "claude" && okRes["sessionId"] == "0eb62452-d4f6-4e8d-a381-64ec2d0e3137" && okRes["bin"] == "/opt/bin/claude"
+          && badRes["sessionId"] == nil && badRes["bin"] == nil && dashRes["sessionId"] == nil
+          && nlRes["sessionId"] == nil && uniRes["sessionId"] == nil && bigRes["sessionId"] == nil)
 
     // 10. Chief approvals: lifecycle, queue hold, TTL expiry, harness switch, voiceNote, and deny persistence
     do {
