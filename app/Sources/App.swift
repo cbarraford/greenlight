@@ -1049,7 +1049,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSplitViewD
         }
         signal(SIGPIPE, SIG_IGN)  // an ssh can die between our write and its read
         if !uitest && !unittest {
-            sshMux.onRetire = { [weak self] in guard let self else { return }; self.termBridge.retireAll(primaryHost: self.host) }
+            sshMux.onRetire = { [weak self] in self?.termBridge.retireAll(primaryHost: host) }
             sshMux.startObservers(primaryHost: host)
             sshMux.warm(host)
             termBridge.ensure(host)
