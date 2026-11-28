@@ -17,15 +17,28 @@ struct ModelSelector: View {
     let model: Binding<String>
     let effort: Binding<String>
     var allowedHarnesses: Set<String>? = nil
+    var fallbacks: Binding<[ModelFallback]?>? = nil
+    var tier: ModelTier = .capable
     @StateObject private var ui = ModelSelectorState()
 
-    init(c: Core, title: String, hint: String? = nil, model: Binding<String>, effort: Binding<String>, allowedHarnesses: Set<String>? = nil) {
+    init(
+        c: Core,
+        title: String,
+        hint: String? = nil,
+        model: Binding<String>,
+        effort: Binding<String>,
+        allowedHarnesses: Set<String>? = nil,
+        fallbacks: Binding<[ModelFallback]?>? = nil,
+        tier: ModelTier = .capable
+    ) {
         self._c = ObservedObject(wrappedValue: c)
         self.title = title
         self.hint = hint
         self.model = model
         self.effort = effort
         self.allowedHarnesses = allowedHarnesses
+        self.fallbacks = fallbacks
+        self.tier = tier
     }
 
     var body: some View {
@@ -74,6 +87,9 @@ struct ModelSelector: View {
             }
             if let choice = activeChoice {
                 effortSection(for: choice, activeEffort: activeEffort)
+            }
+            if let fbBinding = fallbacks {
+                fallbacksSection(fbBinding, keep: keep)
             }
         }
         .padding(.horizontal, DS.Space.s16)
@@ -300,6 +316,193 @@ struct ModelSelector: View {
         let resolved = choice.resolve(desiredEffort: level)
         if model.wrappedValue != resolved.modelId { model.wrappedValue = resolved.modelId }
         if effort.wrappedValue != resolved.effort { effort.wrappedValue = resolved.effort }
+    }
+
+    @ViewBuilder
+    private func fallbacksSection(_ fbBinding: Binding<[ModelFallback]?>, keep: @escaping (String) -> Bool) -> some View {
+        let primaryHarness = harnessOf(model.wrappedValue)
+        let active = resolvedModelFallbacks(
+            saved: fbBinding.wrappedValue,
+            primaryModel: model.wrappedValue,
+            rawOptions: c.availableModels,
+            tier: tier,
+            allowedHarnesses: allowedHarnesses
+        )
+        let allOthers = configuredHarnesses(in: c.availableModels, where: keep).filter { $0 != primaryHarness }
+        let missing = allOthers.filter { h in !active.contains(where: { $0.harness == h }) }
+        if !allOthers.isEmpty || !active.isEmpty {
+            VStack(alignment: .leading, spacing: DS.Space.s8) {
+                HStack(alignment: .firstTextBaseline, spacing: DS.Space.s8) {
+                    Text("Fallbacks").font(ds(DS.TypeRole.labelSm)).foregroundColor(dim)
+                    Spacer(minLength: DS.Space.s8)
+                    if fbBinding.wrappedValue != nil {
+                        Button("Reset") { fbBinding.wrappedValue = nil }
+                            .buttonStyle(.plain)
+                            .font(ds(DS.TypeRole.caption))
+                            .foregroundColor(sub)
+                            .help("Restore automatic per-provider fallbacks")
+                    }
+                }
+                Text("Used in order if \(harnessDisplayName(primaryHarness)) hits a 5-hour or weekly cap.")
+                    .font(ds(DS.TypeRole.caption))
+                    .foregroundColor(dim)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !active.isEmpty {
+                    VStack(spacing: DS.Space.s4) {
+                        ForEach(Array(active.enumerated()), id: \.element.harness) { idx, fb in
+                            fallbackRow(fb, index: idx, total: active.count, active: active, primaryHarness: primaryHarness, binding: fbBinding)
+                        }
+                    }
+                }
+                if !missing.isEmpty {
+                    FlowRow(spacing: DS.Space.s8) {
+                        ForEach(missing, id: \.self) { h in
+                            addFallbackChip(harness: h, active: active, primaryHarness: primaryHarness, binding: fbBinding)
+                        }
+                    }
+                }
+            }
+            .padding(.top, DS.Space.s4)
+        }
+    }
+
+    private func saveFallbacks(_ updated: [ModelFallback], primaryHarness: String, binding: Binding<[ModelFallback]?>) {
+        let hiddenPrimary = binding.wrappedValue?.first(where: { $0.harness == primaryHarness })
+        binding.wrappedValue = updated + (hiddenPrimary.map { [$0] } ?? [])
+    }
+
+    private func fallbackRow(
+        _ fb: ModelFallback,
+        index: Int,
+        total: Int,
+        active: [ModelFallback],
+        primaryHarness: String,
+        binding: Binding<[ModelFallback]?>
+    ) -> some View {
+        let choices = harnessModelChoices(for: fb.harness, in: c.availableModels, current: fb.model)
+        let selectedChoice = choices.first(where: { $0.matches(modelId: fb.model) }) ?? choices.first
+        let currentEffort = selectedChoice.map {
+            currentModelEffort(for: $0, modelId: fb.model, storedEffort: fb.effort.isEmpty ? (tier == .fast ? "low" : "medium") : fb.effort)
+        } ?? fb.effort
+        let shape = RoundedRectangle(cornerRadius: DS.Radius.sm)
+        return HStack(spacing: DS.Space.s8) {
+            Text("\(index + 1)")
+                .font(ds(DS.TypeRole.caption).monospacedDigit())
+                .foregroundColor(dim)
+                .frame(width: DS.Space.s16, alignment: .leading)
+            Image(ds: harnessIcon(fb.harness), size: iconSize(DS.TypeRole.label.size))
+                .foregroundColor(sub)
+                .frame(width: DS.Space.s16)
+                .accessibilityHidden(true)
+            Text(harnessDisplayName(fb.harness))
+                .font(ds(DS.TypeRole.label))
+                .foregroundColor(fg)
+                .lineLimit(1)
+            Spacer(minLength: DS.Space.s8)
+            if !choices.isEmpty {
+                Picker("\(harnessDisplayName(fb.harness)) fallback model", selection: Binding(
+                    get: { selectedChoice?.id ?? fb.model },
+                    set: { newId in
+                        guard let picked = choices.first(where: { $0.id == newId }) else { return }
+                        let resolved = picked.resolve(desiredEffort: currentEffort)
+                        var next = active
+                        next[index] = ModelFallback(harness: fb.harness, model: resolved.modelId, effort: picked.supportedEfforts.isEmpty ? "" : resolved.effort)
+                        saveFallbacks(next, primaryHarness: primaryHarness, binding: binding)
+                    }
+                )) {
+                    ForEach(choices) { ch in Text(ch.name).tag(ch.id) }
+                }
+                .labelsHidden()
+                .fixedSize()
+            }
+            if let ch = selectedChoice, ch.supportsEffortSlider {
+                Picker("\(harnessDisplayName(fb.harness)) fallback effort", selection: Binding(
+                    get: { currentEffort },
+                    set: { newEff in
+                        let resolved = ch.resolve(desiredEffort: newEff)
+                        var next = active
+                        next[index] = ModelFallback(harness: fb.harness, model: resolved.modelId, effort: resolved.effort)
+                        saveFallbacks(next, primaryHarness: primaryHarness, binding: binding)
+                    }
+                )) {
+                    ForEach(ch.supportedEfforts, id: \.self) { lv in Text(effortName(lv)).tag(lv) }
+                }
+                .labelsHidden()
+                .fixedSize()
+            }
+            if total > 1 {
+                Button {
+                    guard index > 0 else { return }
+                    var next = active
+                    next.swapAt(index, index - 1)
+                    saveFallbacks(next, primaryHarness: primaryHarness, binding: binding)
+                } label: {
+                    Image(ds: "chevron-up", size: iconSize(DS.TypeRole.caption.size))
+                        .foregroundColor(index == 0 ? faint : sub)
+                        .frame(width: DS.Layout.controlHeightSm, height: DS.Layout.controlHeightSm)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(index == 0)
+                .accessibilityLabel("Move \(harnessDisplayName(fb.harness)) fallback up")
+                Button {
+                    guard index + 1 < total else { return }
+                    var next = active
+                    next.swapAt(index, index + 1)
+                    saveFallbacks(next, primaryHarness: primaryHarness, binding: binding)
+                } label: {
+                    Image(ds: "chevron-down", size: iconSize(DS.TypeRole.caption.size))
+                        .foregroundColor(index + 1 == total ? faint : sub)
+                        .frame(width: DS.Layout.controlHeightSm, height: DS.Layout.controlHeightSm)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(index + 1 == total)
+                .accessibilityLabel("Move \(harnessDisplayName(fb.harness)) fallback down")
+            }
+            Button {
+                var next = active
+                next.remove(at: index)
+                saveFallbacks(next, primaryHarness: primaryHarness, binding: binding)
+            } label: {
+                Image(ds: "close", size: iconSize(DS.TypeRole.caption.size))
+                    .foregroundColor(dim)
+                    .frame(width: DS.Layout.controlHeightSm, height: DS.Layout.controlHeightSm)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Remove \(harnessDisplayName(fb.harness)) fallback")
+            .accessibilityLabel("Remove \(harnessDisplayName(fb.harness)) fallback")
+        }
+        .padding(.horizontal, DS.Space.s12)
+        .frame(minHeight: DS.Layout.controlHeightMd)
+        .background(shape.fill(surface))
+        .overlay(shape.strokeBorder(line))
+    }
+
+    private func addFallbackChip(
+        harness: String,
+        active: [ModelFallback],
+        primaryHarness: String,
+        binding: Binding<[ModelFallback]?>
+    ) -> some View {
+        let shape = RoundedRectangle(cornerRadius: DS.Radius.sm)
+        return Button {
+            guard let added = defaultFallbackChoice(for: harness, in: c.availableModels, tier: tier) else { return }
+            saveFallbacks(active + [added], primaryHarness: primaryHarness, binding: binding)
+        } label: {
+            HStack(spacing: DS.Space.s4) {
+                Image(ds: "plus", size: iconSize(DS.TypeRole.caption.size)).foregroundColor(sub).accessibilityHidden(true)
+                Text("Add \(harnessDisplayName(harness))").font(ds(DS.TypeRole.caption)).foregroundColor(sub)
+            }
+            .padding(.horizontal, DS.Space.s8)
+            .frame(height: DS.Layout.controlHeightSm)
+            .contentShape(shape)
+            .background(shape.fill(surface))
+            .overlay(shape.strokeBorder(line))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Add \(harnessDisplayName(harness)) fallback")
     }
 }
 

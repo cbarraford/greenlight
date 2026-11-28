@@ -219,6 +219,7 @@ final class Run: ObservableObject {
     var files: [ChatFile] = [], text = ""  // what it sent; a failed turn puts them back in the composer
     var spoken = false  // said out loud in voice mode: its files went with it from the stage's tray
     var model = ""  // the --model it was sent with: the picker can change mid-turn
+    var fellBack = false  // a fallback event just set r.status: keep it visible across the immediate start event
     var open: URL?  // an [open: URL] from a reply block a later one replaced (text_reset)
     var textAt = Date.distantPast  // when its text last streamed: a step started since means the block was commentary, not the reply
     var turnId: String?  // chat.py's id for it (its "turn" event): followed again after a dropped connection or a relaunch

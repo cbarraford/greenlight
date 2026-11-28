@@ -68,6 +68,7 @@ DEFAULTS = {
     "review_bot": None,               # a bot the `review_bot` step assigns as assignee + reviewer; None skips the step
     "agents": ["claude", "codex"],    # dispatch order: on a usage limit greenlight moves to the next one (claude|codex|opencode|pi|gemini|agy)
     "harnesses": {},                  # per agent: {"bypass": true} for full access, {"bin": path}, {"model": id} its default model; see harness.py
+    "model_fallbacks": {},            # per slot (chat/page/suggest/auto/decide) or per harness fallback model+effort specs; see harness.py
     "llm_harness": "claude",          # runs the dashboard's own LLM calls (design, suggestions)
     "merge_method": "merge",          # merge | squash | rebase
     "require_human_approval": True,   # without automerge a human signs off: a reviewer where the forge requires approvals, else you ("merge it?");

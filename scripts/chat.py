@@ -1586,7 +1586,7 @@ def asked_question(reply):
     return "\n\n".join(paras[-n:])[-1000:]  # the question (and its Options) and the paragraph above, for an offer
 
 
-def turn(text, model, effort, compact=False, name=None, verbose=False, files=None, done="", allow=()):
+def turn(text, model, effort, compact=False, name=None, verbose=False, files=None, done="", allow=(), fallbacks=None):
     """Reserve this chat through answer handling, harness work, and pending-question commit."""
     global SCOPE_EXPECTED, SCOPE_DIR, SCOPE_TURN_TOKEN
     path = os.path.join(DIR, ACTIVE_TURN)
@@ -1633,6 +1633,7 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
     try:
         TURN["done"] = done  # send --done: the buttons pressed since the last turn (done_note)
         TURN["allow"] = tuple(allow)  # send --approve: the calls the user approved, allowed for this turn only
+        TURN["fallbacks"] = fallbacks
         terminal = _turn_owned(text, model, effort, compact=compact, name=name, verbose=verbose, files=files,
                                reservation=(token, reserved_gen))
     finally:
@@ -1649,6 +1650,7 @@ def turn(text, model, effort, compact=False, name=None, verbose=False, files=Non
                 SCOPE_TURN_TOKEN = None
             had_stale = TURN.pop("stale_cleared", False)
             TURN.pop("stale_note", None)
+            TURN.pop("fallbacks", None)
             _finalize_turn_unlocked(terminal, owned, had_stale, reserved_gen, delivery, token)
 
 
@@ -1734,9 +1736,135 @@ def _save_reply_question_unlocked(question, request_snapshot, reservation, kind)
         _mark_question_stale_unlocked()
 
 
+def _attempt_err_text(err, norm):
+    if err == "model failed" and isinstance(getattr(norm, "pending_done", None), dict):
+        return str(norm.pending_done.get("text") or "")
+    return str(err or "")
+
+
+def _run_chat_attempt(
+    engine, model, effort, sid, text, prompt, compact, verbose, stored, guard, wrap_fn, msg, request_snapshot, stale_note, handoff=""
+):
+    """Run one provider attempt (including IGNORED retry and non-limit session-lost retry).
+    Returns (new_sid, err, norm, seen, missing_bin, unusable)."""
+    mk = lambda s, t: harness.argv(engine, t, model=model, effort=None if compact else effort, sid=s, system=prompt, stream=True,
+                                   images=attach.images(stored), allow=TURN.get("allow", ()))
+    emit(e="start", engine=engine, model=model or "default")
+    norm = Norm(verbose)
+    norm.approvals = not compact
+    TURN["norm"], norm.base = norm, codex_base(sid) if engine == "codex" and sid else (0, 0)
+    seen = None
+    try:
+        cmd, t = mk(sid, text)
+        new_sid, err = run(cmd, engine, t, norm, check=not compact, guard=guard, defer_done=True)
+    except FileNotFoundError as e:
+        seen_forget()
+        return None, str(e), norm, seen, True, False
+    except ValueError as e:  # unknown harness or pi without bypass
+        seen_forget()
+        return None, str(e), norm, seen, False, True
+    except OSError as e:
+        seen_forget()
+        return None, str(e), norm, seen, False, False
+    if err == "retry":  # once only: the retry runs unchecked
+        emit(e="status", text="Reply ignored your message, asking again")
+        norm.text = ""
+        try:
+            cmd, t = mk(new_sid or sid, RETRY_PREFIX + text)
+            new_sid, err = run(cmd, engine, t, norm, guard=guard, defer_done=True)
+        except FileNotFoundError as e:
+            seen_forget()
+            return None, str(e), norm, seen, True, False
+        except (ValueError, OSError) as e:
+            seen_forget()
+            return None, str(e), norm, seen, False, isinstance(e, ValueError)
+        sid = None  # don't fall into the session-lost retry below
+    err_text = _attempt_err_text(err, norm)
+    if err and sid and not compact and err not in ("Stopped", "another turn running", "model failed") and not harness.fallback_reason(err_text):
+        emit(e="status", text="Session lost, starting a new one")
+        key = f"{engine}:new"
+        seen_forget()
+        seen = seen_load(key)
+        text = wrap_fn(done_note(TURN.get("done")) + stale_note + handoff + board_note(msg, key, seen, request_snapshot))
+        norm.base = (0, 0)  # a new thread: its totals start at 0
+        try:
+            cmd, t = mk(None, text)
+            new_sid, err = run(cmd, engine, t, norm, guard=guard, defer_done=True)
+        except FileNotFoundError as e:
+            seen_forget()
+            return None, str(e), norm, seen, True, False
+        except (ValueError, OSError) as e:
+            seen_forget()
+            return None, str(e), norm, seen, False, isinstance(e, ValueError)
+    return new_sid, err, norm, seen, False, False
+
+
+def _chat_candidates(model, effort, compact):
+    primary_engine, primary_model = harness.route(model)
+    if compact:
+        return [(primary_engine, primary_model, None)], {}, False
+    chain = harness.fallback_chain(model, effort, fallbacks=TURN.get("fallbacks"), slot="chat")
+    ordered, skipped = harness.order_by_availability(chain)
+    proactive = ordered[0][0] != chain[0][0]
+    if proactive:
+        why = skipped.get(chain[0][0], "usage_cap")
+        emit(e="fallback", **{"from": chain[0][0]}, engine=ordered[0][0], model=ordered[0][1] or "default", reason=why)
+        harness._emit_fallback(chain[0][0], ordered[0][0], ordered[0][1], why)
+    return ordered, skipped, proactive
+
+
+def _reset_stream_for_fallback(norm):
+    """Close any dangling tool steps, plan, or partial text from a failed provider before retrying on a fallback."""
+    for sid_, _ in norm.running:
+        emit(e="step_done", id=sid_, ok=False, out="interrupted")
+    if norm.plan_keys is not None:
+        emit(e="plan", done=0, total=0, title="", eta=None)
+    if norm.text:
+        emit(e="text_reset")
+
+
+def _run_chat_candidates(ordered, proactive, text, msg, prompt, compact, verbose, stored, guard, wrap, request_snapshot, stale_note, reservation):
+    """Run candidate providers in order, failing over on usage/rate limits, auth errors, or missing binaries."""
+    engine, new_sid, err, norm, seen, early = ordered[0][0], None, None, Norm(verbose), None, None
+    for idx, (cand_engine, cand_model, cand_effort) in enumerate(ordered):
+        engine = cand_engine
+        TURN.update(harness=engine, model=cand_model, t=time.monotonic())
+        if reservation and not reservation_current(*reservation):
+            return engine, None, None, norm, None, {"e": "done", "ok": False, "text": "Stopped", "context": 0, "window": None, "ms": None}
+        sid = session(engine)
+        key = f"{engine}:{sid or 'new'}"
+        seen = seen_load(key) if not compact else None
+        handoff = "(Primary provider reached its usage cap; you are answering as the configured fallback.)\n\n" if (idx > 0 or proactive) and not compact else ""
+        cand_text = text if compact else wrap(done_note(TURN.get("done")) + stale_note + handoff + board_note(msg, key, seen, request_snapshot))
+        new_sid, err, norm, seen_override, missing_bin, unusable = _run_chat_attempt(
+            engine, cand_model, cand_effort, sid, cand_text, prompt, compact, verbose, stored, guard, wrap, msg, request_snapshot, stale_note, handoff)
+        if seen_override is not None:
+            seen = seen_override
+        if not err:
+            harness.clear_limit(engine)
+            return engine, new_sid, None, norm, seen, None
+        if err == "another turn running":
+            return engine, new_sid, err, norm, seen, dict(e="done", ok=False, text="Another message is still running in this chat.", context=0, window=None, ms=None)
+        err_text = _attempt_err_text(err, norm)
+        why = harness.fallback_reason(err_text, missing=missing_bin) or ("unavailable" if unusable and idx > 0 else None)
+        if why == "rate_limit":
+            harness.record_limit(engine, err_text, model=cand_model)
+        if why and idx + 1 < len(ordered):
+            _reset_stream_for_fallback(norm)
+            nxt_engine, nxt_model, _ = ordered[idx + 1]
+            emit(e="fallback", **{"from": engine}, engine=nxt_engine, model=nxt_model or "default", reason=why)
+            harness._emit_fallback(engine, nxt_engine, nxt_model, why)
+            continue
+        if err == "model failed":
+            return engine, new_sid, err, norm, seen, norm.pending_done
+        break
+    return engine, new_sid, err, norm, seen, early
+
+
 def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, files=None, reservation=None):
     stale_note = str(TURN.pop("stale_note", "") or "")
-    engine, model = harness.route(model)
+    ordered, _, proactive_switch = _chat_candidates(model, effort, compact)
+    engine, model, _ = ordered[0]
     TURN.update(harness=engine, model=model, t=time.monotonic())
     stored = []
     if files:
@@ -1785,9 +1913,6 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
         request_snapshot = snapshot
     if reservation and not reservation_current(*reservation):
         return {"e": "done", "ok": False, "text": "Stopped", "context": 0, "window": None, "ms": None}
-    sid = session(engine)
-    key = f"{engine}:{sid or 'new'}"  # what's been sent is per session: another engine's, or a new one, has seen nothing
-    seen = seen_load(key) if not compact else None
     msg = text
     answer_text = text
     kind = decisions.turn_kind(text)  # the app's idle check-in or watch: its question is that kind (autonomy.py gates them)
@@ -1842,54 +1967,13 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
         # chat's own question ("prod or staging?" → "prod") is judged with the request it answers.
         req_val = question_context + ANSWER + text if question_context else text
         os.environ["GREENLIGHT_REQUEST"] = req_val[-16384:]
-        wrap = lambda note: note + WRAP + msg + ("\n\n" + attach.note(stored) if stored else "")
-        text = wrap(done_note(TURN.get("done")) + stale_note + board_note(msg, key, seen, request_snapshot))
-    # a harness without a system-prompt flag gets the prompt in its first message
-    mk = lambda s, t: harness.argv(engine, t, model=model, effort=None if compact else effort, sid=s, system=prompt, stream=True,
-                                   images=attach.images(stored), allow=TURN.get("allow", ()))
-    emit(e="start", engine=engine, model=model or "default")
-    norm, guard = Norm(verbose), watch_for_attachments()
-    norm.approvals = not compact
-    TURN["norm"], norm.base = norm, codex_base(sid) if engine == "codex" and sid else (0, 0)
-    try:
-        cmd, t = mk(sid, text)
-        new_sid, err = run(cmd, engine, t, norm, check=not compact, guard=guard, defer_done=True)
-    except (ValueError, OSError) as e:  # unknown harness, pi without bypass, binary missing
-        seen_forget()
-        return dict(e="done", ok=False, text=str(e), context=0, window=None, ms=None)
-    if err == "another turn running":
-        return dict(e="done", ok=False, text="Another message is still running in this chat.", context=0, window=None, ms=None)
-    if err == "model failed":
-        return norm.pending_done
-    if err == "retry":  # once only: the retry runs unchecked
-        emit(e="status", text="Reply ignored your message, asking again")
-        norm.text = ""
-        try:
-            cmd, t = mk(new_sid or sid, RETRY_PREFIX + text)
-            new_sid, err = run(cmd, engine, t, norm, guard=guard, defer_done=True)
-        except (ValueError, OSError) as e:
-            seen_forget()
-            return dict(e="done", ok=False, text=str(e), context=0, window=None, ms=None)
-        sid = None  # don't fall into the session-lost retry below
-    if err == "another turn running":
-        return dict(e="done", ok=False, text="Another message is still running in this chat.", context=0, window=None, ms=None)
-    if err == "model failed":
-        return norm.pending_done
-    if err and sid and not compact and err != "Stopped":  # session gone or corrupt: start over rather than fail
-        emit(e="status", text="Session lost, starting a new one")
-        key = f"{engine}:new"
-        seen_forget()
-        seen = seen_load(key)
-        text = wrap(done_note(TURN.get("done")) + stale_note + board_note(msg, key, seen, request_snapshot))  # the new session hasn't seen the board or the cards the lost one had
-        norm.base = (0, 0)  # a new thread: its totals start at 0
-        try:
-            cmd, t = mk(None, text)
-            new_sid, err = run(cmd, engine, t, norm, guard=guard, defer_done=True)
-        except (ValueError, OSError) as e:
-            seen_forget()
-            return dict(e="done", ok=False, text=str(e), context=0, window=None, ms=None)
-    if err == "model failed":
-        return norm.pending_done
+    wrap = lambda note: note + WRAP + msg + ("\n\n" + attach.note(stored) if stored else "")
+    guard = watch_for_attachments()
+    engine, new_sid, err, norm, seen, early = _run_chat_candidates(
+        ordered, proactive_switch, text, msg, prompt, compact, verbose, stored, guard, wrap,
+        request_snapshot, stale_note, reservation)
+    if early is not None:
+        return early
     with scope_lock():
         if reservation and not reservation_current_unlocked(*reservation) or not scope_current_unlocked():
             return {"e": "done", "ok": False, "text": "Stopped",
@@ -1903,7 +1987,7 @@ def _turn_owned(text, model, effort, compact=False, name=None, verbose=False, fi
         elif not compact and (actual_sid := new_sid or session(engine)):
             with contextlib.suppress(OSError):  # a cache failure cannot lose the reply's pending question
                 with open(os.path.join(DIR, SEEN), "w") as f:
-                    json.dump(seen | {"key": f"{engine}:{actual_sid}"}, f)
+                    json.dump((seen or {}) | {"key": f"{engine}:{actual_sid}"}, f)
         if not compact and not err:
             if not stale_cleared or answer_text.strip().startswith(tuple(decisions.REPLY.values())):
                 decisions.quiet("heard", answer_text, chat=chat_identity())
@@ -2122,8 +2206,12 @@ def send_turn(args, opt):
         if not allow:
             return emit(e="done", ok=False, text="That approval expired or was already used. Ask again and approve the new one.",
                         context=0, window=None, ms=None)
+    try:
+        fallbacks = harness.parse_fallback_flags(args, value_flags=("--model", "--effort", "--name", "--only", "--done", "--approve"))
+    except ValueError as e:
+        return emit(e="done", ok=False, text=str(e), context=0, window=None, ms=None)
     turn(text.strip(), opt("--model"), opt("--effort"), name=opt("--name"), verbose="--verbose" in args, files=files,
-         done=opt("--done") or "", allow=allow)
+         done=opt("--done") or "", allow=allow, fallbacks=fallbacks)
 
 
 def dispatch(args):

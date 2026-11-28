@@ -314,3 +314,304 @@ def test_argv_claude_allows_approved_calls(harness_env):
     assert cmd[-3:] == ["--allowedTools", "Bash(orca host list)", "WebFetch"], cmd  # last: the flag takes every argument after it
     assert "--allowedTools" not in harness.argv("claude", "hi", allow=("Bash(x)",), tools=False)[0]
     assert "--allowedTools" not in harness.argv("codex", "hi", allow=("Bash(x)",))[0]
+
+
+def test_fallback_chain_per_provider_dedupe_and_config(harness_env, monkeypatch):
+    monkeypatch.setattr(harness, "installed", lambda n: n in ("claude", "agy", "codex"))
+    monkeypatch.setitem(greenlight.CONFIG, "agents", ["claude", "codex", "agy"])
+    # Explicit per-provider list: deduplicates by harness, skips primary harness and uninstalled ones, preserves order & effort
+    chain = harness.fallback_chain(
+        "claude-opus-5-5",
+        effort="high",
+        fallbacks=["claude-sonnet-5-5@low", "gemini-4-neon-high", "agy:claude-opus-5-5-high", "gpt-6.2-sol@medium", "gemini"],
+    )
+    assert chain == [
+        ("claude", "claude-opus-5-5", "high"),
+        ("agy", "gemini-4-neon-high", "high"),
+        ("codex", "gpt-6.2-sol", "medium"),
+    ]
+    # Explicit empty list (--no-fallback) disables auto-fill
+    assert harness.fallback_chain("claude-opus-5-5", effort="high", fallbacks=[]) == [("claude", "claude-opus-5-5", "high")]
+    # Config model_fallbacks per slot + auto-fill of remaining configured providers
+    monkeypatch.setitem(greenlight.CONFIG, "model_fallbacks", {
+        "chat": ["gemini-4-neon-high", "gpt-6.2-sol@high"],
+        "suggest": {"agy": "gemini-3.8-flash-medium", "codex": {"model": "gpt-6-luna", "effort": "low"}},
+    })
+    assert harness.fallback_chain("claude-opus-5-5", effort="medium", slot="chat") == [
+        ("claude", "claude-opus-5-5", "medium"),
+        ("agy", "gemini-4-neon-high", "medium"),
+        ("codex", "gpt-6.2-sol", "high"),
+    ]
+    assert harness.fallback_chain("claude-haiku-5-5", effort="low", slot="suggest") == [
+        ("claude", "claude-haiku-5-5", "low"),
+        ("codex", "gpt-6-luna", "low"),
+        ("agy", "gemini-3.8-flash-medium", "low"),
+    ]
+
+
+def test_proactive_usage_cap_cooldown_and_ordering(harness_env, gl_home, monkeypatch):
+    monkeypatch.delenv("GREENLIGHT_USAGE", raising=False)
+    now = 2_000_000_000.0
+    usage_data = {
+        "p": {
+            "claude": {
+                "id": "claude",
+                "state": "ok",
+                "at": int(now - 30),
+                "windows": [
+                    {"label": "5h", "pct": 100.0, "resets": int(now + 1800)},
+                    {"label": "Opus", "pct": 100.0, "resets": int(now + 86400)},
+                ],
+            },
+            "agy": {
+                "id": "agy",
+                "state": "ok",
+                "at": int(now - 30),
+                "note": "5h and Week: Claude and GPT",
+                "windows": [
+                    {"label": "5h", "pct": 100.0, "resets": int(now + 1800)},
+                    {"label": "Gemini", "pct": 25.0, "resets": int(now + 1800)},
+                ],
+            },
+            "codex": {
+                "id": "codex",
+                "state": "ok",
+                "at": int(now - 30),
+                "windows": [
+                    {"label": "Week", "pct": 100.0, "resets": int(now - 10)},  # already reset
+                ],
+            },
+        }
+    }
+    (gl_home / "usage.json").write_text(json.dumps(usage_data))
+    # Claude 5h at 100% caps all Claude models until reset
+    assert harness.is_capped("claude", "claude-haiku-5-5", now=now) == "usage_cap"
+    # After 5h resets (now + 2000), Opus pool still caps Opus, but Haiku is uncapped again!
+    assert harness.is_capped("claude", "claude-opus-5-5", now=now + 2000) == "usage_cap"
+    assert harness.is_capped("claude", "claude-haiku-5-5", now=now + 2000) is None
+    # Antigravity 5h (Claude and GPT) caps agy:claude-* but NOT gemini-4-neon-high
+    assert harness.is_capped("agy", "claude-opus-5-5-high", now=now) == "usage_cap"
+    assert harness.is_capped("agy", "gemini-4-neon-high", now=now) is None
+    # Codex weekly window already reset -> not capped
+    assert harness.is_capped("codex", "gpt-6.2-sol", now=now) is None
+
+    # Runtime cooldown: record -> capped -> clear -> uncapped
+    until = harness.record_limit("codex", "5-hour limit reached", model="gpt-6.2-sol", now=now)
+    assert until == now + harness.LIMIT_COOLDOWN
+    assert harness.is_capped("codex", "gpt-6.2-sol", now=now + 10) == "cooldown"
+    assert harness.is_capped("codex", "gpt-6.2-sol", now=until + 1) is None
+    status = harness.limits_status(now=now + 10)
+    assert status["codex"]["capped"] and status["codex"]["reason"] == "cooldown"
+    harness.clear_limit("codex")
+    assert harness.is_capped("codex", "gpt-6.2-sol", now=now + 10) is None
+
+    # order_by_availability moves capped providers after ready ones without dropping them
+    chain = [("claude", "claude-opus-5-5", "high"), ("agy", "gemini-4-neon-high", "high"), ("codex", "gpt-6.2-sol", "high")]
+    ordered, skipped = harness.order_by_availability(chain, now=now)
+    assert [h for h, _, _ in ordered] == ["agy", "codex", "claude"]
+    assert skipped == {"claude": "usage_cap"}
+
+
+def test_ask_reactive_multi_provider_and_proactive_fallback(harness_env, gl_home, monkeypatch):
+    monkeypatch.setattr(harness, "installed", lambda n: n in ("claude", "agy", "codex"))
+    seen = []
+
+    def multi_cap(cmd, **kw):
+        seen.append(cmd[0])
+        if cmd[0] == "claude":
+            return harness.subprocess.CompletedProcess(cmd, 1, stdout="", stderr="You've hit your 5-hour limit.")
+        if cmd[0] == "agy":
+            return harness.subprocess.CompletedProcess(cmd, 1, stdout="You have exhausted your daily quota.", stderr="")
+        return harness.subprocess.CompletedProcess(cmd, 0, stdout="codex saved the day\n", stderr="")
+
+    monkeypatch.setattr(harness.subprocess, "run", multi_cap)
+    ans = harness.ask("hi", model="claude-opus-5-5", effort="high", fallbacks=["gemini-4-neon-high", "gpt-6.2-sol@medium"])
+    assert ans == "codex saved the day\n"
+    assert seen == ["claude", "agy", "codex"]
+    # Both claude and agy now have runtime cooldowns recorded; codex was cleared
+    assert harness.is_capped("claude") == "cooldown"
+    assert harness.is_capped("agy") == "cooldown"
+    assert harness.is_capped("codex") is None
+
+    # Next call skips both cooled-down providers proactively and goes straight to codex!
+    seen.clear()
+    ans2 = harness.ask("hi again", model="claude-opus-5-5", effort="high", fallbacks=["gemini-4-neon-high", "gpt-6.2-sol@medium"])
+    assert ans2 == "codex saved the day\n"
+    assert seen == ["codex"]
+
+    # Non-limit error does NOT trigger fallback
+    harness.clear_limit("claude")
+    seen.clear()
+
+    def syntax_fail(cmd, **kw):
+        seen.append(cmd[0])
+        return harness.subprocess.CompletedProcess(cmd, 1, stdout="syntax error", stderr="")
+
+    monkeypatch.setattr(harness.subprocess, "run", syntax_fail)
+    assert harness.ask("hi", model="claude-opus-5-5", fallbacks=["gpt-6.2-sol"]) == ""
+    assert seen == ["claude"]
+
+
+def test_chat_and_decide_and_dash_fallback(harness_env, gl_home, monkeypatch):
+    import auto
+    import chat
+    import dash
+    import decide
+
+    monkeypatch.setattr(harness, "installed", lambda n: n in ("claude", "agy", "codex"))
+    monkeypatch.setitem(greenlight.CONFIG, "agents", ["claude", "agy", "codex"])
+
+    # dash._model_opts parses repeatable --fallback and --no-fallback
+    assert dash._model_opts(["page", "w", "--model", "claude-haiku-5-5", "--fallback", "gemini-3.8-flash-medium", "--fallback", "gpt-6-luna@low"]) == {
+        "model": "claude-haiku-5-5",
+        "fallbacks": ["gemini-3.8-flash-medium", "gpt-6-luna@low"],
+    }
+    assert dash._model_opts(["page", "w", "--no-fallback"]) == {"fallbacks": []}
+
+    # chat._turn_owned falls back across providers on rate limit and emits fallback event
+    monkeypatch.setattr(chat, "DIR", str(gl_home / "chat"))
+    (gl_home / "chat").mkdir(parents=True, exist_ok=True)
+    events = []
+    monkeypatch.setattr(chat, "emit", lambda **kw: events.append(kw))
+    monkeypatch.setattr(chat, "board_note", lambda *a, **kw: "")
+    monkeypatch.setattr(chat, "check_session_scope", lambda *a, **kw: None)
+    monkeypatch.setattr(chat.decisions, "load", list)
+    monkeypatch.setattr(chat.decisions, "quiet", lambda *a, **kw: None)
+
+    tried = []
+
+    def fake_chat_run(cmd, engine, text, norm, **kw):
+        tried.append(engine)
+        if engine == "claude":
+            norm.pending_done = {"e": "done", "ok": False, "text": "You've hit your weekly limit", "context": 0, "window": None, "ms": 10}
+            return None, "model failed"
+        norm.reply = "answered by agy"
+        norm.pending_done = {"e": "done", "ok": True, "text": "answered by agy", "context": 100, "window": None, "ms": 50}
+        return "conv-agy", None
+
+    monkeypatch.setattr(chat, "run", fake_chat_run)
+    chat.TURN["fallbacks"] = ["gemini-4-neon-high", "gpt-6.2-sol@high"]
+    done = chat._turn_owned("status?", "claude-opus-5-5", "high")
+    assert done["ok"] and done["text"] == "answered by agy"
+    assert tried == ["claude", "agy"]
+    assert any(e.get("e") == "fallback" and e.get("from") == "claude" and e.get("engine") == "agy" for e in events)
+    assert harness.is_capped("claude") == "cooldown"
+
+    # Proactive skip on next chat turn: jumps straight to agy without calling claude
+    tried.clear()
+    events.clear()
+    done2 = chat._turn_owned("next?", "claude-opus-5-5", "high")
+    assert done2["ok"] and tried == ["agy"]
+    assert any(e.get("e") == "fallback" and e.get("reason") == "cooldown" for e in events)
+    harness.clear_limit("claude")
+    chat.TURN.pop("fallbacks", None)
+
+    # auto.py uses configured fallback model/effort for fallback provider
+    monkeypatch.setitem(greenlight.CONFIG, "model_fallbacks", {"auto": ["gpt-6-luna@low"]})
+    monkeypatch.setattr(auto, "FILE", gl_home / "automations.json")
+    monkeypatch.setattr(auto, "DIR", gl_home / "auto")
+    auto.save({"job": {"schedule": "* * * * *", "prompt": "check"}})
+    auto_calls = []
+
+    def fake_auto_agent(a, engine, log):
+        auto_calls.append((engine, a.get("_fallback_model"), a.get("_fallback_effort")))
+        if engine == "claude":
+            return ("weekly limit reached", 1, {})
+        return ("all good", 0, {})
+
+    monkeypatch.setattr(auto, "agent", fake_auto_agent)
+    auto.execute("job")
+    assert auto_calls == [("claude", None, None), ("codex", "gpt-6-luna", "low")]
+    harness.clear_limit("claude")
+
+    # decide.haiku falls back via harness.ask when claude -p hits usage limit (without re-trying claude)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(decide, "_secret", lambda *a: "")
+    monkeypatch.setattr(
+        decide.subprocess,
+        "run",
+        lambda cmd, **kw: decide.subprocess.CompletedProcess(cmd, 1, stdout="", stderr="5-hour limit reached"),
+    )
+    ask_kwargs = []
+
+    def fake_ask(prompt, **kw):
+        ask_kwargs.append(kw)
+        return '{"q0": {"p_yes": 0.9}}'
+
+    monkeypatch.setattr(harness, "ask", fake_ask)
+    res = decide.haiku("state", {"ok": {"type": "bool", "question": "ready?", "context": ""}}, decide.conf())
+    assert res["ok"]["value"] is True and res["ok"]["prob"] == 0.9 and harness.is_capped("claude") == "cooldown"
+    assert ask_kwargs[-1]["exclude"] == ("claude",) and ask_kwargs[-1]["slot"] == "decide"
+
+
+def test_review_edge_cases(harness_env, gl_home, monkeypatch):
+    import chat
+
+    # Multiline & JSON auth errors are detected; prose mentioning "429" or "rate limit" is not a false positive
+    assert harness.is_unavailable_error('warning: x\n{"type":"error","error":{"type":"authentication_error"}}')
+    assert harness.is_unavailable_error("some prefix\nNot logged in")
+    assert harness.fallback_reason("x", missing=True) == "missing"
+    assert harness.is_limit_error("HTTP 429 Too Many Requests") and harness.is_limit_error("rate_limit_error")
+    assert not harness.is_limit_error("File foo.py, line 429: ValueError")
+    assert not harness.is_limit_error("test_rate_limit_middleware passed")
+
+    # Cross-provider dict config keeps the target harness prefix; invalid keys ignored
+    monkeypatch.setattr(harness, "installed", lambda n: n in ("claude", "agy", "codex", "pi"))
+    monkeypatch.setitem(greenlight.CONFIG, "agents", ["claude", "agy", "codex"])
+    monkeypatch.setitem(greenlight.CONFIG, "model_fallbacks", {
+        "agy": "claude-opus-5-5-high",
+        "unknown_tool": "foo",
+        "codex": {"model": "gpt-6.2-sol", "effort": "high"},
+    })
+    assert harness.fallback_chain("claude-opus-5-5", effort="medium") == [
+        ("claude", "claude-opus-5-5", "medium"),
+        ("agy", "claude-opus-5-5-high", "medium"),
+        ("codex", "gpt-6.2-sol", "high"),
+    ]
+    # Explicit pi without bypass is skipped instead of crashing later
+    assert harness.fallback_chain("claude-opus-5-5", fallbacks=["pi", "gpt-6.2-sol"]) == [
+        ("claude", "claude-opus-5-5", None),
+        ("codex", "gpt-6.2-sol", None),
+    ]
+
+    # Flag parsing skips option values and rejects leading dashes
+    assert harness.parse_fallback_flags(["send", "--name", "--no-fallback", "--fallback", "gpt-6-luna@low"], value_flags=("--name",)) == ["gpt-6-luna@low"]
+    assert harness.parse_fallback_flags(["send", "--no-fallback"]) == []
+    with pytest.raises(ValueError, match="bad --fallback"):
+        harness.parse_fallback_flags(["send", "--fallback", "--inject"])
+
+    # agy multi-group "Claude 5h" (note=None) caps Claude on agy, not Gemini; "daybreak" doesn't match "day"
+    assert harness._window_applies("agy", "Claude 5h", "", "claude-opus-5-5-high") is True
+    assert harness._window_applies("agy", "Claude 5h", "", "gemini-4-neon-high") is False
+    assert harness._window_applies("claude", "Opus", "", "claude-haiku-5-5") is False
+    assert harness._window_applies("pi", "Opus", "", "claude-haiku-5-5") is False
+
+    # Chat mid-turn failover cleans up dangling steps, plan, and partial text before retrying fallback
+    monkeypatch.setattr(chat, "DIR", str(gl_home / "chat2"))
+    (gl_home / "chat2").mkdir(parents=True, exist_ok=True)
+    emitted = []
+    monkeypatch.setattr(chat, "emit", lambda **kw: emitted.append(kw))
+    monkeypatch.setattr(chat, "board_note", lambda *a, **kw: "")
+    monkeypatch.setattr(chat, "check_session_scope", lambda *a, **kw: None)
+    monkeypatch.setattr(chat.decisions, "load", list)
+    monkeypatch.setattr(chat.decisions, "quiet", lambda *a, **kw: None)
+
+    def mid_stream_fail(cmd, engine, text, norm, **kw):
+        if engine == "claude":
+            norm.running = [("s1", "Bash")]
+            norm.plan_keys = ["k1"]
+            norm.text = "partial output"
+            norm.pending_done = {"e": "done", "ok": False, "text": "HTTP 429 too many requests", "context": 0, "window": None, "ms": 5}
+            return None, "model failed"
+        norm.reply = "clean fallback reply"
+        norm.pending_done = {"e": "done", "ok": True, "text": "clean fallback reply", "context": 10, "window": None, "ms": 20}
+        return "sid-agy", None
+
+    monkeypatch.setattr(chat, "run", mid_stream_fail)
+    chat.TURN["fallbacks"] = ["gemini-4-neon-high"]
+    done = chat._turn_owned("check", "claude-opus-5-5", "high")
+    chat.TURN.pop("fallbacks", None)
+    assert done["ok"] and done["text"] == "clean fallback reply"
+    assert any(e.get("e") == "step_done" and e.get("id") == "s1" and not e.get("ok") for e in emitted)
+    assert any(e.get("e") == "plan" and e.get("total") == 0 for e in emitted)
+    assert any(e.get("e") == "text_reset" for e in emitted)

@@ -1251,7 +1251,7 @@ struct SettingsView: View {
     @ViewBuilder var chat: some View {
         heading("Chat & voice", "The chat pane's model, and dictating into it from any app.")
         box("Model") {
-            ruled(ModelSelector(c: c, title: "Chat model", hint: "Changes apply from your next message.", model: $c.model, effort: $c.effort))
+            ruled(ModelSelector(c: c, title: "Chat model", hint: "Changes apply from your next message.", model: $c.model, effort: $c.effort, fallbacks: $c.modelFallbacks, tier: .capable))
             toggleRow("Live activity", "Under the reply as \(c.name) works: the running tool call, time, tokens and speed, like Claude Code.", $c.liveLine)
             toggleRow("Verbose activity", "A live log above the message box: \(c.name)'s every command with its output, what your agents are doing, and each move Greenlight makes.", $c.verbose)
         }
@@ -1407,7 +1407,7 @@ struct SettingsView: View {
         box("Tab names") {
             toggleRow("Name tabs with AI", "Once a tab's output settles, names it from what's on screen. A name you type always wins.", $c.termAutoName)
             dependent(off: !c.termAutoName) {
-                ruled(ModelSelector(c: c, title: "Naming model", model: $c.termNameModel, effort: $c.termNameEffort, allowedHarnesses: writerHarnesses))
+                ruled(ModelSelector(c: c, title: "Naming model", model: $c.termNameModel, effort: $c.termNameEffort, allowedHarnesses: writerHarnesses, fallbacks: $c.termNameFallbacks, tier: .fast))
             }
         }
     }
@@ -1476,7 +1476,7 @@ struct SettingsView: View {
                 .padding(.top, -DS.Space.s16)
         }
         box("Background agents") {
-            ruled(ModelSelector(c: c, title: "Workspace pages", hint: "Builds each workspace's page on the dashboard.", model: $c.designModel, effort: $c.designEffort, allowedHarnesses: writerHarnesses))
+            ruled(ModelSelector(c: c, title: "Workspace pages", hint: "Builds each workspace's page on the dashboard.", model: $c.designModel, effort: $c.designEffort, allowedHarnesses: writerHarnesses, fallbacks: $c.designFallbacks, tier: .fast))
             dependent(off: false) {
                 row("Rebuild", c.designParallel == 0 ? "A page builds only when you open it." : "Workspaces whose state changed rebuild in the background.") {
                     Picker("Rebuild pages", selection: Binding(get: { c.designParallel > 0 }, set: { c.designParallel = $0 ? max(c.designParallel, 3) : 0 })) {
@@ -1487,7 +1487,7 @@ struct SettingsView: View {
                     row("Pages at once") { Stepper("\(c.designParallel)", value: $c.designParallel, in: 1...10).fixedSize().accessibilityLabel("Parallel builds") }
                 }
             }
-            ruled(ModelSelector(c: c, title: "Next-step suggestions", hint: "Suggests the next action on each hex when its state moves.", model: $c.nextModel, effort: $c.nextEffort, allowedHarnesses: writerHarnesses))
+            ruled(ModelSelector(c: c, title: "Next-step suggestions", hint: "Suggests the next action on each hex when its state moves.", model: $c.nextModel, effort: $c.nextEffort, allowedHarnesses: writerHarnesses, fallbacks: $c.nextFallbacks, tier: .fast))
             row("Idle check-in", "When you're at your Mac but haven't done anything in Greenlight for this long, the chat suggests what to work on next.") {
                 Picker("Idle check-in", selection: $c.checkInMins) { Text("Off").tag(0); Text("15 min").tag(15); Text("30 min").tag(30); Text("1 hour").tag(60) }.labelsHidden().fixedSize()
             }

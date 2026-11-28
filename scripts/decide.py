@@ -340,24 +340,37 @@ def haiku(state, qs, c):
             raise RuntimeError("haiku: reply wasn't JSON") from None
     if c.get("_deadline") is not None and c["_deadline"] < 2.0:
         raise RuntimeError("haiku via claude -p: deadline too short for CLI startup")
-    if h != "claude":
+    if h != "claude" or harness.is_capped("claude", api_model):
         return agent_answer(h, model, text, schema, qs, keys, c)
     cmd = [harness.binary("claude"), "-p", "--model", api_model, "--output-format", "json", "--json-schema", json.dumps(schema),
            "--tools", "", "--no-session-persistence", "--append-system-prompt", HAIKU_SYSTEM]
     try:
         p = subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=max(c["timeout"], 60), cwd=str(HOME) if HOME.is_dir() else None)
+    except FileNotFoundError:
+        return agent_answer(h, model, text, schema, qs, keys, c, exclude=("claude",))
     except (OSError, subprocess.SubprocessError) as e:
         raise RuntimeError(f"haiku via claude -p: {e}") from None
     try:
         d = json.loads(p.stdout)
     except ValueError:
+        err_text = f"{p.stderr}\n{p.stdout}"
+        if harness.fallback_reason(err_text):
+            if harness.is_limit_error(err_text):
+                harness.record_limit("claude", err_text, model=api_model)
+            return agent_answer(h, model, text, schema, qs, keys, c, exclude=("claude",))
         raise RuntimeError(f"haiku via claude -p: exit {p.returncode} {(p.stderr or p.stdout)[:200]}") from None
     if d.get("is_error") or not isinstance(d.get("structured_output"), dict):
-        raise RuntimeError(f"haiku via claude -p: {str(d.get('result') or d.get('subtype'))[:200]}")
+        err_text = str(d.get("result") or d.get("subtype") or "")
+        if harness.fallback_reason(err_text):
+            if harness.is_limit_error(err_text):
+                harness.record_limit("claude", err_text, model=api_model)
+            return agent_answer(h, model, text, schema, qs, keys, c, exclude=("claude",))
+        raise RuntimeError(f"haiku via claude -p: {err_text[:200]}")
+    harness.clear_limit("claude")
     return haiku_parse(qs, keys, d["structured_output"])
 
 
-def agent_answer(h, model, text, schema, qs, keys, c):
+def agent_answer(h, model, text, schema, qs, keys, c, exclude=()):
     """The haiku provider on another harness (codex, agy, ...): toolless, the schema in the prompt, the JSON out of the reply."""
     import harness
     prompt = (HAIKU_SYSTEM + "\n\nReply with only a JSON object matching this JSON schema, no prose and no code fence:\n"
@@ -366,7 +379,7 @@ def agent_answer(h, model, text, schema, qs, keys, c):
     if c.get("_deadline") is not None:
         cli_timeout = min(cli_timeout, max(c["_deadline"], 1.0))
     try:
-        out = harness.ask(prompt, model=f"{h}:{model}" if model else h, effort="low", timeout=cli_timeout)
+        out = harness.ask(prompt, model=f"{h}:{model}" if model else h, effort="low", timeout=cli_timeout, slot="decide", exclude=exclude)
     except (OSError, subprocess.SubprocessError, ValueError) as e:
         raise RuntimeError(f"haiku via {h}: {e}") from None
     start, end = out.find("{"), out.rfind("}")
