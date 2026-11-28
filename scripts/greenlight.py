@@ -2168,16 +2168,18 @@ def resolve(key, why):
 
 def grouped_moot(names, asked, by_key):
     """A grouped question is moot once every workspace it names has finished or gone since it was asked.
-    asked: {name: its situation in the decision record}. One already finished when asked (a deploy, a delete), or with no
-    record, never counts: cleanup removes a merged workspace by itself, so its going says nothing about the question."""
-    for n in names:
-        was = asked.get(n) or {}
-        if was.get("owner") in (None, "done"):
+    asked: their situations in its decision record, which is the last scan's view of them. One already finished then (a deploy,
+    a delete), one greenlight was about to finish itself (asked after its own merge, the record still reads unfinished) or one
+    with no record keeps the question open: cleanup removes a merged workspace by itself, so its going says nothing about the
+    question. So does one missing from the scan with its folder still there: skipped (mid-rebase, a failed git call), not gone."""
+    asked = [t for t in asked if t.get("workspace") in names]
+    if not names or {t["workspace"] for t in asked} != set(names):
+        return False
+    for t in asked:  # each by its id (two may share a name), then by name: one recreated under its name is not gone
+        r = by_key.get(t.get("worktree_id")) or by_key.get(t["workspace"])
+        if t.get("owner") in (None, "done", "greenlight") or (r["next"]["owner"] != "done" if r else os.path.isdir(str(t.get("worktree_id")))):
             return False
-        r = by_key.get(was.get("worktree_id") or n)
-        if r is not None and r["next"]["owner"] != "done":
-            return False
-    return bool(names)
+    return True
 
 
 def close_stale(rows):
@@ -2195,11 +2197,11 @@ def close_stale(rows):
                 undo_ws[k] = e["ws"]
             elif k.startswith(ws_prefixes) and e.get("ws"):
                 stuck_ws[k] = e["ws"]
-            elif k in open_pings and e.get("ws"):
-                group_ws[k] = e["ws"]
+            elif k.startswith("@") and k in open_pings and "text" in e:
+                group_ws[k] = e.get("ws") or []  # the latest ask: one re-asked with no --ws is closed by hand again
     for r in decisions.load() if group_ws else []:
         if r.get("key") in group_ws:
-            asked[r["key"]] = {t["workspace"]: t for t in [r] + (r.get("workspaces") or []) if t.get("workspace")}
+            asked[r["key"]] = [t for t in [r] + (r.get("workspaces") or []) if t.get("workspace")]
     if any(k.startswith(ws_prefixes) for k in open_pings):
         stuck_ids = {r.get("key"): [t.get("worktree_id") for t in [r] + (r.get("workspaces") or []) if t.get("worktree_id")]
                      for r in decisions.load() if str(r.get("key", "")).startswith(ws_prefixes)}
@@ -2214,8 +2216,8 @@ def close_stale(rows):
             if names and not any((r := by_key.get(name)) and r["next"]["owner"] == "me" for name in names):
                 resolve(key, "workspaces no longer waiting on you")
             continue
-        if key.startswith("@"):  # other grouped questions are closed by hand (`greenlight.py resolve`), unless their workspaces all finished
-            if grouped_moot(group_ws.get(key, []), asked.get(key, {}), by_key):
+        if key.startswith("@"):  # other grouped questions are closed by hand (`greenlight.py resolve`), or once grouped_moot
+            if grouped_moot(group_ws.get(key, []), asked.get(key, []), by_key):
                 resolve(key, "workspaces finished or removed")
             continue
         r = by_key.get(key)

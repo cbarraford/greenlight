@@ -366,17 +366,28 @@ greenlight.close_stale([])
 assert "@stuck:snapshot:one" not in greenlight.pinged()
 # a grouped question closes once every workspace it names, unfinished when asked, has merged or gone (it kept a merged PR's hex on "Needs you")
 last_json = greenlight.STATE / "last.json"; kept_scan = last_json.read_text()
-last_json.write_text(json.dumps({"rows": [row("grp-a", "me"), row("grp-b", "agent"), row("grp-old", "done")]}))
+twin = lambda i, owner: row("grp-twin", owner) | {"id": f"twin-{i}"}  # two workspaces under one name (the same branch in two repos)
+last_json.write_text(json.dumps({"rows": [row("grp-a", "me"), row("grp-b", "agent"), row("grp-old", "done"), twin(1, "me"), twin(2, "me"),
+                                             row("grp-auto", "greenlight"), row("grp-skip", "me") | {"id": str(greenlight.STATE)}]}))
 greenlight.ping("Trust the agent in these?\nOptions: yes | no", "@grp-open", ws=["grp-a", "grp-b"])
 greenlight.ping("Deploy these?\nOptions: yes | no", "@grp-done", ws=["grp-a", "grp-old"])
-greenlight.ping("Anything else?\nOptions: yes | no", "@grp-none")
+greenlight.ping("Merge this one?\nOptions: yes | no", "@grp-one", ws=["grp-a"])
+greenlight.ping("Merge the twins?\nOptions: yes | no", "@grp-twins", ws=["twin-1", "twin-2"])
+greenlight.ping("Hold this one?\nOptions: yes | no", "@grp-again", ws=["grp-a"])
+greenlight.ping("Hold grp-a and grp-b?\nOptions: yes | no", "@grp-again", ask=True)  # asked again with no --ws: the old --ws says nothing now
+greenlight.ping("Deploy what greenlight merged?\nOptions: yes | no", "@grp-auto", ws=["grp-auto"])  # asked after its merge: the record still reads unfinished
+greenlight.ping("Rebase this?\nOptions: yes | no", "@grp-skip", ws=["grp-skip"])  # missing from the scans below, its folder still there
 last_json.write_text(kept_scan)
-greenlight.close_stale([row("grp-a", "done"), row("grp-b", "ci"), row("grp-old", "done")])
-assert {"@grp-open", "@grp-done", "@grp-none"} <= set(greenlight.pinged())  # grp-b is still open
-greenlight.close_stale([row("grp-a", "done")])  # grp-b and grp-old removed
-assert greenlight.outbox_events()[-1] == greenlight.outbox_events()[-1] | {"resolve": "@grp-open", "why": "workspaces finished or removed"}
-assert {"@grp-done", "@grp-none"} <= set(greenlight.pinged()) and "@grp-open" not in greenlight.pinged()  # asked about a finished one; names none
-greenlight.resolve("@grp-done", "test over"); greenlight.resolve("@grp-none", "test over")
+greenlight.close_stale([row("grp-a", "done"), row("grp-b", "ci"), row("grp-old", "done"), twin(1, "me"), twin(2, "done")])
+closed = greenlight.outbox_events()[-1]
+assert (closed.get("resolve"), closed.get("why")) == ("@grp-one", "workspaces finished or removed")  # one --ws: the record itself holds it
+assert {"@grp-open", "@grp-done", "@grp-twins", "@grp-again", "@grp-auto", "@grp-skip"} <= set(greenlight.pinged())  # grp-b and one twin are still open
+greenlight.close_stale([row("grp-a", "done"), row("grp-b", "ci") | {"id": "grp-b-again"}, twin(2, "done")])  # grp-b recreated under its name
+assert "@grp-open" in greenlight.pinged() and "@grp-twins" not in greenlight.pinged()
+greenlight.close_stale([row("grp-a", "done"), row("grp-auto", "done")])  # grp-b and grp-old removed
+assert "@grp-open" not in greenlight.pinged() and {"@grp-done", "@grp-again", "@grp-auto", "@grp-skip"} <= set(greenlight.pinged())  # @grp-done was asked about a finished one
+for k in ("@grp-done", "@grp-again", "@grp-auto", "@grp-skip"):
+    greenlight.resolve(k, "test over")
 with (greenlight.STATE / "outbox.jsonl").open("ab") as interrupted:
     interrupted.write(b'{"text":"incomplete"')
 greenlight.outbox({"text": "after partial append"})
